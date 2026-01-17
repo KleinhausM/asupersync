@@ -143,6 +143,39 @@ impl Cx {
         }
     }
 
+    /// Creates a capability context for testing purposes.
+    ///
+    /// This constructor creates a Cx with default IDs and an infinite budget,
+    /// suitable for unit and integration tests. The resulting context is fully
+    /// functional but not connected to a real runtime.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use asupersync::Cx;
+    ///
+    /// let cx = Cx::for_testing();
+    /// assert!(!cx.is_cancel_requested());
+    /// assert!(cx.checkpoint().is_ok());
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// This API is intended for testing only. Production code should receive
+    /// Cx instances from the runtime, not construct them directly.
+    #[must_use]
+    pub fn for_testing() -> Self {
+        Self {
+            inner: Arc::new(std::sync::RwLock::new(CxInner {
+                region: RegionId::new_for_test(0, 0),
+                task: TaskId::new_for_test(0, 0),
+                budget: Budget::INFINITE,
+                cancel_requested: false,
+                mask_depth: 0,
+            })),
+        }
+    }
+
     /// Returns the current region ID.
     ///
     /// The region ID identifies the structured concurrency scope that owns this task.
@@ -352,7 +385,34 @@ impl Cx {
 
     /// Sets the cancellation flag (internal use).
     #[allow(dead_code)]
-    pub(crate) fn set_cancel_requested(&self, value: bool) {
+    pub(crate) fn set_cancel_internal(&self, value: bool) {
+        let mut inner = self.inner.write().expect("lock poisoned");
+        inner.cancel_requested = value;
+    }
+
+    /// Sets the cancellation flag for testing purposes.
+    ///
+    /// This method allows tests to simulate cancellation signals. It sets the
+    /// `cancel_requested` flag, which will cause subsequent `checkpoint()` calls
+    /// to return an error (unless masked).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use asupersync::Cx;
+    ///
+    /// let cx = Cx::for_testing();
+    /// assert!(cx.checkpoint().is_ok());
+    ///
+    /// cx.set_cancel_requested(true);
+    /// assert!(cx.checkpoint().is_err());
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// This API is intended for testing only. In production, cancellation signals
+    /// are propagated by the runtime through the task tree.
+    pub fn set_cancel_requested(&self, value: bool) {
         let mut inner = self.inner.write().expect("lock poisoned");
         inner.cancel_requested = value;
     }

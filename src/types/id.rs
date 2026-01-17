@@ -32,6 +32,16 @@ impl RegionId {
     pub const fn new_for_test(index: u32, generation: u32) -> Self {
         Self(ArenaIndex::new(index, generation))
     }
+
+    /// Creates a default region ID for testing purposes.
+    ///
+    /// This creates an ID with index 0 and generation 0, suitable for
+    /// unit tests that don't care about specific ID values.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn testing_default() -> Self {
+        Self(ArenaIndex::new(0, 0))
+    }
 }
 
 impl fmt::Debug for RegionId {
@@ -72,6 +82,16 @@ impl TaskId {
     #[must_use]
     pub const fn new_for_test(index: u32, generation: u32) -> Self {
         Self(ArenaIndex::new(index, generation))
+    }
+
+    /// Creates a default task ID for testing purposes.
+    ///
+    /// This creates an ID with index 0 and generation 0, suitable for
+    /// unit tests that don't care about specific ID values.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn testing_default() -> Self {
+        Self(ArenaIndex::new(0, 0))
     }
 }
 
