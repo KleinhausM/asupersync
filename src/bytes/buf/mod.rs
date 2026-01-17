@@ -11,14 +11,14 @@
 //! These traits enable generic codec implementations, zero-copy buffer
 //! chaining, and efficient protocol parsing.
 
-mod buf_trait;
 mod buf_mut_trait;
+mod buf_trait;
 mod chain;
-mod take;
 mod limit;
+mod take;
 
-pub use buf_trait::Buf;
 pub use buf_mut_trait::BufMut;
+pub use buf_trait::Buf;
 pub use chain::Chain;
-pub use take::Take;
 pub use limit::Limit;
+pub use take::Take;

@@ -72,6 +72,10 @@ pub trait BufMut {
         let mut off = 0;
         while off < src.len() {
             let dst = self.chunk_mut();
+            assert!(
+                !dst.is_empty(),
+                "chunk_mut returned empty with remaining_mut() > 0; implementor must provide writable space"
+            );
             let cnt = std::cmp::min(dst.len(), src.len() - off);
             dst[..cnt].copy_from_slice(&src[off..off + cnt]);
             self.advance_mut(cnt);
@@ -86,7 +90,7 @@ pub trait BufMut {
 
     /// Put an i8.
     fn put_i8(&mut self, n: i8) {
-        self.put_u8(n as u8);
+        self.put_slice(&n.to_ne_bytes());
     }
 
     /// Put a big-endian u16.
@@ -106,17 +110,17 @@ pub trait BufMut {
 
     /// Put a big-endian i16.
     fn put_i16(&mut self, n: i16) {
-        self.put_u16(n as u16);
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Put a little-endian i16.
     fn put_i16_le(&mut self, n: i16) {
-        self.put_u16_le(n as u16);
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Put a native-endian i16.
     fn put_i16_ne(&mut self, n: i16) {
-        self.put_u16_ne(n as u16);
+        self.put_slice(&n.to_ne_bytes());
     }
 
     /// Put a big-endian u32.
@@ -136,17 +140,17 @@ pub trait BufMut {
 
     /// Put a big-endian i32.
     fn put_i32(&mut self, n: i32) {
-        self.put_u32(n as u32);
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Put a little-endian i32.
     fn put_i32_le(&mut self, n: i32) {
-        self.put_u32_le(n as u32);
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Put a native-endian i32.
     fn put_i32_ne(&mut self, n: i32) {
-        self.put_u32_ne(n as u32);
+        self.put_slice(&n.to_ne_bytes());
     }
 
     /// Put a big-endian u64.
@@ -166,17 +170,17 @@ pub trait BufMut {
 
     /// Put a big-endian i64.
     fn put_i64(&mut self, n: i64) {
-        self.put_u64(n as u64);
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Put a little-endian i64.
     fn put_i64_le(&mut self, n: i64) {
-        self.put_u64_le(n as u64);
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Put a native-endian i64.
     fn put_i64_ne(&mut self, n: i64) {
-        self.put_u64_ne(n as u64);
+        self.put_slice(&n.to_ne_bytes());
     }
 
     /// Put a big-endian u128.
@@ -196,17 +200,17 @@ pub trait BufMut {
 
     /// Put a big-endian i128.
     fn put_i128(&mut self, n: i128) {
-        self.put_u128(n as u128);
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Put a little-endian i128.
     fn put_i128_le(&mut self, n: i128) {
-        self.put_u128_le(n as u128);
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Put a native-endian i128.
     fn put_i128_ne(&mut self, n: i128) {
-        self.put_u128_ne(n as u128);
+        self.put_slice(&n.to_ne_bytes());
     }
 
     /// Put a big-endian f32.
@@ -257,50 +261,19 @@ impl BufMut for Vec<u8> {
     }
 
     fn chunk_mut(&mut self) -> &mut [u8] {
-        // For Vec, we grow dynamically, so we reserve some space
-        // and return the spare capacity
-        if self.capacity() == self.len() {
-            self.reserve(64);
-        }
-
-        let cap = self.capacity();
-        let len = self.len();
-
-        // Get spare capacity as initialized zeros for safety
-        self.resize(cap, 0);
-        self.truncate(len);
-
-        // Return spare capacity
-        // Since we can't return uninitialized memory safely,
-        // we reserve and return a slice that we'll fill
-        let spare = cap - len;
-        if spare == 0 {
-            self.reserve(64);
-        }
-
-        // We need to return a mutable slice that can be written to
-        // Since Vec grows, we handle this by extending and returning
-        // a reference to the extended portion. This is a bit of a hack
-        // but necessary without unsafe code.
-        let old_len = self.len();
-        let new_cap = self.capacity();
-        let spare = new_cap - old_len;
-
-        // Pre-extend with zeros so we have a valid slice to return
-        self.resize(new_cap, 0);
-        self.truncate(old_len);
-
-        // Return the portion after current length
-        // This is safe because we're within capacity
-        let spare_slice = &mut self[old_len..old_len + spare.min(64)];
-
-        // Actually, we need to return a fixed-size window
-        // Let's use a simpler approach
+        // For Vec, we grow dynamically via put_slice override.
+        // chunk_mut returns empty because Vec doesn't have pre-allocated
+        // writable space without using unsafe.
         &mut []
     }
 
-    fn advance_mut(&mut self, _cnt: usize) {
-        // For Vec, advance is handled in put_slice
+    fn advance_mut(&mut self, cnt: usize) {
+        // For Vec, advance is handled in put_slice.
+        // Any non-zero advance would silently drop data, so fail fast.
+        assert!(
+            cnt == 0,
+            "advance_mut is unsupported for Vec<u8>; use put_slice"
+        );
     }
 
     // Override put_slice for efficient Vec implementation
@@ -332,6 +305,7 @@ impl BufMut for &mut [u8] {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Buf;
     use super::*;
 
     #[test]
@@ -374,13 +348,13 @@ mod tests {
     #[test]
     fn test_buf_mut_vec_put_f32() {
         let mut buf = Vec::new();
-        buf.put_f32(3.14);
+        let expected = std::f32::consts::PI;
+        buf.put_f32(expected);
 
         // Verify by reading back
         let mut read: &[u8] = &buf;
-        use super::super::Buf;
         let val = read.get_f32();
-        assert!((val - 3.14).abs() < 0.0001);
+        assert!((val - expected).abs() < 0.0001);
     }
 
     #[test]
@@ -390,7 +364,6 @@ mod tests {
 
         // Verify by reading back
         let mut read: &[u8] = &buf;
-        use super::super::Buf;
         let val = read.get_f64();
         assert!((val - std::f64::consts::PI).abs() < 1e-10);
     }
@@ -409,6 +382,7 @@ mod tests {
     #[test]
     fn test_roundtrip_all_types() {
         let mut buf = Vec::new();
+        let expected_f32 = std::f32::consts::PI;
 
         buf.put_u8(0x12);
         buf.put_i8(-5);
@@ -420,11 +394,11 @@ mod tests {
         buf.put_i32(-100_000);
         buf.put_u64(0x1234_5678_9ABC_DEF0);
         buf.put_u64_le(0xFEDC_BA98_7654_3210);
-        buf.put_f32(3.14159);
-        buf.put_f64(2.718281828);
+        buf.put_f32(expected_f32);
+        let expected = std::f64::consts::E;
+        buf.put_f64(expected);
 
         let mut read: &[u8] = &buf;
-        use super::super::Buf;
 
         assert_eq!(read.get_u8(), 0x12);
         assert_eq!(read.get_i8(), -5);
@@ -436,7 +410,7 @@ mod tests {
         assert_eq!(read.get_i32(), -100_000);
         assert_eq!(read.get_u64(), 0x1234_5678_9ABC_DEF0);
         assert_eq!(read.get_u64_le(), 0xFEDC_BA98_7654_3210);
-        assert!((read.get_f32() - 3.14159).abs() < 0.0001);
-        assert!((read.get_f64() - 2.718281828).abs() < 1e-9);
+        assert!((read.get_f32() - expected_f32).abs() < 0.0001);
+        assert!((read.get_f64() - expected).abs() < 1e-9);
     }
 }

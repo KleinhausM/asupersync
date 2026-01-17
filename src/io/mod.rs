@@ -23,8 +23,11 @@
 //! - `copy_with_progress` is cancel-safe (progress callback is accurate).
 //! - `copy_bidirectional` is cancel-safe (both directions can be partially complete).
 
+mod buf_reader;
+mod buf_writer;
 mod copy;
 pub mod ext;
+mod lines;
 mod read;
 mod read_buf;
 mod split;
@@ -42,3 +45,7 @@ pub use read_buf::ReadBuf;
 pub use split::{split, ReadHalf, SplitStream, WriteHalf};
 pub use write::AsyncWrite;
 pub use write_permit::WritePermit;
+
+pub use buf_reader::BufReader;
+pub use buf_writer::BufWriter;
+pub use lines::Lines;

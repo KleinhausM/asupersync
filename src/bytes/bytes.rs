@@ -57,7 +57,7 @@ impl Bytes {
     /// No allocation occurs.
     #[must_use]
     pub const fn new() -> Self {
-        Bytes {
+        Self {
             data: BytesInner::Empty,
             start: 0,
             len: 0,
@@ -78,7 +78,7 @@ impl Bytes {
     /// ```
     #[must_use]
     pub const fn from_static(bytes: &'static [u8]) -> Self {
-        Bytes {
+        Self {
             data: BytesInner::Static(bytes),
             start: 0,
             len: bytes.len(),
@@ -105,7 +105,7 @@ impl Bytes {
         }
         let vec = data.to_vec();
         let len = vec.len();
-        Bytes {
+        Self {
             data: BytesInner::Shared(Arc::new(vec)),
             start: 0,
             len,
@@ -163,7 +163,7 @@ impl Bytes {
             self.len
         );
 
-        Bytes {
+        Self {
             data: self.data.clone(),
             start: self.start + start,
             len: end - start,
@@ -188,6 +188,7 @@ impl Bytes {
     /// assert_eq!(&b[..], b"hello ");
     /// assert_eq!(&world[..], b"world");
     /// ```
+    #[must_use]
     pub fn split_off(&mut self, at: usize) -> Self {
         assert!(
             at <= self.len,
@@ -195,7 +196,7 @@ impl Bytes {
             self.len
         );
 
-        let other = Bytes {
+        let other = Self {
             data: self.data.clone(),
             start: self.start + at,
             len: self.len - at,
@@ -223,6 +224,7 @@ impl Bytes {
     /// assert_eq!(&hello[..], b"hello ");
     /// assert_eq!(&b[..], b"world");
     /// ```
+    #[must_use]
     pub fn split_to(&mut self, at: usize) -> Self {
         assert!(
             at <= self.len,
@@ -230,7 +232,7 @@ impl Bytes {
             self.len
         );
 
-        let other = Bytes {
+        let other = Self {
             data: self.data.clone(),
             start: self.start,
             len: at,
@@ -291,7 +293,7 @@ impl From<Vec<u8>> for Bytes {
             return Self::new();
         }
         let len = vec.len();
-        Bytes {
+        Self {
             data: BytesInner::Shared(Arc::new(vec)),
             start: 0,
             len,
@@ -321,6 +323,7 @@ impl std::fmt::Debug for Bytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Bytes")
             .field("len", &self.len)
+            .field("start", &self.start)
             .field("data", &self.as_slice())
             .finish()
     }
@@ -373,7 +376,7 @@ impl BytesCursor {
     /// Create a new cursor at position 0.
     #[must_use]
     pub fn new(bytes: Bytes) -> Self {
-        BytesCursor {
+        Self {
             inner: bytes,
             pos: 0,
         }
@@ -555,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "out of bounds")]
+    #[should_panic(expected = "slice bounds out of range")]
     fn test_bytes_slice_panic() {
         let b = Bytes::from_static(b"hello");
         let _bad = b.slice(0..100);

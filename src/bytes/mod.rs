@@ -23,10 +23,10 @@
 //! Buffer operations are synchronous and thus inherently cancel-safe.
 //! No async operations are involved in buffer manipulation.
 
+pub mod buf;
 mod bytes;
 mod bytes_mut;
-pub mod buf;
 
+pub use buf::{Buf, BufMut, Chain, Limit, Take};
 pub use bytes::{Bytes, BytesCursor};
 pub use bytes_mut::BytesMut;
-pub use buf::{Buf, BufMut, Chain, Take, Limit};

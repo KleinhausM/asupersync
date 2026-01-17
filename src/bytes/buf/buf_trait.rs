@@ -90,7 +90,7 @@ pub trait Buf {
 
     /// Get an i8, advancing the cursor.
     fn get_i8(&mut self) -> i8 {
-        self.get_u8() as i8
+        i8::from_ne_bytes([self.get_u8()])
     }
 
     /// Get a big-endian u16.
@@ -116,17 +116,23 @@ pub trait Buf {
 
     /// Get a big-endian i16.
     fn get_i16(&mut self) -> i16 {
-        self.get_u16() as i16
+        let mut buf = [0u8; 2];
+        self.copy_to_slice(&mut buf);
+        i16::from_be_bytes(buf)
     }
 
     /// Get a little-endian i16.
     fn get_i16_le(&mut self) -> i16 {
-        self.get_u16_le() as i16
+        let mut buf = [0u8; 2];
+        self.copy_to_slice(&mut buf);
+        i16::from_le_bytes(buf)
     }
 
     /// Get a native-endian i16.
     fn get_i16_ne(&mut self) -> i16 {
-        self.get_u16_ne() as i16
+        let mut buf = [0u8; 2];
+        self.copy_to_slice(&mut buf);
+        i16::from_ne_bytes(buf)
     }
 
     /// Get a big-endian u32.
@@ -152,17 +158,23 @@ pub trait Buf {
 
     /// Get a big-endian i32.
     fn get_i32(&mut self) -> i32 {
-        self.get_u32() as i32
+        let mut buf = [0u8; 4];
+        self.copy_to_slice(&mut buf);
+        i32::from_be_bytes(buf)
     }
 
     /// Get a little-endian i32.
     fn get_i32_le(&mut self) -> i32 {
-        self.get_u32_le() as i32
+        let mut buf = [0u8; 4];
+        self.copy_to_slice(&mut buf);
+        i32::from_le_bytes(buf)
     }
 
     /// Get a native-endian i32.
     fn get_i32_ne(&mut self) -> i32 {
-        self.get_u32_ne() as i32
+        let mut buf = [0u8; 4];
+        self.copy_to_slice(&mut buf);
+        i32::from_ne_bytes(buf)
     }
 
     /// Get a big-endian u64.
@@ -188,17 +200,23 @@ pub trait Buf {
 
     /// Get a big-endian i64.
     fn get_i64(&mut self) -> i64 {
-        self.get_u64() as i64
+        let mut buf = [0u8; 8];
+        self.copy_to_slice(&mut buf);
+        i64::from_be_bytes(buf)
     }
 
     /// Get a little-endian i64.
     fn get_i64_le(&mut self) -> i64 {
-        self.get_u64_le() as i64
+        let mut buf = [0u8; 8];
+        self.copy_to_slice(&mut buf);
+        i64::from_le_bytes(buf)
     }
 
     /// Get a native-endian i64.
     fn get_i64_ne(&mut self) -> i64 {
-        self.get_u64_ne() as i64
+        let mut buf = [0u8; 8];
+        self.copy_to_slice(&mut buf);
+        i64::from_ne_bytes(buf)
     }
 
     /// Get a big-endian u128.
@@ -224,17 +242,23 @@ pub trait Buf {
 
     /// Get a big-endian i128.
     fn get_i128(&mut self) -> i128 {
-        self.get_u128() as i128
+        let mut buf = [0u8; 16];
+        self.copy_to_slice(&mut buf);
+        i128::from_be_bytes(buf)
     }
 
     /// Get a little-endian i128.
     fn get_i128_le(&mut self) -> i128 {
-        self.get_u128_le() as i128
+        let mut buf = [0u8; 16];
+        self.copy_to_slice(&mut buf);
+        i128::from_le_bytes(buf)
     }
 
     /// Get a native-endian i128.
     fn get_i128_ne(&mut self) -> i128 {
-        self.get_u128_ne() as i128
+        let mut buf = [0u8; 16];
+        self.copy_to_slice(&mut buf);
+        i128::from_ne_bytes(buf)
     }
 
     /// Get a big-endian f32.
@@ -427,10 +451,11 @@ mod tests {
     #[test]
     fn test_buf_get_f32() {
         let mut buf = Vec::new();
-        buf.extend_from_slice(&3.14f32.to_be_bytes());
+        let expected = std::f32::consts::PI;
+        buf.extend_from_slice(&expected.to_be_bytes());
         let mut slice: &[u8] = &buf;
         let val = slice.get_f32();
-        assert!((val - 3.14).abs() < 0.0001);
+        assert!((val - expected).abs() < 0.0001);
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub struct Take<T> {
 impl<T> Take<T> {
     /// Create a new `Take`.
     pub(crate) fn new(inner: T, limit: usize) -> Self {
-        Take { inner, limit }
+        Self { inner, limit }
     }
 
     /// Consumes this `Take`, returning the underlying buffer.

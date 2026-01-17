@@ -6,6 +6,7 @@
 use super::level::LogLevel;
 use crate::types::Time;
 use core::fmt;
+use core::fmt::Write;
 
 /// Maximum number of fields in a log entry (to bound memory).
 const MAX_FIELDS: usize = 16;
@@ -184,44 +185,45 @@ impl LogEntry {
 
         // Message
         s.push_str(",\"message\":\"");
-        // Simple escape for JSON string
-        for c in self.message.chars() {
-            match c {
-                '"' => s.push_str("\\\""),
-                '\\' => s.push_str("\\\\"),
-                '\n' => s.push_str("\\n"),
-                '\r' => s.push_str("\\r"),
-                '\t' => s.push_str("\\t"),
-                _ => s.push(c),
-            }
-        }
+        push_json_escaped(&mut s, &self.message);
         s.push('"');
 
         // Target
         if let Some(ref target) = self.target {
             s.push_str(",\"target\":\"");
-            s.push_str(target);
+            push_json_escaped(&mut s, target);
             s.push('"');
         }
 
         // Fields
         for (k, v) in &self.fields {
             s.push_str(",\"");
-            s.push_str(k);
+            push_json_escaped(&mut s, k);
             s.push_str("\":\"");
-            for c in v.chars() {
-                match c {
-                    '"' => s.push_str("\\\""),
-                    '\\' => s.push_str("\\\\"),
-                    '\n' => s.push_str("\\n"),
-                    _ => s.push(c),
-                }
-            }
+            push_json_escaped(&mut s, v);
             s.push('"');
         }
 
         s.push('}');
         s
+    }
+}
+
+fn push_json_escaped(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            c if c <= '\u{1F}' => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
     }
 }
 
@@ -246,6 +248,69 @@ impl fmt::Display for LogEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entry_accessors_and_fields() {
+        let entry = LogEntry::info("hello")
+            .with_field("k1", "v1")
+            .with_field("k2", "v2")
+            .with_target("mod::sub")
+            .with_timestamp(Time::from_nanos(123));
+
+        assert_eq!(entry.level(), LogLevel::Info);
+        assert_eq!(entry.message(), "hello");
+        assert_eq!(entry.timestamp(), Time::from_nanos(123));
+        assert_eq!(entry.target(), Some("mod::sub"));
+        assert_eq!(entry.field_count(), 2);
+        assert_eq!(entry.get_field("k1"), Some("v1"));
+        assert_eq!(entry.get_field("missing"), None);
+
+        let fields: Vec<_> = entry.fields().collect();
+        assert!(fields.contains(&("k1", "v1")));
+        assert!(fields.contains(&("k2", "v2")));
+    }
+
+    #[test]
+    fn entry_field_limit_enforced() {
+        let mut entry = LogEntry::info("test");
+        for i in 0..(MAX_FIELDS + 2) {
+            entry = entry.with_field(format!("k{i}"), "v");
+        }
+
+        assert_eq!(entry.field_count(), MAX_FIELDS);
+        assert!(entry.get_field("k0").is_some());
+        assert!(entry.get_field("k15").is_some());
+        assert!(entry.get_field("k16").is_none());
+    }
+
+    #[test]
+    fn entry_format_compact_contains_fields() {
+        let entry = LogEntry::warn("something happened")
+            .with_field("code", "42")
+            .with_field("phase", "test");
+
+        let compact = entry.format_compact();
+        assert!(compact.contains("[W]"));
+        assert!(compact.contains("something happened"));
+        assert!(compact.contains("code=42"));
+        assert!(compact.contains("phase=test"));
+    }
+
+    #[test]
+    fn entry_format_json_escapes_and_includes_target() {
+        let entry = LogEntry::debug("quote:\" backslash:\\ newline:\n\t")
+            .with_target("mod::json")
+            .with_field("key", "value");
+
+        let json = entry.format_json();
+        assert!(json.contains("\"level\":\"debug\""));
+        assert!(json.contains("\"target\":\"mod::json\""));
+        assert!(json.contains("\"key\":\"value\""));
+        assert!(json.contains("\\\""));
+        assert!(json.contains("\\\\"));
+        assert!(json.contains("\\n"));
+        assert!(json.contains("\\t"));
+    }
 
     #[test]
     fn create_entries() {
@@ -312,6 +377,16 @@ mod tests {
         let json = entry.format_json();
         assert!(json.contains("\\\"quotes\\\""));
         assert!(json.contains("\\\\"));
+    }
+
+    #[test]
+    fn json_escaping_fields_and_target() {
+        let entry = LogEntry::info("msg")
+            .with_target("mod\"name")
+            .with_field("k\"ey", "v\\al\n");
+        let json = entry.format_json();
+        assert!(json.contains("\"target\":\"mod\\\"name\""));
+        assert!(json.contains("\"k\\\"ey\":\"v\\\\al\\n\""));
     }
 
     #[test]

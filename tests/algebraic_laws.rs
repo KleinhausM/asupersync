@@ -27,6 +27,7 @@
 //! - LAW-TIMEOUT-MIN: nested timeouts collapse to min
 
 use asupersync::combinator::join::{join2_outcomes, join_all_outcomes};
+use asupersync::combinator::race::{race2_outcomes, RaceWinner};
 use asupersync::combinator::timeout::effective_deadline;
 use asupersync::types::cancel::{CancelKind, CancelReason};
 use asupersync::types::outcome::{join_outcomes, PanicPayload};
@@ -62,6 +63,11 @@ fn arb_outcome() -> impl Strategy<Value = Outcome<i32, i32>> {
         arb_cancel_reason().prop_map(Outcome::Cancelled),
         "[a-z]{1,10}".prop_map(|s| Outcome::Panicked(PanicPayload::new(s))),
     ]
+}
+
+/// Generate arbitrary RaceWinner values
+fn arb_race_winner() -> impl Strategy<Value = RaceWinner> {
+    prop_oneof![Just(RaceWinner::First), Just(RaceWinner::Second)]
 }
 
 /// Generate arbitrary Time values (bounded to avoid overflow)
@@ -427,6 +433,81 @@ proptest! {
         };
 
         prop_assert_eq!(decision_severity, max_severity);
+    }
+}
+
+// ============================================================================
+// Race Combinator Laws
+// ============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// LAW-RACE-COMM: race(a, b) ≃ race(b, a) (up to winner selection)
+    ///
+    /// Swapping inputs and flipping the winner should preserve winner/loser severity.
+    #[test]
+    fn race_commutative_severity(
+        a in arb_outcome(),
+        b in arb_outcome(),
+        winner in arb_race_winner()
+    ) {
+        let (winner_ab, _, loser_ab) = race2_outcomes(winner, a.clone(), b.clone());
+        let flipped = match winner {
+            RaceWinner::First => RaceWinner::Second,
+            RaceWinner::Second => RaceWinner::First,
+        };
+        let (winner_ba, _, loser_ba) = race2_outcomes(flipped, b, a);
+
+        prop_assert_eq!(winner_ab.severity(), winner_ba.severity());
+        prop_assert_eq!(loser_ab.severity(), loser_ba.severity());
+    }
+
+    /// LAW-RACE-NEVER: race(f, never) ≃ f
+    ///
+    /// Model `never` as the always-losing branch with RaceLost cancellation.
+    #[test]
+    fn race_never_identity(outcome in arb_outcome(), first_is_real in any::<bool>()) {
+        let never = Outcome::Cancelled(CancelReason::race_loser());
+
+        let (winner, _, loser) = if first_is_real {
+            race2_outcomes(RaceWinner::First, outcome.clone(), never)
+        } else {
+            race2_outcomes(RaceWinner::Second, never, outcome.clone())
+        };
+
+        prop_assert_eq!(winner.severity(), outcome.severity());
+        prop_assert!(matches!(loser, Outcome::Cancelled(r) if r.kind == CancelKind::RaceLost));
+    }
+
+    /// LAW-RACE-JOIN-DIST (severity-level check):
+    /// race(join(a, b), join(a, c)) ≃ join(a, race(b, c))
+    ///
+    /// We compare the severities of the possible winner outcomes on both sides.
+    #[test]
+    fn race_join_dist_severity(
+        a in arb_outcome(),
+        b in arb_outcome(),
+        c in arb_outcome()
+    ) {
+        let (join_ab, _, _) = join2_outcomes(a.clone(), b.clone());
+        let (join_ac, _, _) = join2_outcomes(a.clone(), c.clone());
+
+        let (lhs_first, _, _) = race2_outcomes(RaceWinner::First, join_ab.clone(), join_ac.clone());
+        let (lhs_second, _, _) = race2_outcomes(RaceWinner::Second, join_ab, join_ac);
+
+        let (race_bc_first, _, _) = race2_outcomes(RaceWinner::First, b.clone(), c.clone());
+        let (race_bc_second, _, _) = race2_outcomes(RaceWinner::Second, b, c);
+
+        let (rhs_first, _, _) = join2_outcomes(a.clone(), race_bc_first);
+        let (rhs_second, _, _) = join2_outcomes(a, race_bc_second);
+
+        let mut lhs = vec![lhs_first.severity(), lhs_second.severity()];
+        let mut rhs = vec![rhs_first.severity(), rhs_second.severity()];
+        lhs.sort();
+        rhs.sort();
+
+        prop_assert_eq!(lhs, rhs);
     }
 }
 

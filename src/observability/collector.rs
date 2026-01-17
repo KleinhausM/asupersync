@@ -144,6 +144,11 @@ impl LogCollector {
             return false;
         }
 
+        if self.capacity == 0 {
+            self.total_dropped += 1;
+            return false;
+        }
+
         // Handle capacity
         if self.entries.len() >= self.capacity {
             self.entries.remove(0);
@@ -335,6 +340,16 @@ mod tests {
 
         let messages: Vec<_> = collector.entries().map(LogEntry::message).collect();
         assert_eq!(messages, vec!["2", "3", "4"]);
+    }
+
+    #[test]
+    fn collector_zero_capacity_drops() {
+        let mut collector = LogCollector::new(0);
+        let collected = collector.collect(LogEntry::info("drop"));
+        assert!(!collected);
+        assert_eq!(collector.len(), 0);
+        assert_eq!(collector.total_dropped(), 1);
+        assert_eq!(collector.total_received(), 1);
     }
 
     #[test]

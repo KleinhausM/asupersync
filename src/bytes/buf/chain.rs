@@ -30,7 +30,7 @@ pub struct Chain<T, U> {
 impl<T, U> Chain<T, U> {
     /// Create a new `Chain` from two buffers.
     pub(crate) fn new(a: T, b: U) -> Self {
-        Chain { a, b }
+        Self { a, b }
     }
 
     /// Gets a reference to the first buffer.

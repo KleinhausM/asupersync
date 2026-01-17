@@ -36,7 +36,7 @@ impl BytesMut {
     /// Create an empty `BytesMut`.
     #[must_use]
     pub fn new() -> Self {
-        BytesMut { data: Vec::new() }
+        Self { data: Vec::new() }
     }
 
     /// Create a `BytesMut` with the given capacity.
@@ -52,7 +52,7 @@ impl BytesMut {
     /// ```
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
-        BytesMut {
+        Self {
             data: Vec::with_capacity(capacity),
         }
     }
@@ -157,7 +157,8 @@ impl BytesMut {
     /// assert_eq!(&buf[..], b"hello ");
     /// assert_eq!(&world[..], b"world");
     /// ```
-    pub fn split_off(&mut self, at: usize) -> BytesMut {
+    #[must_use]
+    pub fn split_off(&mut self, at: usize) -> Self {
         assert!(
             at <= self.len(),
             "split_off out of bounds: at={at}, len={}",
@@ -165,7 +166,7 @@ impl BytesMut {
         );
 
         let tail = self.data.split_off(at);
-        BytesMut { data: tail }
+        Self { data: tail }
     }
 
     /// Split off bytes from beginning to `at`.
@@ -188,7 +189,8 @@ impl BytesMut {
     /// assert_eq!(&hello[..], b"hello ");
     /// assert_eq!(&buf[..], b"world");
     /// ```
-    pub fn split_to(&mut self, at: usize) -> BytesMut {
+    #[must_use]
+    pub fn split_to(&mut self, at: usize) -> Self {
         assert!(
             at <= self.len(),
             "split_to out of bounds: at={at}, len={}",
@@ -201,7 +203,7 @@ impl BytesMut {
         // Remove the head from our data
         self.data.drain(..at);
 
-        BytesMut { data: head }
+        Self { data: head }
     }
 
     /// Truncate to `len` bytes.
@@ -325,13 +327,13 @@ impl AsMut<[u8]> for BytesMut {
 
 impl From<Vec<u8>> for BytesMut {
     fn from(vec: Vec<u8>) -> Self {
-        BytesMut { data: vec }
+        Self { data: vec }
     }
 }
 
 impl From<&[u8]> for BytesMut {
     fn from(slice: &[u8]) -> Self {
-        BytesMut {
+        Self {
             data: slice.to_vec(),
         }
     }
@@ -339,7 +341,7 @@ impl From<&[u8]> for BytesMut {
 
 impl From<&str> for BytesMut {
     fn from(s: &str) -> Self {
-        BytesMut {
+        Self {
             data: s.as_bytes().to_vec(),
         }
     }
@@ -347,7 +349,7 @@ impl From<&str> for BytesMut {
 
 impl From<String> for BytesMut {
     fn from(s: String) -> Self {
-        BytesMut {
+        Self {
             data: s.into_bytes(),
         }
     }
@@ -408,8 +410,12 @@ impl BufMut for BytesMut {
         &mut []
     }
 
-    fn advance_mut(&mut self, _cnt: usize) {
+    fn advance_mut(&mut self, cnt: usize) {
         // For BytesMut, advance is handled implicitly in put_slice
+        assert!(
+            cnt == 0,
+            "advance_mut is unsupported for BytesMut; use put_slice"
+        );
     }
 
     // Override put_slice for efficient BytesMut implementation
@@ -472,6 +478,7 @@ mod tests {
 
         // Should be able to clone cheaply
         let clone = frozen.clone();
+        drop(frozen);
         assert_eq!(&clone[..], b"hello world");
     }
 

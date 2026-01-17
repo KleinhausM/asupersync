@@ -11,14 +11,14 @@ use super::BufMut;
 /// ```
 /// use asupersync::bytes::BufMut;
 ///
-/// let mut buf = Vec::new();
-/// let mut limit = (&mut buf as &mut Vec<u8>).limit(3);
+/// let mut limit = Vec::new().limit(3);
 ///
-/// // This would panic without the limit adapter on an infinite buffer
-/// // With limit, we can only write 3 bytes
-/// limit.put_slice(&[1, 2, 3]);
+/// // This would panic without the limit adapter on an infinite buffer.
+/// // With limit, we can only write 3 bytes.
+/// limit.put_slice(&[1u8, 2, 3]);
 ///
-/// assert_eq!(buf, vec![1, 2, 3]);
+/// let buf = limit.into_inner();
+/// assert_eq!(buf, vec![1u8, 2, 3]);
 /// ```
 #[derive(Debug)]
 pub struct Limit<T> {
@@ -29,7 +29,7 @@ pub struct Limit<T> {
 impl<T> Limit<T> {
     /// Create a new `Limit`.
     pub(crate) fn new(inner: T, limit: usize) -> Self {
-        Limit { inner, limit }
+        Self { inner, limit }
     }
 
     /// Consumes this `Limit`, returning the underlying buffer.
@@ -81,6 +81,17 @@ impl<T: BufMut> BufMut for Limit<T> {
         self.inner.advance_mut(cnt);
         self.limit -= cnt;
     }
+
+    fn put_slice(&mut self, src: &[u8]) {
+        assert!(
+            src.len() <= self.limit,
+            "put_slice out of bounds: len={}, limit={}",
+            src.len(),
+            self.limit
+        );
+        self.inner.put_slice(src);
+        self.limit -= src.len();
+    }
 }
 
 #[cfg(test)]
@@ -121,9 +132,9 @@ mod tests {
         let buf: &mut [u8] = &mut data;
         let mut limit = Limit::new(buf, 5);
 
-        assert_eq!(limit.limit(), 5);
+        assert_eq!(Limit::limit(&limit), 5);
         limit.set_limit(3);
-        assert_eq!(limit.limit(), 3);
+        assert_eq!(Limit::limit(&limit), 3);
     }
 
     #[test]
