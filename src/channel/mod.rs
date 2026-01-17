@@ -38,6 +38,7 @@
 
 pub mod mpsc;
 pub mod oneshot;
+pub mod watch;
 
 // Re-export commonly used types from mpsc (the default channel)
 pub use mpsc::{channel, Receiver, SendPermit, Sender};

@@ -14,6 +14,18 @@
 //! **Key property**: Both futures always complete. Even if one fails or is
 //! cancelled, we wait for the other to reach a terminal state.
 //!
+//! # N-way Join (JoinAll)
+//!
+//! `join_all(f0, f1, ..., fn)`:
+//! 1. Spawn all N futures as children in a subregion
+//! 2. Wait for ALL to reach terminal state
+//! 3. Aggregate outcomes under the severity lattice
+//!
+//! **Critical invariants**:
+//! - No branch is abandoned (all must complete)
+//! - Region close = quiescence (all children done)
+//! - Deterministic in lab runtime
+//!
 //! # Algebraic Laws
 //!
 //! - Associativity: `join(join(a, b), c) ≃ join(a, join(b, c))`
@@ -63,6 +75,130 @@ impl<A, B> Join<A, B> {
 impl<A, B> Default for Join<A, B> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// An N-way join combinator for running multiple operations in parallel.
+///
+/// This is a builder/marker type representing the join of N operations.
+/// Actual execution happens via the runtime's spawn and await mechanisms.
+///
+/// # Type Parameters
+/// * `T` - The element type for each operation
+///
+/// # Semantics
+///
+/// Given futures `f[0..n)`:
+/// 1. Spawn each as a child in a subregion
+/// 2. Await all join handles
+/// 3. Aggregate outcomes according to the severity lattice
+///
+/// # Invariants
+///
+/// - **No abandonment**: Every spawned task completes
+/// - **Region quiescence**: All children done before return
+/// - **Deterministic**: Same seed → same execution order in lab runtime
+///
+/// # Example (API shape)
+/// ```ignore
+/// let results = scope.join_all(cx, vec![
+///     async { compute_a(cx).await },
+///     async { compute_b(cx).await },
+///     async { compute_c(cx).await },
+/// ]).await;
+/// ```
+#[derive(Debug)]
+pub struct JoinAll<T> {
+    _t: PhantomData<T>,
+}
+
+impl<T> JoinAll<T> {
+    /// Creates a new N-way join combinator (internal use).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { _t: PhantomData }
+    }
+}
+
+impl<T> Default for JoinAll<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Clone for JoinAll<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for JoinAll<T> {}
+
+/// Result from joining N operations.
+///
+/// Contains the aggregate decision and all successful values with their indices.
+/// This is analogous to [`super::race::RaceAllResult`] but waits for ALL branches.
+pub struct JoinAllResult<T, E> {
+    /// The aggregate decision following the severity lattice.
+    pub decision: AggregateDecision<E>,
+    /// Successful values with their original indices (0-based).
+    /// Only contains values from branches that returned `Ok`.
+    pub successes: Vec<(usize, T)>,
+    /// The total number of branches that were joined.
+    pub total_count: usize,
+}
+
+impl<T, E> JoinAllResult<T, E> {
+    /// Creates a new join-all result.
+    #[must_use]
+    pub fn new(decision: AggregateDecision<E>, successes: Vec<(usize, T)>, total_count: usize) -> Self {
+        Self {
+            decision,
+            successes,
+            total_count,
+        }
+    }
+
+    /// Returns true if all branches succeeded.
+    #[must_use]
+    pub fn all_succeeded(&self) -> bool {
+        matches!(self.decision, AggregateDecision::AllOk) && self.successes.len() == self.total_count
+    }
+
+    /// Returns the number of successful branches.
+    #[must_use]
+    pub fn success_count(&self) -> usize {
+        self.successes.len()
+    }
+
+    /// Returns the number of failed branches.
+    #[must_use]
+    pub fn failure_count(&self) -> usize {
+        self.total_count - self.successes.len()
+    }
+
+    /// Extracts successful values in their original order.
+    ///
+    /// Returns `None` for indices where the branch did not succeed.
+    #[must_use]
+    pub fn into_ordered_values(self) -> Vec<Option<T>> {
+        let mut result: Vec<Option<T>> = (0..self.total_count).map(|_| None).collect();
+        for (i, v) in self.successes {
+            if i < result.len() {
+                result[i] = Some(v);
+            }
+        }
+        result
+    }
+}
+
+impl<T: fmt::Debug, E: fmt::Debug> fmt::Debug for JoinAllResult<T, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JoinAllResult")
+            .field("decision", &self.decision)
+            .field("successes", &self.successes)
+            .field("total_count", &self.total_count)
+            .finish()
     }
 }
 
@@ -171,6 +307,47 @@ pub fn join2_outcomes<T1, T2, E: Clone>(
     }
 }
 
+/// Error type for N-way join operations.
+///
+/// When using `join_all_to_result`, if any branch fails, this error type
+/// indicates which branch(es) failed and why.
+#[derive(Debug, Clone)]
+pub enum JoinAllError<E> {
+    /// At least one branch encountered an error.
+    /// Contains the first error and the index of the branch that produced it.
+    Error {
+        /// The error from the first failing branch.
+        error: E,
+        /// Index of the branch that produced this error.
+        index: usize,
+        /// Total number of branches that failed.
+        total_failures: usize,
+    },
+    /// At least one branch was cancelled.
+    Cancelled(CancelReason),
+    /// At least one branch panicked.
+    Panicked(PanicPayload),
+}
+
+impl<E: fmt::Display> fmt::Display for JoinAllError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Error {
+                error,
+                index,
+                total_failures,
+            } => write!(
+                f,
+                "branch {index} failed: {error} ({total_failures} total failures)"
+            ),
+            Self::Cancelled(r) => write!(f, "branch cancelled: {r}"),
+            Self::Panicked(p) => write!(f, "branch panicked: {p}"),
+        }
+    }
+}
+
+impl<E: fmt::Debug + fmt::Display> std::error::Error for JoinAllError<E> {}
+
 /// Aggregates N outcomes following the severity lattice.
 ///
 /// Returns the worst outcome according to the severity lattice,
@@ -213,6 +390,89 @@ pub fn join_all_outcomes<T, E: Clone>(
     );
 
     (decision, successes)
+}
+
+/// Constructs a [`JoinAllResult`] from a vector of outcomes.
+///
+/// This is the primary entry point for N-way join result construction.
+/// All branches must have completed (no branch is abandoned).
+///
+/// # Arguments
+/// * `outcomes` - The outcomes from all branches, in their original order
+///
+/// # Returns
+/// A [`JoinAllResult`] containing the aggregate decision and successful values.
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::join::{make_join_all_result, JoinAllResult};
+/// use asupersync::types::Outcome;
+///
+/// let outcomes: Vec<Outcome<i32, &str>> = vec![
+///     Outcome::Ok(1),
+///     Outcome::Ok(2),
+///     Outcome::Ok(3),
+/// ];
+/// let result = make_join_all_result(outcomes);
+/// assert!(result.all_succeeded());
+/// assert_eq!(result.success_count(), 3);
+/// ```
+#[must_use]
+pub fn make_join_all_result<T, E: Clone>(outcomes: Vec<Outcome<T, E>>) -> JoinAllResult<T, E> {
+    let total_count = outcomes.len();
+    let (decision, successes) = join_all_outcomes(outcomes);
+    JoinAllResult::new(decision, successes, total_count)
+}
+
+/// Converts a [`JoinAllResult`] to a Result for fail-fast handling.
+///
+/// If all branches succeeded, returns `Ok` with all values in order.
+/// If any branch failed (error, cancelled, or panicked), returns `Err`.
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::join::{make_join_all_result, join_all_to_result};
+/// use asupersync::types::Outcome;
+///
+/// let outcomes: Vec<Outcome<i32, &str>> = vec![
+///     Outcome::Ok(1),
+///     Outcome::Ok(2),
+///     Outcome::Ok(3),
+/// ];
+/// let result = make_join_all_result(outcomes);
+/// let values = join_all_to_result(result);
+/// assert_eq!(values.unwrap(), vec![1, 2, 3]);
+/// ```
+pub fn join_all_to_result<T, E: Clone>(result: JoinAllResult<T, E>) -> Result<Vec<T>, JoinAllError<E>> {
+    match result.decision {
+        AggregateDecision::AllOk => {
+            // All succeeded - extract values in order
+            let mut values: Vec<Option<T>> = (0..result.total_count).map(|_| None).collect();
+            for (i, v) in result.successes {
+                if i < values.len() {
+                    values[i] = Some(v);
+                }
+            }
+            // Safety: if decision is AllOk, all values must be present
+            Ok(values.into_iter().flatten().collect())
+        }
+        AggregateDecision::FirstError(e) => {
+            // Find the first error index (any index not in successes)
+            let success_indices: std::collections::HashSet<usize> =
+                result.successes.iter().map(|(i, _)| *i).collect();
+            let first_error_index = (0..result.total_count)
+                .find(|i| !success_indices.contains(i))
+                .unwrap_or(0);
+            let total_failures = result.total_count - result.successes.len();
+            Err(JoinAllError::Error {
+                error: e,
+                index: first_error_index,
+                total_failures,
+            })
+        }
+        AggregateDecision::Cancelled(r) => Err(JoinAllError::Cancelled(r)),
+        AggregateDecision::Panicked(p) => Err(JoinAllError::Panicked(p)),
+    }
 }
 
 /// Converts two outcomes to a Result for fail-fast join.
@@ -459,5 +719,242 @@ mod tests {
         let (r2, _, _) = join2_outcomes(err, ok);
 
         assert_eq!(r1.severity(), r2.severity());
+    }
+
+    // ============================================================
+    // JoinAll tests
+    // ============================================================
+
+    #[test]
+    fn join_all_marker_is_copy() {
+        let marker: JoinAll<i32> = JoinAll::new();
+        let copy = marker;
+        let _ = marker; // Still usable after copy
+        let _ = copy;
+    }
+
+    #[test]
+    fn join_all_marker_default() {
+        let marker: JoinAll<i32> = JoinAll::default();
+        let _ = marker;
+    }
+
+    #[test]
+    fn join_all_result_all_succeed() {
+        let outcomes: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Ok(2), Outcome::Ok(3)];
+        let result = make_join_all_result(outcomes);
+
+        assert!(result.all_succeeded());
+        assert_eq!(result.success_count(), 3);
+        assert_eq!(result.failure_count(), 0);
+        assert_eq!(result.total_count, 3);
+
+        // Verify ordered values
+        let ordered = result.into_ordered_values();
+        assert_eq!(ordered, vec![Some(1), Some(2), Some(3)]);
+    }
+
+    #[test]
+    fn join_all_result_partial_failure() {
+        let outcomes: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Err("fail"), Outcome::Ok(3)];
+        let result = make_join_all_result(outcomes);
+
+        assert!(!result.all_succeeded());
+        assert_eq!(result.success_count(), 2);
+        assert_eq!(result.failure_count(), 1);
+        assert_eq!(result.total_count, 3);
+
+        // Verify ordered values (None for failed index)
+        let ordered = result.into_ordered_values();
+        assert_eq!(ordered, vec![Some(1), None, Some(3)]);
+    }
+
+    #[test]
+    fn join_all_result_empty() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![];
+        let result = make_join_all_result(outcomes);
+
+        assert!(result.all_succeeded()); // Vacuously true
+        assert_eq!(result.success_count(), 0);
+        assert_eq!(result.failure_count(), 0);
+        assert_eq!(result.total_count, 0);
+    }
+
+    #[test]
+    fn join_all_result_single_success() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(42)];
+        let result = make_join_all_result(outcomes);
+
+        assert!(result.all_succeeded());
+        assert_eq!(result.success_count(), 1);
+        let ordered = result.into_ordered_values();
+        assert_eq!(ordered, vec![Some(42)]);
+    }
+
+    #[test]
+    fn join_all_result_single_failure() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Err("fail")];
+        let result = make_join_all_result(outcomes);
+
+        assert!(!result.all_succeeded());
+        assert_eq!(result.success_count(), 0);
+        assert_eq!(result.failure_count(), 1);
+    }
+
+    #[test]
+    fn join_all_to_result_all_succeed() {
+        let outcomes: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Ok(2), Outcome::Ok(3)];
+        let result = make_join_all_result(outcomes);
+        let values = join_all_to_result(result);
+
+        assert!(values.is_ok());
+        assert_eq!(values.unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn join_all_to_result_with_error() {
+        let outcomes: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Err("middle-fail"), Outcome::Ok(3)];
+        let result = make_join_all_result(outcomes);
+        let err = join_all_to_result(result);
+
+        assert!(err.is_err());
+        match err.unwrap_err() {
+            JoinAllError::Error {
+                error,
+                index,
+                total_failures,
+            } => {
+                assert_eq!(error, "middle-fail");
+                assert_eq!(index, 1); // Middle branch failed
+                assert_eq!(total_failures, 1);
+            }
+            other => panic!("Expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn join_all_to_result_with_cancellation() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Ok(1),
+            Outcome::Cancelled(CancelReason::timeout()),
+            Outcome::Ok(3),
+        ];
+        let result = make_join_all_result(outcomes);
+        let err = join_all_to_result(result);
+
+        assert!(matches!(err, Err(JoinAllError::Cancelled(_))));
+    }
+
+    #[test]
+    fn join_all_to_result_with_panic() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Ok(1),
+            Outcome::Panicked(PanicPayload::new("boom")),
+            Outcome::Ok(3),
+        ];
+        let result = make_join_all_result(outcomes);
+        let err = join_all_to_result(result);
+
+        assert!(matches!(err, Err(JoinAllError::Panicked(_))));
+    }
+
+    #[test]
+    fn join_all_to_result_empty() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![];
+        let result = make_join_all_result(outcomes);
+        let values = join_all_to_result(result);
+
+        assert!(values.is_ok());
+        assert_eq!(values.unwrap(), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn join_all_error_display() {
+        let err: JoinAllError<&str> = JoinAllError::Error {
+            error: "test error",
+            index: 2,
+            total_failures: 3,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("branch 2 failed"));
+        assert!(msg.contains("test error"));
+        assert!(msg.contains("3 total failures"));
+
+        let err: JoinAllError<&str> = JoinAllError::Cancelled(CancelReason::timeout());
+        assert!(err.to_string().contains("cancelled"));
+
+        let err: JoinAllError<&str> = JoinAllError::Panicked(PanicPayload::new("boom"));
+        assert!(err.to_string().contains("panicked"));
+    }
+
+    #[test]
+    fn join_all_respects_severity_lattice() {
+        // Panic > Cancel > Error > Ok
+        // Test that the worst outcome is selected
+
+        // Error + Cancel = Cancel
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Ok(1),
+            Outcome::Err("error"),
+            Outcome::Cancelled(CancelReason::timeout()),
+        ];
+        let result = make_join_all_result(outcomes);
+        assert!(matches!(result.decision, AggregateDecision::Cancelled(_)));
+
+        // Cancel + Panic = Panic (panic short-circuits)
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Cancelled(CancelReason::timeout()),
+            Outcome::Panicked(PanicPayload::new("boom")),
+            Outcome::Ok(3),
+        ];
+        let result = make_join_all_result(outcomes);
+        assert!(matches!(result.decision, AggregateDecision::Panicked(_)));
+    }
+
+    #[test]
+    fn join_all_many_branches() {
+        // Test with many branches to verify scaling
+        let outcomes: Vec<Outcome<i32, &str>> = (0..100).map(Outcome::Ok).collect();
+        let result = make_join_all_result(outcomes);
+
+        assert!(result.all_succeeded());
+        assert_eq!(result.success_count(), 100);
+
+        let values = join_all_to_result(result).unwrap();
+        assert_eq!(values.len(), 100);
+        for (i, v) in values.iter().enumerate() {
+            assert_eq!(*v, i32::try_from(i).unwrap());
+        }
+    }
+
+    #[test]
+    fn join_all_preserves_order_with_mixed_outcomes() {
+        // Verify that successful values maintain their original indices
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Ok(10),    // index 0
+            Outcome::Err("e1"), // index 1
+            Outcome::Ok(30),    // index 2
+            Outcome::Err("e2"), // index 3
+            Outcome::Ok(50),    // index 4
+        ];
+        let result = make_join_all_result(outcomes);
+
+        assert_eq!(result.successes.len(), 3);
+        assert_eq!(result.successes[0], (0, 10));
+        assert_eq!(result.successes[1], (2, 30));
+        assert_eq!(result.successes[2], (4, 50));
+    }
+
+    #[test]
+    fn join_all_result_debug() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(1), Outcome::Ok(2)];
+        let result = make_join_all_result(outcomes);
+        let debug = format!("{result:?}");
+        assert!(debug.contains("JoinAllResult"));
+        assert!(debug.contains("AllOk"));
     }
 }
