@@ -518,7 +518,8 @@ impl RuntimeState {
     /// A region can complete close when:
     /// 1. It's in the Finalizing state
     /// 2. All finalizers have been executed
-    /// 3. All obligations are resolved
+    /// 3. All tasks (including those spawned by finalizers) are terminal
+    /// 4. All obligations are resolved
     ///
     /// # Returns
     /// `true` if the region can transition to Closed state.
@@ -535,6 +536,17 @@ impl RuntimeState {
 
         // All finalizers must be done
         if !region.finalizers_empty() {
+            return false;
+        }
+
+        // All tasks must be terminal (including any spawned by finalizers)
+        let all_tasks_done = region.task_ids().iter().all(|&task_id| {
+            self.tasks
+                .get(task_id.arena_index())
+                .is_none_or(|t| t.state.is_terminal())
+        });
+
+        if !all_tasks_done {
             return false;
         }
 
@@ -571,6 +583,38 @@ mod tests {
             .expect("region missing")
             .add_task(id);
         id
+    }
+
+    #[test]
+    fn can_region_complete_close_checks_running_finalizer_tasks() {
+        let mut state = RuntimeState::new();
+        let region = state.create_root_region(Budget::INFINITE);
+
+        // Manually transition to Finalizing (simulating finalizer execution)
+        let region_record = state.regions.get_mut(region.arena_index()).expect("region");
+        region_record.begin_close(None);
+        region_record.begin_finalize();
+
+        // Add a running task (representing an async finalizer)
+        let task = insert_task(&mut state, region);
+        state
+            .tasks
+            .get_mut(task.arena_index())
+            .expect("task")
+            .start_running();
+
+        // Should NOT be able to close because a task is running
+        assert!(!state.can_region_complete_close(region));
+
+        // Complete the task
+        state
+            .tasks
+            .get_mut(task.arena_index())
+            .expect("task")
+            .complete(Outcome::Ok(()));
+
+        // Now should be able to close
+        assert!(state.can_region_complete_close(region));
     }
 
     #[test]
