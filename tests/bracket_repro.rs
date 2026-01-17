@@ -1,3 +1,5 @@
+//! Regression test ensuring bracket releases on cancellation.
+
 #[cfg(test)]
 mod tests {
     use asupersync::combinator::bracket::bracket;
