@@ -8,6 +8,11 @@ repository = "https://github.com/Dicklesworthstone/asupersync"
 keywords = ["async", "structured-concurrency", "cancellation", "runtime"]
 categories = ["asynchronous", "concurrency"]
 
+[features]
+# Enable internal test helpers for integration tests.
+# This exposes private APIs like Cx::new() and is NOT for production use.
+test-internals = []
+
 [lib]
 path = "src/lib.rs"
 

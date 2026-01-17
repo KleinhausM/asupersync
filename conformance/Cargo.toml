@@ -1,0 +1,15 @@
+[package]
+name = "asupersync-conformance"
+version = "0.1.0"
+edition = "2021"
+description = "Conformance test suite for async runtime specifications"
+license = "MIT"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[dev-dependencies]
+# Runtimes can be added here for testing

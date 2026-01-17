@@ -287,8 +287,17 @@ impl RuntimeState {
             return Vec::new();
         };
 
+        // Get the owning region and the waiters before we mutate
+        let owner = task.owner;
+        let waiters = task.waiters.clone();
+
+        // Remove task from owning region to prevent memory leak
+        if let Some(region) = self.regions.get_mut(owner.arena_index()) {
+            region.remove_task(task_id);
+        }
+
         // Return the waiters for the completed task
-        task.waiters.clone()
+        waiters
     }
 
     // =========================================================================
@@ -894,5 +903,60 @@ mod tests {
 
         // Now can complete
         assert!(state.can_region_complete_close(region));
+    }
+
+    #[test]
+    fn task_completed_removes_task_from_region() {
+        let mut state = RuntimeState::new();
+        let region = state.create_root_region(Budget::INFINITE);
+
+        // Insert some tasks
+        let task1 = insert_task(&mut state, region);
+        let task2 = insert_task(&mut state, region);
+        let task3 = insert_task(&mut state, region);
+
+        // Verify all tasks are in the region
+        let region_record = state.regions.get(region.arena_index()).expect("region");
+        assert_eq!(region_record.tasks.len(), 3);
+        assert!(region_record.tasks.contains(&task1));
+        assert!(region_record.tasks.contains(&task2));
+        assert!(region_record.tasks.contains(&task3));
+
+        // Complete task2 (transition to Completed state first)
+        state
+            .tasks
+            .get_mut(task2.arena_index())
+            .expect("task2")
+            .complete(Outcome::Ok(()));
+
+        // Call task_completed to notify the runtime
+        let waiters = state.task_completed(task2);
+        assert!(waiters.is_empty()); // No waiters registered
+
+        // Verify task2 is removed from the region
+        let region_record = state.regions.get(region.arena_index()).expect("region");
+        assert_eq!(region_record.tasks.len(), 2);
+        assert!(region_record.tasks.contains(&task1));
+        assert!(!region_record.tasks.contains(&task2)); // task2 should be removed
+        assert!(region_record.tasks.contains(&task3));
+
+        // Complete remaining tasks
+        state
+            .tasks
+            .get_mut(task1.arena_index())
+            .expect("task1")
+            .complete(Outcome::Ok(()));
+        let _ = state.task_completed(task1);
+
+        state
+            .tasks
+            .get_mut(task3.arena_index())
+            .expect("task3")
+            .complete(Outcome::Ok(()));
+        let _ = state.task_completed(task3);
+
+        // Verify all tasks removed from region
+        let region_record = state.regions.get(region.arena_index()).expect("region");
+        assert!(region_record.tasks.is_empty());
     }
 }
