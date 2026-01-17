@@ -6,6 +6,7 @@
 //! # Primitives
 //!
 //! - [`Mutex`]: Mutual exclusion with guard obligations
+//! - [`RwLock`]: Read-write lock with cancel-aware acquisition
 //! - [`Semaphore`]: Counting semaphore with permit obligations
 //!
 //! # Two-Phase Pattern
@@ -24,9 +25,14 @@
 //! - Panic while holding: Guard dropped via unwind (unwind safety)
 
 mod mutex;
+mod rwlock;
 mod semaphore;
 
 pub use mutex::{LockError, Mutex, MutexGuard, OwnedMutexGuard, TryLockError};
+pub use rwlock::{
+    OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, RwLockError, RwLockReadGuard,
+    RwLockWriteGuard, TryReadError, TryWriteError,
+};
 pub use semaphore::{
     AcquireError, OwnedSemaphorePermit, Semaphore, SemaphorePermit, TryAcquireError,
 };

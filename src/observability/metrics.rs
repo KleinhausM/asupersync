@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// A monotonically increasing counter.
 #[derive(Debug)]
@@ -214,12 +214,12 @@ impl Metrics {
 
         for (name, counter) in &self.counters {
             output.push_str(&format!("# TYPE {name} counter\n"));
-            output.push_str(&format!( \"{name} {counter.get()}\n"));
+            output.push_str(&format!("{name} {}\n", counter.get()));
         }
 
         for (name, gauge) in &self.gauges {
             output.push_str(&format!("# TYPE {name} gauge\n"));
-            output.push_str(&format!( \"{name} {gauge.get()}\n"));
+            output.push_str(&format!("{name} {}\n", gauge.get()));
         }
 
         for (name, hist) in &self.histograms {
@@ -233,10 +233,12 @@ impl Metrics {
                 } else {
                     "+Inf".to_string()
                 };
-                output.push_str(&format!( \"{name}_bucket{{le=\"{le}\"}} {cumulative}\n"));
+                output.push_str(&format!(
+                    "{name}_bucket{{le=\"{le}\"}} {cumulative}\n"
+                ));
             }
-            output.push_str(&format!( \"{name}_sum {hist.sum()}\n"));
-            output.push_str(&format!( \"{name}_count {hist.count()}\n"));
+            output.push_str(&format!("{name}_sum {}\n", hist.sum()));
+            output.push_str(&format!("{name}_count {}\n", hist.count()));
         }
 
         output

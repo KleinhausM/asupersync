@@ -148,7 +148,6 @@ mod tests {
     use crate::types::Budget;
     use crate::util::ArenaIndex;
     use std::future::Future;
-    use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
 
     fn test_cx() -> Cx {

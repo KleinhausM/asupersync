@@ -147,11 +147,11 @@ mod tests {
         let id = SymbolId::new_for_test(1, 0, 0);
         let symbol = Symbol::new(id, vec![1, 2, 3], SymbolKind::Source);
 
-        let mut auth = ctx.sign_symbol(&symbol);
+        let auth = ctx.sign_symbol(&symbol);
         assert!(auth.is_verified()); // Signed locally is implicitly verified
 
         // Reset verified flag to simulate reception
-        let mut received = AuthenticatedSymbol::from_parts(auth.into_symbol(), *auth.tag());
+        let mut received = AuthenticatedSymbol::from_parts(auth.clone().into_symbol(), *auth.tag());
         assert!(!received.is_verified());
 
         // Verify

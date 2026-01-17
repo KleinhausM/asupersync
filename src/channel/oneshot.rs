@@ -444,7 +444,6 @@ mod tests {
     use crate::util::ArenaIndex;
     use crate::{RegionId, TaskId};
     use std::future::Future;
-    use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
 
     fn test_cx() -> Cx {

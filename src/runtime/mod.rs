@@ -10,9 +10,13 @@
 //! - [`task_handle`]: TaskHandle for awaiting spawned task results
 //! - [`waker`]: Waker implementation with deduplication
 //! - [`timer`]: Timer heap for deadline management
+//! - [`reactor`]: I/O reactor abstraction
+//! - [`io_driver`]: Reactor driver that dispatches readiness to wakers
 
 pub mod builder;
 pub mod config;
+pub mod io_driver;
+pub mod reactor;
 pub mod scheduler;
 pub mod state;
 pub mod stored_task;
@@ -22,6 +26,8 @@ pub mod waker;
 
 pub use builder::{JoinHandle, Runtime, RuntimeBuilder, RuntimeHandle};
 pub use config::{BlockingPoolConfig, RuntimeConfig};
+pub use io_driver::IoDriver;
+pub use reactor::{Event, Events, Interest, LabReactor, Reactor, Registration, Source, Token};
 pub use scheduler::Scheduler;
 pub use state::RuntimeState;
 pub use stored_task::StoredTask;

@@ -61,28 +61,18 @@ impl DetRng {
         self.next_u64() & 1 == 1
     }
 
-    /// Shuffles a slice in place using the Fisher-Yates algorithm.
-    pub fn shuffle<T>(&mut self, slice: &mut [T]) {
-        for i in (1..slice.len()).rev() {
-            let j = self.next_usize(i + 1);
-            slice.swap(i, j);
+    /// Fills a buffer with pseudo-random bytes.
+    pub fn fill_bytes(&mut self, dest: &mut [u8]) {
+        let mut i = 0;
+        while i < dest.len() {
+            let rand = self.next_u64();
+            let bytes = rand.to_le_bytes();
+            let n = std::cmp::min(dest.len() - i, 8);
+            dest[i..i + n].copy_from_slice(&bytes[..n]);
+            i += n;
         }
     }
 
-    /// Fills a byte slice with pseudo-random data.
-    pub fn fill_bytes(&mut self, dest: &mut [u8]) {
-        let mut chunks = dest.chunks_exact_mut(8);
-        for chunk in &mut chunks {
-            let n = self.next_u64();
-            chunk.copy_from_slice(&n.to_le_bytes());
-        }
-        let remainder = chunks.into_remainder();
-        if !remainder.is_empty() {
-            let n = self.next_u64();
-            let bytes = n.to_le_bytes();
-            remainder.copy_from_slice(&bytes[..remainder.len()]);
-        }
-    }
 }
 
 #[cfg(test)]

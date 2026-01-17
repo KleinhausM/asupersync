@@ -190,7 +190,7 @@ impl<'a, R: RuntimeInterface> BenchRunner<'a, R> {
     }
 
     fn run_single(&self, bench: &Benchmark<R>) -> BenchRunResult {
-        let mut collector = LogCollector::new(self.config.log_level);
+        let collector = LogCollector::new(self.config.log_level);
         collector.start();
         collector.info(format!("Starting benchmark {}", bench.id));
 

@@ -1,9 +1,7 @@
 use crate::{
     conformance_test, BroadcastReceiver, BroadcastSender, ConformanceTest, MpscReceiver, MpscSender,
-    OneshotRecvError, OneshotSender, RuntimeInterface, TestCategory, TestResult, WatchReceiver,
-    WatchSender,
+    OneshotSender, RuntimeInterface, TestCategory, TestResult, WatchReceiver, WatchSender,
 };
-use std::time::Duration;
 
 pub fn collect_tests<RT: RuntimeInterface>() -> Vec<ConformanceTest<RT>> {
     vec![

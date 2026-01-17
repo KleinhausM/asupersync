@@ -4,11 +4,8 @@
 //! structured fields across asynchronous boundaries.
 
 use crate::types::{RegionId, TaskId};
-use crate::util::ArenaIndex;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 /// A unique identifier for a span within a trace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,7 +27,7 @@ impl Default for SpanId {
 }
 
 /// A span represents a logical unit of work.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Span {
     id: SpanId,
     parent_id: Option<SpanId>,
@@ -38,15 +35,17 @@ pub struct Span {
 }
 
 /// A context carrying diagnostic information.
+///
+/// This struct is designed to be cloned and passed between tasks.
+/// It uses value semantics (deep copy of map on clone), so modifications
+/// to a cloned context do not affect the original.
 #[derive(Debug, Clone, Default)]
 pub struct DiagnosticContext {
     task_id: Option<TaskId>,
     region_id: Option<RegionId>,
     span_id: Option<SpanId>,
     parent_span_id: Option<SpanId>,
-    // Using Arc<Mutex<...>> to allow cloning and thread-safety for custom fields.
-    // In a high-performance scenario, we might want a persistent map or COW.
-    custom: Arc<Mutex<HashMap<String, String>>>,
+    custom: HashMap<String, String>,
     max_completed_spans: usize,
 }
 
@@ -87,11 +86,8 @@ impl DiagnosticContext {
 
     /// Adds a custom string field.
     #[must_use]
-    pub fn with_custom(self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        {
-            let mut map = self.custom.lock().expect("context lock poisoned");
-            map.insert(key.into(), value.into());
-        }
+    pub fn with_custom(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.custom.insert(key.into(), value.into());
         self
     }
 
@@ -123,10 +119,8 @@ impl DiagnosticContext {
             merged.parent_span_id = Some(id);
         }
 
-        let mut my_map = merged.custom.lock().expect("context lock poisoned");
-        let other_map = other.custom.lock().expect("context lock poisoned");
-        for (k, v) in other_map.iter() {
-            my_map.insert(k.clone(), v.clone());
+        for (k, v) in &other.custom {
+            merged.custom.insert(k.clone(), v.clone());
         }
 
         merged
@@ -174,9 +168,8 @@ impl DiagnosticContext {
 
     /// Gets a custom field.
     #[must_use]
-    pub fn custom(&self, key: &str) -> Option<String> {
-        let map = self.custom.lock().expect("context lock poisoned");
-        map.get(key).cloned()
+    pub fn custom(&self, key: &str) -> Option<&str> {
+        self.custom.get(key).map(|s| s.as_str())
     }
 }
 
@@ -194,6 +187,7 @@ impl Drop for ContextGuard<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::ArenaIndex;
 
     #[test]
     fn context_new_empty() {
@@ -225,8 +219,8 @@ mod tests {
             .with_custom("key", "value")
             .with_custom("num", "42");
 
-        assert_eq!(ctx.custom("key").as_deref(), Some("value"));
-        assert_eq!(ctx.custom("num").as_deref(), Some("42"));
+        assert_eq!(ctx.custom("key"), Some("value"));
+        assert_eq!(ctx.custom("num"), Some("42"));
         assert_eq!(ctx.custom("missing"), None);
     }
 
@@ -255,7 +249,7 @@ mod tests {
         let merged = ctx1.merge(&ctx2);
 
         assert_eq!(merged.task_id(), Some(tid)); // Preserved
-        assert_eq!(merged.custom("b").as_deref(), Some("2")); // Added
-        assert_eq!(merged.custom("a").as_deref(), Some("override")); // Overridden
+        assert_eq!(merged.custom("b"), Some("2")); // Added
+        assert_eq!(merged.custom("a"), Some("override")); // Overridden
     }
 }

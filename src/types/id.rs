@@ -5,6 +5,8 @@
 
 use crate::util::ArenaIndex;
 use core::fmt;
+use std::ops::Add;
+use std::time::Duration;
 
 /// A unique identifier for a region in the runtime.
 ///
@@ -222,6 +224,14 @@ impl Time {
     #[must_use]
     pub const fn duration_since(self, earlier: Self) -> u64 {
         self.0.saturating_sub(earlier.0)
+    }
+}
+
+impl Add<Duration> for Time {
+    type Output = Time;
+
+    fn add(self, rhs: Duration) -> Self::Output {
+        self.saturating_add_nanos(rhs.as_nanos() as u64)
     }
 }
 
