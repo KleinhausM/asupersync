@@ -437,6 +437,7 @@ mod tests {
     fn clone_copies_deadline() {
         let original = Sleep::new(Time::from_secs(10));
         let cloned = original.clone();
+        assert_eq!(original.deadline(), Time::from_secs(10));
         assert_eq!(cloned.deadline(), Time::from_secs(10));
     }
 
@@ -447,6 +448,7 @@ mod tests {
         assert!(original.was_polled());
 
         let cloned = original.clone();
+        assert!(original.was_polled());
         assert!(!cloned.was_polled());
     }
 

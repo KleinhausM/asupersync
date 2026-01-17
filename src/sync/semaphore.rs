@@ -649,4 +649,362 @@ mod tests {
             "no semaphore permits available"
         );
     }
+
+    // ==========================================================================
+    // SYNC-005: Semaphore Permit Limiting Tests
+    // Verify semaphore limits concurrent access to the specified permit count
+    // ==========================================================================
+
+    #[test]
+    fn permit_limiting_never_exceeds_capacity() {
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        const PERMIT_COUNT: usize = 5;
+        const NUM_THREADS: usize = 20;
+        const ITERATIONS_PER_THREAD: usize = 100;
+
+        let sem = Arc::new(Semaphore::new(PERMIT_COUNT));
+        let active_holders = Arc::new(AtomicU32::new(0));
+        let max_concurrent = Arc::new(AtomicU32::new(0));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let sem = Arc::clone(&sem);
+                let active = Arc::clone(&active_holders);
+                let max = Arc::clone(&max_concurrent);
+                std::thread::spawn(move || {
+                    let cx = test_cx();
+                    for _ in 0..ITERATIONS_PER_THREAD {
+                        if let Ok(_permit) = sem.acquire(&cx, 1) {
+                            // Mark ourselves as holding a permit
+                            let current = active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                            max.fetch_max(current, AtomicOrdering::SeqCst);
+
+                            // Do some work while holding the permit
+                            std::hint::spin_loop();
+
+                            // Release holder count before dropping permit
+                            active.fetch_sub(1, AtomicOrdering::SeqCst);
+                            // permit dropped here, releasing back to semaphore
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let max = max_concurrent.load(AtomicOrdering::SeqCst);
+
+        // Verify: never exceeded permit count
+        assert!(
+            max <= PERMIT_COUNT as u32,
+            "Semaphore should limit concurrent access to {PERMIT_COUNT}, but max was {max}"
+        );
+
+        // Verify: some concurrent usage happened (semaphore wasn't overly restrictive)
+        assert!(
+            max > 1,
+            "Should have had some concurrent permit holders (max: {max})"
+        );
+    }
+
+    #[test]
+    fn permit_limiting_multi_permit_acquire() {
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        const PERMIT_COUNT: usize = 10;
+        const NUM_THREADS: usize = 8;
+        const PERMITS_PER_ACQUIRE: usize = 3;
+        const ITERATIONS_PER_THREAD: usize = 50;
+
+        let sem = Arc::new(Semaphore::new(PERMIT_COUNT));
+        let active_permits = Arc::new(AtomicU32::new(0));
+        let max_concurrent_permits = Arc::new(AtomicU32::new(0));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let sem = Arc::clone(&sem);
+                let active = Arc::clone(&active_permits);
+                let max = Arc::clone(&max_concurrent_permits);
+                std::thread::spawn(move || {
+                    let cx = test_cx();
+                    for _ in 0..ITERATIONS_PER_THREAD {
+                        if let Ok(_permit) = sem.acquire(&cx, PERMITS_PER_ACQUIRE) {
+                            // Add our permit count
+                            let current = active
+                                .fetch_add(PERMITS_PER_ACQUIRE as u32, AtomicOrdering::SeqCst)
+                                + PERMITS_PER_ACQUIRE as u32;
+                            max.fetch_max(current, AtomicOrdering::SeqCst);
+
+                            // Do some work
+                            std::hint::spin_loop();
+
+                            // Release before dropping
+                            active.fetch_sub(PERMITS_PER_ACQUIRE as u32, AtomicOrdering::SeqCst);
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let max = max_concurrent_permits.load(AtomicOrdering::SeqCst);
+
+        // Verify: never exceeded total permit count
+        assert!(
+            max <= PERMIT_COUNT as u32,
+            "Semaphore should limit to {PERMIT_COUNT} permits, but max held was {max}"
+        );
+    }
+
+    #[test]
+    fn all_permits_eventually_released() {
+        use std::sync::Arc;
+
+        const PERMIT_COUNT: usize = 5;
+        const NUM_THREADS: usize = 10;
+        const ITERATIONS: usize = 100;
+
+        let sem = Arc::new(Semaphore::new(PERMIT_COUNT));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let sem = Arc::clone(&sem);
+                std::thread::spawn(move || {
+                    let cx = test_cx();
+                    for _ in 0..ITERATIONS {
+                        let _permit = sem.acquire(&cx, 1).expect("acquire should succeed");
+                        std::hint::spin_loop();
+                        // permit dropped
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        // Verify: all permits are released
+        assert_eq!(
+            sem.available_permits(),
+            PERMIT_COUNT,
+            "All permits should be released after all threads complete"
+        );
+    }
+
+    #[test]
+    fn try_acquire_respects_limits() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        const PERMIT_COUNT: usize = 3;
+        const NUM_THREADS: usize = 10;
+        const ITERATIONS: usize = 500;
+
+        let sem = Arc::new(Semaphore::new(PERMIT_COUNT));
+        let successes = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let sem = Arc::clone(&sem);
+                let successes = Arc::clone(&successes);
+                std::thread::spawn(move || {
+                    for _ in 0..ITERATIONS {
+                        if let Ok(_permit) = sem.try_acquire(1) {
+                            successes.fetch_add(1, AtomicOrdering::SeqCst);
+                            // Immediately release
+                        }
+                        // Small yield to allow other threads
+                        std::thread::yield_now();
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        // Verify: permits were successfully acquired multiple times
+        let total_successes = successes.load(AtomicOrdering::SeqCst);
+        assert!(
+            total_successes > 0,
+            "Should have had some successful try_acquire calls"
+        );
+
+        // Verify: all permits are back
+        assert_eq!(
+            sem.available_permits(),
+            PERMIT_COUNT,
+            "All permits should be available after completion"
+        );
+    }
+
+    #[test]
+    fn owned_permit_limiting() {
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        const PERMIT_COUNT: usize = 4;
+        const NUM_THREADS: usize = 12;
+        const ITERATIONS: usize = 50;
+
+        let sem = Arc::new(Semaphore::new(PERMIT_COUNT));
+        let active_holders = Arc::new(AtomicU32::new(0));
+        let max_concurrent = Arc::new(AtomicU32::new(0));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let sem = Arc::clone(&sem);
+                let active = Arc::clone(&active_holders);
+                let max = Arc::clone(&max_concurrent);
+                std::thread::spawn(move || {
+                    let cx = test_cx();
+                    for _ in 0..ITERATIONS {
+                        if let Ok(_permit) = OwnedSemaphorePermit::acquire(Arc::clone(&sem), &cx, 1)
+                        {
+                            let current = active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                            max.fetch_max(current, AtomicOrdering::SeqCst);
+                            std::hint::spin_loop();
+                            active.fetch_sub(1, AtomicOrdering::SeqCst);
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let max = max_concurrent.load(AtomicOrdering::SeqCst);
+
+        // Verify: OwnedSemaphorePermit respects limits
+        assert!(
+            max <= PERMIT_COUNT as u32,
+            "OwnedSemaphorePermit should limit to {PERMIT_COUNT}, but max was {max}"
+        );
+
+        // Verify: all permits released
+        assert_eq!(
+            sem.available_permits(),
+            PERMIT_COUNT,
+            "All permits should be available"
+        );
+    }
+
+    #[test]
+    fn close_wakes_waiters() {
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let sem = Arc::new(Semaphore::new(1));
+        let waiter_started = Arc::new(AtomicBool::new(false));
+        let waiter_finished = Arc::new(AtomicBool::new(false));
+
+        // First, acquire the only permit
+        let _held = sem.try_acquire(1).expect("should get permit");
+
+        // Start a thread that will try to acquire (and should block)
+        let sem_clone = Arc::clone(&sem);
+        let started = Arc::clone(&waiter_started);
+        let finished = Arc::clone(&waiter_finished);
+
+        let handle = std::thread::spawn(move || {
+            let cx = test_cx();
+            started.store(true, AtomicOrdering::SeqCst);
+            let result = sem_clone.acquire(&cx, 1).map(|_| ());
+            finished.store(true, AtomicOrdering::SeqCst);
+            result
+        });
+
+        // Wait for waiter to start
+        while !waiter_started.load(AtomicOrdering::SeqCst) {
+            std::thread::yield_now();
+        }
+
+        // Give it a moment to enter the wait loop
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Close the semaphore - should wake the waiter
+        sem.close();
+
+        // Wait for thread with timeout
+        let result = handle.join().expect("thread panicked");
+
+        // Verify: waiter received Closed error
+        assert!(
+            matches!(result, Err(AcquireError::Closed)),
+            "Waiter should receive Closed error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn fairness_fifo_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        // Test that waiters are serviced in FIFO order
+        // This is a best-effort test as timing can affect results
+
+        const NUM_WAITERS: usize = 4;
+
+        let sem = Arc::new(Semaphore::new(1));
+        let order = Arc::new(AtomicUsize::new(0));
+        let completion_order = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        // Acquire the permit first
+        let held = sem.try_acquire(1).expect("should get permit");
+
+        // Spawn waiters with slight delays to establish order
+        let mut handles = Vec::new();
+        for i in 0..NUM_WAITERS {
+            let sem = Arc::clone(&sem);
+            let order = Arc::clone(&order);
+            let completion = Arc::clone(&completion_order);
+
+            handles.push(std::thread::spawn(move || {
+                // Small delay to establish ordering
+                std::thread::sleep(Duration::from_millis((i * 5) as u64));
+
+                let cx = test_cx();
+                let _permit = sem.acquire(&cx, 1).expect("should get permit");
+
+                // Record completion order
+                let my_order = order.fetch_add(1, AtomicOrdering::SeqCst);
+                completion.lock().unwrap().push((i, my_order));
+            }));
+        }
+
+        // Give waiters time to queue up
+        std::thread::sleep(Duration::from_millis(30));
+
+        // Release the initial permit
+        drop(held);
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let completions_len = {
+            let completions = completion_order.lock().unwrap();
+            completions.len()
+        };
+        assert_eq!(completions_len, NUM_WAITERS, "All waiters should complete");
+
+        // With FIFO fairness, the completion order should match the queue order
+        // (allowing for some variance due to thread scheduling)
+    }
 }

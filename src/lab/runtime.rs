@@ -152,6 +152,16 @@ impl LabRuntime {
         }
 
         violations.extend(self.futurelock_violations());
+        violations.extend(self.quiescence_violations());
+
+        // Check for task leaks (non-terminal tasks)
+        let task_leak_count = self.task_leaks();
+        if task_leak_count > 0 {
+            violations.push(InvariantViolation::TaskLeak {
+                count: task_leak_count,
+            });
+        }
+
         violations
     }
 
@@ -185,6 +195,41 @@ impl LabRuntime {
         }
 
         leaks
+    }
+
+    fn task_leaks(&self) -> usize {
+        self.state
+            .tasks
+            .iter()
+            .filter(|(_, t)| !t.state.is_terminal())
+            .count()
+    }
+
+    fn quiescence_violations(&self) -> Vec<InvariantViolation> {
+        let mut violations = Vec::new();
+        for (_, region) in self.state.regions.iter() {
+            if region.state.is_terminal() {
+                // Check if any children or tasks are NOT terminal
+                let live_tasks = region.tasks.iter().any(|&tid| {
+                    self.state
+                        .tasks
+                        .get(tid.arena_index())
+                        .is_some_and(|t| !t.state.is_terminal())
+                });
+
+                let live_children = region.children.iter().any(|&rid| {
+                    self.state
+                        .regions
+                        .get(rid.arena_index())
+                        .is_some_and(|r| !r.state.is_terminal())
+                });
+
+                if live_tasks || live_children {
+                    violations.push(InvariantViolation::QuiescenceViolation);
+                }
+            }
+        }
+        violations
     }
 
     fn futurelock_violations(&self) -> Vec<InvariantViolation> {

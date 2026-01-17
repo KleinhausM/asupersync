@@ -1,8 +1,9 @@
-//! Time primitives: sleep and timeout operations.
+//! Time primitives: sleep, timeout, and interval operations.
 //!
 //! This module provides core time-based operations for async programming:
 //! - [`Sleep`]: A future that completes after a deadline
 //! - [`TimeoutFuture`]: A wrapper that adds a timeout to any future
+//! - [`Interval`]: A repeating timer that yields at a fixed period
 //!
 //! # Virtual vs Wall Time
 //!
@@ -12,14 +13,15 @@
 //!
 //! # Cancel Safety
 //!
-//! Both `Sleep` and `TimeoutFuture` are cancel-safe:
+//! All time primitives are cancel-safe:
 //! - `Sleep`: Can be dropped and recreated without side effects
 //! - `TimeoutFuture`: The inner future may have side effects on cancellation
+//! - `Interval`: Next tick proceeds from where it was interrupted
 //!
 //! # Example
 //!
 //! ```ignore
-//! use asupersync::time::{sleep, timeout};
+//! use asupersync::time::{sleep, timeout, interval};
 //! use std::time::Duration;
 //!
 //! // Sleep for 100 milliseconds
@@ -30,14 +32,23 @@
 //!     Ok(result) => println!("Completed: {result}"),
 //!     Err(_) => println!("Timed out!"),
 //! }
+//!
+//! // Create an interval timer
+//! let mut ticker = interval(now, Duration::from_millis(100));
+//! for _ in 0..5 {
+//!     let tick = ticker.tick(now);
+//!     process_tick(tick);
+//! }
 //! ```
 
 mod driver;
 mod elapsed;
+mod interval;
 mod sleep;
 mod timeout_future;
 
-pub use driver::{TimerDriver, TimerHandle, TimeSource, VirtualClock, WallClock};
+pub use driver::{TimeSource, TimerDriver, TimerHandle, VirtualClock, WallClock};
 pub use elapsed::Elapsed;
+pub use interval::{interval, interval_at, Interval, MissedTickBehavior};
 pub use sleep::{sleep, sleep_until, Sleep};
 pub use timeout_future::{timeout, timeout_at, TimeoutFuture};

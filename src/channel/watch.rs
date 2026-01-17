@@ -489,6 +489,18 @@ mod tests {
     }
 
     #[test]
+    fn latest_value_wins() {
+        let (tx, rx) = channel(0);
+
+        for i in 1..=100 {
+            tx.send(i).expect("send failed");
+        }
+
+        // Watch holds only the latest value, not a queue.
+        assert_eq!(*rx.borrow(), 100);
+    }
+
+    #[test]
     fn send_modify() {
         let cx = test_cx();
         let (tx, mut rx) = channel(0);

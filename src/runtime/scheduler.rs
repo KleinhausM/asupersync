@@ -5,16 +5,23 @@
 //! 2. Timed lane (EDF) - tasks with deadlines
 //! 3. Ready lane - all other ready tasks
 //!
-//! Within each lane, tasks are ordered by their priority.
+//! Within each lane, tasks are ordered by their priority (or deadline).
 
-use crate::types::TaskId;
+use crate::types::{TaskId, Time};
 use std::collections::VecDeque;
 
-/// A task entry in a scheduler lane.
+/// A task entry in a scheduler lane ordered by priority.
 #[derive(Debug, Clone)]
 struct SchedulerEntry {
     task: TaskId,
     priority: u8,
+}
+
+/// A task entry in a scheduler lane ordered by deadline (EDF).
+#[derive(Debug, Clone)]
+struct TimedEntry {
+    task: TaskId,
+    deadline: Time,
 }
 
 fn insert_by_priority(lane: &mut VecDeque<SchedulerEntry>, entry: SchedulerEntry) {
@@ -26,13 +33,22 @@ fn insert_by_priority(lane: &mut VecDeque<SchedulerEntry>, entry: SchedulerEntry
     lane.insert(pos, entry);
 }
 
+fn insert_by_deadline(lane: &mut VecDeque<TimedEntry>, entry: TimedEntry) {
+    // Earlier deadline first (EDF). Stable for equal deadlines.
+    let pos = lane
+        .iter()
+        .position(|e| entry.deadline < e.deadline)
+        .unwrap_or(lane.len());
+    lane.insert(pos, entry);
+}
+
 /// The three-lane scheduler.
 #[derive(Debug, Default)]
 pub struct Scheduler {
     /// Cancel lane: tasks with pending cancellation (highest priority).
     cancel_lane: VecDeque<SchedulerEntry>,
     /// Timed lane: tasks with deadlines (EDF ordering).
-    timed_lane: VecDeque<SchedulerEntry>,
+    timed_lane: VecDeque<TimedEntry>,
     /// Ready lane: general ready tasks.
     ready_lane: VecDeque<SchedulerEntry>,
     /// Set of tasks currently in the scheduler (for dedup).
@@ -72,17 +88,16 @@ impl Scheduler {
     /// Does nothing if the task is already scheduled.
     pub fn schedule_cancel(&mut self, task: TaskId, priority: u8) {
         if self.scheduled.insert(task) {
-            self.cancel_lane
-                .push_back(SchedulerEntry { task, priority });
+            insert_by_priority(&mut self.cancel_lane, SchedulerEntry { task, priority });
         }
     }
 
     /// Schedules a task in the timed lane.
     ///
     /// Does nothing if the task is already scheduled.
-    pub fn schedule_timed(&mut self, task: TaskId, priority: u8) {
+    pub fn schedule_timed(&mut self, task: TaskId, deadline: Time) {
         if self.scheduled.insert(task) {
-            insert_by_priority(&mut self.timed_lane, SchedulerEntry { task, priority });
+            insert_by_deadline(&mut self.timed_lane, TimedEntry { task, deadline });
         }
     }
 
@@ -90,14 +105,22 @@ impl Scheduler {
     ///
     /// Order: cancel lane > timed lane > ready lane.
     pub fn pop(&mut self) -> Option<TaskId> {
-        let entry = self
-            .cancel_lane
-            .pop_front()
-            .or_else(|| self.timed_lane.pop_front())
-            .or_else(|| self.ready_lane.pop_front())?;
+        if let Some(entry) = self.cancel_lane.pop_front() {
+            self.scheduled.remove(&entry.task);
+            return Some(entry.task);
+        }
 
-        self.scheduled.remove(&entry.task);
-        Some(entry.task)
+        if let Some(entry) = self.timed_lane.pop_front() {
+            self.scheduled.remove(&entry.task);
+            return Some(entry.task);
+        }
+
+        if let Some(entry) = self.ready_lane.pop_front() {
+            self.scheduled.remove(&entry.task);
+            return Some(entry.task);
+        }
+
+        None
     }
 
     /// Removes a specific task from the scheduler.
@@ -124,7 +147,8 @@ impl Scheduler {
 
             // Check if already in cancel lane
             if let Some(pos) = self.cancel_lane.iter().position(|e| e.task == task) {
-                // Update priority if needed
+                // Update priority if needed (monotonicity check could be added here)
+                // For now, we trust the caller knows the correct priority
                 if self.cancel_lane[pos].priority < priority {
                     self.cancel_lane.remove(pos);
                     insert_by_priority(&mut self.cancel_lane, SchedulerEntry { task, priority });
@@ -232,5 +256,42 @@ mod tests {
 
         assert!(!sched.is_in_cancel_lane(task(1)));
         assert!(sched.is_in_cancel_lane(task(2)));
+    }
+
+    #[test]
+    fn timed_lane_edf_ordering() {
+        let mut sched = Scheduler::new();
+
+        // Schedule task 1 with later deadline (T=100)
+        sched.schedule_timed(task(1), Time::from_secs(100));
+
+        // Schedule task 2 with earlier deadline (T=10)
+        sched.schedule_timed(task(2), Time::from_secs(10));
+
+        // Task 2 should come first (EDF)
+        assert_eq!(sched.pop(), Some(task(2)));
+        assert_eq!(sched.pop(), Some(task(1)));
+    }
+
+    #[test]
+    fn timed_lane_priority_over_ready() {
+        let mut sched = Scheduler::new();
+        sched.schedule(task(1), 255); // Highest priority ready
+        sched.schedule_timed(task(2), Time::from_secs(100)); // Timed
+
+        // Timed lane should come before ready lane
+        assert_eq!(sched.pop(), Some(task(2)));
+        assert_eq!(sched.pop(), Some(task(1)));
+    }
+
+    #[test]
+    fn cancel_lane_priority_over_timed() {
+        let mut sched = Scheduler::new();
+        sched.schedule_timed(task(1), Time::from_secs(10)); // Urgent deadline
+        sched.schedule_cancel(task(2), 1); // Low priority cancel
+
+        // Cancel lane should still come first
+        assert_eq!(sched.pop(), Some(task(2)));
+        assert_eq!(sched.pop(), Some(task(1)));
     }
 }

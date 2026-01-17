@@ -328,7 +328,7 @@ mod tests {
     fn inner_mut() {
         let future = ready(42);
         let mut t = TimeoutFuture::new(future, Time::from_secs(5));
-        let _ = t.inner_mut(); // Just check it compiles
+        let _inner = t.inner_mut(); // Just check it compiles
     }
 
     #[test]
@@ -427,6 +427,7 @@ mod tests {
     fn clone_copies_deadline_and_future() {
         let t = TimeoutFuture::new(ready(42), Time::from_secs(10));
         let t2 = t.clone();
+        assert_eq!(t.deadline(), Time::from_secs(10));
         assert_eq!(t2.deadline(), Time::from_secs(10));
     }
 

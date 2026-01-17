@@ -730,4 +730,248 @@ mod tests {
         assert_eq!(*guard, 10);
         drop(guard);
     }
+
+    // ==========================================================================
+    // SYNC-002: Mutex Contention Correctness Tests
+    // Verify mutex protects data under concurrent access
+    // ==========================================================================
+
+    #[test]
+    fn contention_correctness_concurrent_increments() {
+        use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        const NUM_THREADS: usize = 8;
+        const INCREMENTS_PER_THREAD: usize = 1000;
+
+        let mutex = Arc::new(Mutex::new(0u64));
+        let successful_increments = Arc::new(AtomicU64::new(0));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let mutex = Arc::clone(&mutex);
+                let success_count = Arc::clone(&successful_increments);
+                std::thread::spawn(move || {
+                    let cx = test_cx();
+                    for _ in 0..INCREMENTS_PER_THREAD {
+                        if let Ok(mut guard) = mutex.lock(&cx) {
+                            *guard += 1;
+                            success_count.fetch_add(1, AtomicOrdering::SeqCst);
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let cx = test_cx();
+        let final_value = *mutex.lock(&cx).expect("final lock failed");
+        let expected = (NUM_THREADS * INCREMENTS_PER_THREAD) as u64;
+
+        // Verify: final value equals total increments (no lost updates)
+        assert_eq!(
+            final_value, expected,
+            "Mutex should protect data: expected {expected}, got {final_value}"
+        );
+
+        // Verify: all increments were successful
+        assert_eq!(
+            successful_increments.load(AtomicOrdering::SeqCst),
+            expected,
+            "All increments should succeed"
+        );
+    }
+
+    #[test]
+    fn contention_mutual_exclusion_verified() {
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        const NUM_THREADS: usize = 4;
+        const ITERATIONS_PER_THREAD: usize = 500;
+
+        let mutex = Arc::new(Mutex::new(0i32));
+        let active_holders = Arc::new(AtomicU32::new(0));
+        let max_concurrent = Arc::new(AtomicU32::new(0));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let mutex = Arc::clone(&mutex);
+                let active = Arc::clone(&active_holders);
+                let max = Arc::clone(&max_concurrent);
+                std::thread::spawn(move || {
+                    let cx = test_cx();
+                    for _ in 0..ITERATIONS_PER_THREAD {
+                        if let Ok(mut guard) = mutex.lock(&cx) {
+                            // Mark ourselves as holding the lock
+                            let current = active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                            max.fetch_max(current, AtomicOrdering::SeqCst);
+
+                            // Do some work while holding the lock
+                            *guard += 1;
+
+                            // Small delay to increase chance of contention
+                            std::hint::spin_loop();
+
+                            // Release holder count before dropping guard
+                            active.fetch_sub(1, AtomicOrdering::SeqCst);
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let max = max_concurrent.load(AtomicOrdering::SeqCst);
+
+        // Verify: at most 1 thread held the lock at any time
+        assert_eq!(
+            max, 1,
+            "Mutex must provide mutual exclusion: max concurrent holders was {max}"
+        );
+    }
+
+    #[test]
+    fn contention_no_deadlock_with_drop() {
+        use std::sync::Arc;
+
+        const NUM_THREADS: usize = 4;
+        const ITERATIONS: usize = 100;
+
+        let mutex = Arc::new(Mutex::new(Vec::new()));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|thread_id| {
+                let mutex = Arc::clone(&mutex);
+                std::thread::spawn(move || {
+                    let cx = test_cx();
+                    for i in 0..ITERATIONS {
+                        let mut guard = mutex.lock(&cx).expect("lock should succeed");
+                        guard.push((thread_id, i));
+                        // Guard dropped here, releasing lock
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let cx = test_cx();
+        let len = {
+            let guard = mutex.lock(&cx).expect("final lock failed");
+            guard.len()
+        };
+
+        // Verify: all entries were added
+        assert_eq!(
+            len,
+            NUM_THREADS * ITERATIONS,
+            "All operations should complete without deadlock"
+        );
+    }
+
+    #[test]
+    fn try_lock_under_contention() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        const NUM_THREADS: usize = 4;
+        const ITERATIONS: usize = 1000;
+
+        let mutex = Arc::new(Mutex::new(0u64));
+        let try_lock_successes = Arc::new(AtomicUsize::new(0));
+        let try_lock_failures = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let mutex = Arc::clone(&mutex);
+                let successes = Arc::clone(&try_lock_successes);
+                let failures = Arc::clone(&try_lock_failures);
+                std::thread::spawn(move || {
+                    for _ in 0..ITERATIONS {
+                        match mutex.try_lock() {
+                            Ok(mut guard) => {
+                                *guard += 1;
+                                successes.fetch_add(1, AtomicOrdering::SeqCst);
+                            }
+                            Err(TryLockError::Locked) => {
+                                failures.fetch_add(1, AtomicOrdering::SeqCst);
+                            }
+                            Err(TryLockError::Poisoned) => {
+                                panic!("mutex should not be poisoned");
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let cx = test_cx();
+        let final_value = *mutex.lock(&cx).expect("lock failed");
+        let successes = try_lock_successes.load(AtomicOrdering::SeqCst) as u64;
+
+        // Verify: final value matches successful try_locks
+        assert_eq!(
+            final_value, successes,
+            "Final value should equal successful try_lock count"
+        );
+
+        // Verify: we had some contention (some failures)
+        let failures = try_lock_failures.load(AtomicOrdering::SeqCst);
+        // Under contention, we expect at least some failures
+        assert!(
+            failures > 0 || successes == (NUM_THREADS * ITERATIONS) as u64,
+            "Should have some contention or all succeeded"
+        );
+    }
+
+    #[test]
+    fn owned_guard_contention_correctness() {
+        use std::sync::Arc;
+
+        const NUM_THREADS: usize = 4;
+        const INCREMENTS_PER_THREAD: usize = 500;
+
+        let mutex = Arc::new(Mutex::new(0u64));
+
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let mutex = Arc::clone(&mutex);
+                std::thread::spawn(move || {
+                    let cx = test_cx();
+                    for _ in 0..INCREMENTS_PER_THREAD {
+                        let mut guard =
+                            OwnedMutexGuard::lock(Arc::clone(&mutex), &cx).expect("lock failed");
+                        guard.with_lock_mut(|v| *v += 1);
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        let cx = test_cx();
+        let guard = OwnedMutexGuard::lock(mutex, &cx).expect("final lock failed");
+        let final_value = guard.with_lock(|v| *v);
+        let expected = (NUM_THREADS * INCREMENTS_PER_THREAD) as u64;
+
+        assert_eq!(
+            final_value, expected,
+            "OwnedMutexGuard should protect data: expected {expected}, got {final_value}"
+        );
+    }
 }

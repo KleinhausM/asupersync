@@ -549,6 +549,8 @@ mod tests {
     use super::*;
     use crate::types::Budget;
     use crate::util::ArenaIndex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     fn test_cx() -> Cx {
         Cx::new(
@@ -572,6 +574,123 @@ mod tests {
         tx.send(&cx, 42).expect("send failed");
         let value = rx.recv(&cx).expect("recv failed");
         assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn fifo_ordering_single_sender() {
+        let cx = test_cx();
+        let (tx, rx) = channel::<usize>(128);
+
+        for i in 0..100 {
+            tx.send(&cx, i).expect("send failed");
+        }
+        drop(tx);
+
+        let mut received = Vec::new();
+        loop {
+            match rx.recv(&cx) {
+                Ok(value) => received.push(value),
+                Err(RecvError::Disconnected) => break,
+                Err(other) => panic!("unexpected recv error: {other:?}"),
+            }
+        }
+
+        let expected: Vec<_> = (0..100).collect();
+        assert_eq!(received, expected);
+    }
+
+    #[test]
+    fn multi_producer_all_messages_received() {
+        let cx = test_cx();
+        let (tx, rx) = channel::<usize>(512);
+
+        let mut handles = Vec::new();
+        for producer_id in 0..8 {
+            let tx = tx.clone();
+            let cx = cx.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..50 {
+                    tx.send(&cx, producer_id * 100 + i).expect("send failed");
+                }
+            }));
+        }
+
+        drop(tx);
+
+        for handle in handles {
+            handle.join().expect("producer thread panicked");
+        }
+
+        let mut received = Vec::new();
+        loop {
+            match rx.recv(&cx) {
+                Ok(value) => received.push(value),
+                Err(RecvError::Disconnected) => break,
+                Err(other) => panic!("unexpected recv error: {other:?}"),
+            }
+        }
+
+        assert_eq!(received.len(), 400);
+        received.sort_unstable();
+
+        let mut expected = Vec::new();
+        for producer_id in 0..8 {
+            for i in 0..50 {
+                expected.push(producer_id * 100 + i);
+            }
+        }
+        expected.sort_unstable();
+        assert_eq!(received, expected);
+    }
+
+    #[test]
+    fn backpressure_blocks_until_recv() {
+        let cx = test_cx();
+        let (tx, rx) = channel::<i32>(1);
+
+        tx.send(&cx, 1).expect("send failed");
+
+        let started = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+        let started_clone = Arc::clone(&started);
+        let finished_clone = Arc::clone(&finished);
+        let tx_clone = tx;
+        let cx_clone = cx.clone();
+
+        let handle = std::thread::spawn(move || {
+            started_clone.store(true, Ordering::SeqCst);
+            tx_clone.send(&cx_clone, 2).expect("send in worker failed");
+            finished_clone.store(true, Ordering::SeqCst);
+        });
+
+        for _ in 0..1_000 {
+            if started.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(started.load(Ordering::SeqCst));
+
+        for _ in 0..1_000 {
+            std::thread::yield_now();
+        }
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "send completed despite full channel"
+        );
+
+        assert_eq!(rx.recv(&cx).expect("recv failed"), 1);
+
+        for _ in 0..10_000 {
+            if finished.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(finished.load(Ordering::SeqCst));
+        assert_eq!(rx.recv(&cx).expect("recv failed"), 2);
+
+        handle.join().expect("sender thread panicked");
     }
 
     #[test]
