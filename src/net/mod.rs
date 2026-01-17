@@ -6,6 +6,7 @@
 #![allow(clippy::unused_async)]
 
 pub mod sys;
+/// TCP networking primitives.
 pub mod tcp;
 mod udp;
 

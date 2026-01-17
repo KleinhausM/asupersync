@@ -214,6 +214,7 @@ pub struct BufferedSink<S> {
 }
 
 impl<S> BufferedSink<S> {
+    /// Creates a buffered sink with the given capacity.
     pub fn new(inner: S, capacity: usize) -> Self {
         Self {
             inner,
@@ -384,14 +385,17 @@ pub struct CollectingSink {
 }
 
 impl CollectingSink {
+    /// Creates an empty collecting sink.
     pub fn new() -> Self {
         Self { symbols: Vec::new() }
     }
     
+    /// Returns the collected symbols.
     pub fn symbols(&self) -> &[AuthenticatedSymbol] {
         &self.symbols
     }
     
+    /// Consumes the sink and returns the collected symbols.
     pub fn into_symbols(self) -> Vec<AuthenticatedSymbol> {
         self.symbols
     }

@@ -76,6 +76,7 @@ impl TcpSocket {
             ));
         }
         state.bound = Some(addr);
+        drop(state);
         Ok(())
     }
 
@@ -84,7 +85,7 @@ impl TcpSocket {
         let state = self
             .state
             .into_inner()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.reuseaddr || state.reuseport {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -121,7 +122,7 @@ impl TcpSocket {
         let state = self
             .state
             .into_inner()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.bound.is_some() || state.reuseaddr || state.reuseport {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,

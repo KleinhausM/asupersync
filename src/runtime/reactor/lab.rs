@@ -49,6 +49,7 @@ struct LabInner {
 
 impl LabReactor {
     /// Creates a new lab reactor.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(LabInner {
@@ -68,16 +69,20 @@ impl LabReactor {
     }
 }
 
+impl Default for LabReactor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Reactor for LabReactor {
     fn register(&self, _source: &dyn Source, token: Token, interest: Interest) -> io::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.sockets.insert(token, VirtualSocket { interest });
+        self.inner.lock().unwrap().sockets.insert(token, VirtualSocket { interest });
         Ok(())
     }
 
     fn deregister(&self, _source: &dyn Source, token: Token) -> io::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.sockets.remove(&token);
+        self.inner.lock().unwrap().sockets.remove(&token);
         Ok(())
     }
 

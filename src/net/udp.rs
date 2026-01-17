@@ -1,14 +1,15 @@
 //! UDP networking primitives.
 //!
 //! Phase 0 wraps `std::net::UdpSocket` with async-looking methods that
-//! execute synchronously. This preserves the API surface until the I/O
-//! reactor is available.
+//! execute synchronous calls.
 //!
 //! # Cancel Safety
 //!
 //! - `send_to`/`send`: atomic datagrams, cancel-safe.
 //! - `recv_from`/`recv`: cancel discards the datagram (UDP is unreliable).
 //! - `connect`: cancel-safe (stateless).
+
+#![allow(clippy::unused_async)]
 
 use crate::stream::Stream;
 use std::io;
@@ -22,44 +23,83 @@ use std::task::{Context, Poll};
 /// A UDP socket.
 #[derive(Debug, Clone)]
 pub struct UdpSocket {
-    inner: Arc<StdUdpSocket>,
+    pub(crate) inner: Arc<StdUdpSocket>,
 }
 
 impl UdpSocket {
     /// Bind to the given address.
-    pub async fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
+    pub async fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
         let socket = StdUdpSocket::bind(addr)?;
+        socket.set_nonblocking(true)?;
         Ok(Self::from(socket))
     }
 
     /// Connect to a remote address (for send/recv).
-    pub async fn connect(&self, addr: impl ToSocketAddrs) -> io::Result<()> {
+    pub async fn connect<A: ToSocketAddrs>(&self, addr: A) -> io::Result<()> {
         self.inner.connect(addr)
     }
 
     /// Send a datagram to the specified target.
-    pub async fn send_to(&self, buf: &[u8], target: impl ToSocketAddrs) -> io::Result<usize> {
-        self.inner.send_to(buf, target)
+    pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], target: A) -> io::Result<usize> {
+        // TODO: Async send
+        match self.inner.send_to(buf, target) {
+            Ok(n) => Ok(n),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                std::future::pending().await
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Receive a datagram and its source address.
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.inner.recv_from(buf)
+        // TODO: Async recv
+        loop {
+            match self.inner.recv_from(buf) {
+                Ok(res) => return Ok(res),
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::future::pending::<()>().await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Send a datagram to the connected peer.
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.send(buf)
+        match self.inner.send(buf) {
+            Ok(n) => Ok(n),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                std::future::pending().await
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Receive a datagram from the connected peer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.recv(buf)
+        loop {
+            match self.inner.recv(buf) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::future::pending::<()>().await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Peek at the next datagram without consuming it.
     pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.inner.peek_from(buf)
+        loop {
+            match self.inner.peek_from(buf) {
+                Ok(res) => return Ok(res),
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::future::pending::<()>().await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Returns the local address of this socket.
@@ -172,6 +212,7 @@ impl Stream for RecvStream<'_> {
                 buf.truncate(n);
                 Poll::Ready(Some(Ok((buf, addr))))
             }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
             Err(err) => Poll::Ready(Some(Err(err))),
         }
     }
@@ -191,7 +232,7 @@ impl<'a> SendSink<'a> {
     }
 
     /// Send a datagram to the specified target.
-    pub async fn send_to(&self, buf: &[u8], target: impl ToSocketAddrs) -> io::Result<usize> {
+    pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], target: A) -> io::Result<usize> {
         self.socket.send_to(buf, target).await
     }
 

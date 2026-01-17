@@ -51,23 +51,8 @@
 //! - Framework can add domain-specific context
 //! - All capabilities flow through the wrapped Cx
 
-use crate::types::{Budget, RegionId, TaskId};
+use crate::types::{Budget, CxInner, RegionId, TaskId};
 use std::sync::Arc;
-
-/// Internal state for a capability context.
-#[derive(Debug)]
-pub(crate) struct CxInner {
-    /// The region this context belongs to.
-    pub region: RegionId,
-    /// The task this context belongs to.
-    pub task: TaskId,
-    /// Current budget.
-    pub budget: Budget,
-    /// Whether cancellation has been requested.
-    pub cancel_requested: bool,
-    /// Current mask depth.
-    pub mask_depth: u32,
-}
 
 /// The capability context for a task.
 ///
@@ -132,15 +117,14 @@ impl Cx {
     #[must_use]
     #[allow(dead_code)]
     pub(crate) fn new(region: RegionId, task: TaskId, budget: Budget) -> Self {
-        Self {
-            inner: Arc::new(std::sync::RwLock::new(CxInner {
-                region,
-                task,
-                budget,
-                cancel_requested: false,
-                mask_depth: 0,
-            })),
-        }
+        Self::from_inner(Arc::new(std::sync::RwLock::new(CxInner::new(
+            region, task, budget,
+        ))))
+    }
+
+    /// Creates a new capability context from shared state (internal use).
+    pub(crate) fn from_inner(inner: Arc<std::sync::RwLock<CxInner>>) -> Self {
+        Self { inner }
     }
 
     /// Creates a capability context for testing purposes.
@@ -165,15 +149,11 @@ impl Cx {
     /// Cx instances from the runtime, not construct them directly.
     #[must_use]
     pub fn for_testing() -> Self {
-        Self {
-            inner: Arc::new(std::sync::RwLock::new(CxInner {
-                region: RegionId::new_for_test(0, 0),
-                task: TaskId::new_for_test(0, 0),
-                budget: Budget::INFINITE,
-                cancel_requested: false,
-                mask_depth: 0,
-            })),
-        }
+        Self::new(
+            RegionId::new_for_test(0, 0),
+            TaskId::new_for_test(0, 0),
+            Budget::INFINITE,
+        )
     }
 
     /// Returns the current region ID.

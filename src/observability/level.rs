@@ -6,13 +6,14 @@ use std::str::FromStr;
 /// Severity level for log entries.
 ///
 /// Levels are ordered: Trace < Debug < Info < Warn < Error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LogLevel {
     /// Detailed tracing information (lowest priority).
     Trace,
     /// Debugging information.
     Debug,
     /// General informational messages (default).
+    #[default]
     Info,
     /// Warning conditions that are not errors.
     Warn,
@@ -69,12 +70,6 @@ impl LogLevel {
             Self::Warn => "warn",
             Self::Error => "error",
         }
-    }
-}
-
-impl Default for LogLevel {
-    fn default() -> Self {
-        Self::Info
     }
 }
 

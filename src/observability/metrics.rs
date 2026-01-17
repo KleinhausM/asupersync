@@ -209,21 +209,23 @@ impl Metrics {
     }
 
     /// Exports metrics in a simple text format (Prometheus-like).
+    #[must_use]
     pub fn export_prometheus(&self) -> String {
+        use std::fmt::Write;
         let mut output = String::new();
 
         for (name, counter) in &self.counters {
-            output.push_str(&format!("# TYPE {name} counter\n"));
-            output.push_str(&format!("{name} {}\n", counter.get()));
+            let _ = writeln!(output, "# TYPE {name} counter");
+            let _ = writeln!(output, "{name} {}", counter.get());
         }
 
         for (name, gauge) in &self.gauges {
-            output.push_str(&format!("# TYPE {name} gauge\n"));
-            output.push_str(&format!("{name} {}\n", gauge.get()));
+            let _ = writeln!(output, "# TYPE {name} gauge");
+            let _ = writeln!(output, "{name} {}", gauge.get());
         }
 
         for (name, hist) in &self.histograms {
-            output.push_str(&format!("# TYPE {name} histogram\n"));
+            let _ = writeln!(output, "# TYPE {name} histogram");
             let mut cumulative = 0;
             for (i, count) in hist.counts.iter().enumerate() {
                 let val = count.load(Ordering::Relaxed);
@@ -233,12 +235,10 @@ impl Metrics {
                 } else {
                     "+Inf".to_string()
                 };
-                output.push_str(&format!(
-                    "{name}_bucket{{le=\"{le}\"}} {cumulative}\n"
-                ));
+                let _ = writeln!(output, "{name}_bucket{{le=\"{le}\"}} {cumulative}");
             }
-            output.push_str(&format!("{name}_sum {}\n", hist.sum()));
-            output.push_str(&format!("{name}_count {}\n", hist.count()));
+            let _ = writeln!(output, "{name}_sum {}", hist.sum());
+            let _ = writeln!(output, "{name}_count {}", hist.count());
         }
 
         output
@@ -281,6 +281,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_histogram_observe() {
         let hist = Histogram::new("test", vec![1.0, 2.0, 5.0]);
         hist.observe(0.5); // bucket 0

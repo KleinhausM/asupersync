@@ -247,6 +247,7 @@ pub struct MergedStream<S> {
 }
 
 impl<S> MergedStream<S> {
+    /// Creates a merged stream from the provided streams.
     pub fn new(streams: Vec<S>) -> Self {
         Self { streams, current: 0 }
     }
@@ -364,6 +365,7 @@ pub struct VecStream {
 }
 
 impl VecStream {
+    /// Creates a stream from a vector of symbols.
     pub fn new(symbols: Vec<AuthenticatedSymbol>) -> Self {
         Self {
             symbols: symbols.into_iter(),
@@ -391,6 +393,7 @@ impl SymbolStream for VecStream {
 // But that returns a Future. `poll_next` is synchronous-ish (returns Poll).
 // To implement timeout in `poll_next`, we need to poll a Sleep future stored in the struct.
 
+/// Stream wrapper that yields timeout errors after a fixed duration.
 pub struct TimeoutStream<S> {
     inner: S,
     duration: Duration,
@@ -399,10 +402,12 @@ pub struct TimeoutStream<S> {
 }
 
 impl<S> TimeoutStream<S> {
+    /// Creates a timeout stream using wall-clock time.
     pub fn new(inner: S, duration: Duration) -> Self {
         Self::with_time_getter(inner, duration, wall_clock_now)
     }
 
+    /// Creates a timeout stream using a custom time source.
     pub fn with_time_getter(inner: S, duration: Duration, time_getter: fn() -> Time) -> Self {
         let now = time_getter();
         let deadline = now.saturating_add_nanos(duration.as_nanos() as u64);

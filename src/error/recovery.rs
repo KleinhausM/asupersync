@@ -36,6 +36,7 @@ pub struct ExponentialBackoff {
 
 impl ExponentialBackoff {
     /// Creates a new exponential backoff strategy.
+    #[must_use]
     pub fn new(initial: Duration, max: Duration, multiplier: f64, max_attempts: u32) -> Self {
         Self {
             initial,
@@ -47,6 +48,7 @@ impl ExponentialBackoff {
     }
 
     /// Sets the jitter factor.
+    #[must_use]
     pub fn with_jitter(mut self, jitter: f64) -> Self {
         self.jitter = jitter;
         self
@@ -61,6 +63,7 @@ impl RecoveryStrategy for ExponentialBackoff {
         error.recoverability() == Recoverability::Transient
     }
 
+    #[allow(clippy::cast_possible_wrap, clippy::cast_precision_loss, clippy::cast_sign_loss)]
     fn backoff_duration(&self, attempt: u32) -> Duration {
         let factor = self.multiplier.powi(attempt as i32);
         let mut base_ms = (self.initial.as_millis() as f64 * factor) as u64;
@@ -80,7 +83,7 @@ impl RecoveryStrategy for ExponentialBackoff {
             base_ms
         } else {
             // Simple deterministic variation
-            let variation = (attempt as u64).wrapping_mul(31) % (jitter_amount * 2);
+            let variation = u64::from(attempt).wrapping_mul(31) % (jitter_amount * 2);
             base_ms.saturating_sub(jitter_amount).saturating_add(variation)
         };
 
@@ -118,6 +121,7 @@ pub struct CircuitBreaker {
 
 impl CircuitBreaker {
     /// Creates a new circuit breaker.
+    #[must_use]
     pub fn new(failure_threshold: u32, recovery_timeout: Duration) -> Self {
         Self {
             failure_threshold,
@@ -133,7 +137,7 @@ impl CircuitBreaker {
     /// Checks if a request should be attempted.
     pub fn should_try(&self, now: Time) -> bool {
         match self.state() {
-            CircuitState::Closed => true,
+            CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
                 let last = Time::from_nanos(self.last_failure_time.load(Ordering::Relaxed));
                 let timeout_nanos = self.recovery_timeout.as_nanos() as u64;
@@ -148,12 +152,6 @@ impl CircuitBreaker {
                 } else {
                     false
                 }
-            }
-            CircuitState::HalfOpen => {
-                // Allow one request at a time (simplification)
-                // Or allow all until failure?
-                // Standard: allow limited requests. Here: allow.
-                true
             }
         }
     }
@@ -193,9 +191,8 @@ impl CircuitBreaker {
     fn state(&self) -> CircuitState {
         match self.state.load(Ordering::Relaxed) {
             0 => CircuitState::Closed,
-            1 => CircuitState::Open,
             2 => CircuitState::HalfOpen,
-            _ => CircuitState::Open, // Fallback
+            _ => CircuitState::Open,
         }
     }
 

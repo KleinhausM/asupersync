@@ -68,6 +68,7 @@ impl TcpStream {
     }
 
     /// Split into borrowed halves.
+    #[must_use]
     pub fn split(&self) -> (ReadHalf<'_>, WriteHalf<'_>) {
         (
             ReadHalf::new(&self.inner),
@@ -76,6 +77,7 @@ impl TcpStream {
     }
 
     /// Split into owned halves.
+    #[must_use]
     pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
         (
             OwnedReadHalf::new(self.inner.clone()),

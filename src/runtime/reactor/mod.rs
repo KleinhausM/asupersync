@@ -15,6 +15,7 @@ pub struct Token(pub usize);
 
 impl Token {
     /// Creates a new token.
+    #[must_use]
     pub const fn new(val: usize) -> Self {
         Self(val)
     }
@@ -22,6 +23,7 @@ impl Token {
 
 /// I/O event from the reactor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Event {
     /// Token identifying the registered source.
     pub token: Token,
@@ -37,6 +39,7 @@ pub struct Event {
 
 impl Event {
     /// Creates a readable event.
+    #[must_use]
     pub const fn readable(token: Token) -> Self {
         Self {
             token,
@@ -48,6 +51,7 @@ impl Event {
     }
 
     /// Creates a writable event.
+    #[must_use]
     pub const fn writable(token: Token) -> Self {
         Self {
             token,
@@ -59,6 +63,7 @@ impl Event {
     }
 
     /// Creates an error event.
+    #[must_use]
     pub const fn errored(token: Token) -> Self {
         Self {
             token,
@@ -78,6 +83,7 @@ pub struct Events {
 
 impl Events {
     /// Creates a new events buffer with capacity.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: Vec::with_capacity(capacity),
@@ -100,8 +106,18 @@ impl Events {
     }
     
     /// Returns true if empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+}
+
+impl<'a> IntoIterator for &'a Events {
+    type Item = &'a Event;
+    type IntoIter = std::slice::Iter<'a, Event>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 

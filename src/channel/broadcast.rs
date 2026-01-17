@@ -114,6 +114,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Channel<T> {
 /// # Panics
 ///
 /// Panics if `capacity` is 0.
+#[must_use]
 pub fn channel<T: Clone>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     assert!(capacity > 0, "capacity must be non-zero");
 
@@ -160,10 +161,11 @@ impl<T: Clone> Sender<T> {
             cx.trace("broadcast::reserve called with cancel pending");
         }
 
-        let inner = self.channel.inner.lock().expect("broadcast lock poisoned");
-
-        if inner.receiver_count == 0 {
-            return Err(SendError::Closed(()));
+        {
+            let inner = self.channel.inner.lock().expect("broadcast lock poisoned");
+            if inner.receiver_count == 0 {
+                return Err(SendError::Closed(()));
+            }
         }
 
         // We don't really "reserve" space in the ring buffer in the same way
@@ -191,9 +193,13 @@ impl<T: Clone> Sender<T> {
     }
 
     /// Creates a new receiver subscribed to this channel.
+    #[must_use]
     pub fn subscribe(&self) -> Receiver<T> {
-        let mut inner = self.channel.inner.lock().expect("broadcast lock poisoned");
-        inner.receiver_count += 1;
+        let total_sent = {
+            let mut inner = self.channel.inner.lock().expect("broadcast lock poisoned");
+            inner.receiver_count += 1;
+            inner.total_sent
+        };
         
         // New receiver starts at the *current* tail of the buffer?
         // Typically broadcast receivers start seeing *future* messages.
@@ -202,15 +208,14 @@ impl<T: Clone> Sender<T> {
         
         Receiver {
             channel: Arc::clone(&self.channel),
-            next_index: inner.total_sent,
+            next_index: total_sent,
         }
     }
 }
 
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
-        let mut inner = self.channel.inner.lock().expect("broadcast lock poisoned");
-        inner.sender_count += 1;
+        self.channel.inner.lock().expect("broadcast lock poisoned").sender_count += 1;
         Self {
             channel: Arc::clone(&self.channel),
         }
@@ -278,7 +283,7 @@ impl<T: Clone> Receiver<T> {
         loop {
             // 1. Check for lag
             // The earliest available index is:
-            let earliest = inner.buffer.front().map(|s| s.index).unwrap_or(inner.total_sent);
+            let earliest = inner.buffer.front().map_or(inner.total_sent, |s| s.index);
             
             if self.next_index < earliest {
                 let missed = earliest - self.next_index;
@@ -289,7 +294,7 @@ impl<T: Clone> Receiver<T> {
             // 2. Try to get message
             // We want the message with index == self.next_index
             // Since buffer is ordered, we can calculate offset
-            let offset = self.next_index.checked_sub(earliest).unwrap_or(0) as usize;
+            let offset = self.next_index.saturating_sub(earliest) as usize;
             
             if let Some(slot) = inner.buffer.get(offset) {
                 // Found it
@@ -319,8 +324,7 @@ impl<T: Clone> Receiver<T> {
 
 impl<T> Clone for Receiver<T> {
     fn clone(&self) -> Self {
-        let mut inner = self.channel.inner.lock().expect("broadcast lock poisoned");
-        inner.receiver_count += 1;
+        self.channel.inner.lock().expect("broadcast lock poisoned").receiver_count += 1;
         Self {
             channel: Arc::clone(&self.channel),
             next_index: self.next_index,

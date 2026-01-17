@@ -9,21 +9,30 @@ use crate::util::DetRng;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+/// Identifier for a scheduler worker.
 pub type WorkerId = usize;
 
 /// A worker thread that executes tasks.
 #[derive(Debug)]
 pub struct Worker {
+    /// Unique worker ID.
     pub id: WorkerId,
+    /// Local task queue for this worker.
     pub local: LocalQueue,
+    /// Stealers for other workers' queues.
     pub stealers: Vec<Stealer>,
+    /// Global queue shared across workers.
     pub global: Arc<GlobalQueue>,
+    /// Shared runtime state.
     pub state: Arc<Mutex<RuntimeState>>, // RuntimeState is usually guarded
+    /// Parking handle for idle workers.
     pub parker: Parker,
+    /// Deterministic RNG for stealing decisions.
     pub rng: DetRng,
 }
 
 impl Worker {
+    /// Creates a new worker with the provided queues and state.
     pub fn new(
         id: WorkerId,
         stealers: Vec<Stealer>,
@@ -41,6 +50,7 @@ impl Worker {
         }
     }
 
+    /// Runs the worker scheduling loop.
     pub fn run_loop(&mut self) {
         loop {
             // 1. Try local queue (LIFO)
@@ -67,7 +77,7 @@ impl Worker {
         }
     }
 
-    fn execute(&mut self, _task: TaskId) {
+    fn execute(&self, _task: TaskId) {
         // Placeholder for execution logic.
         // In real implementation, this would:
         // 1. Get stored future from RuntimeState
@@ -84,12 +94,14 @@ pub struct Parker {
 }
 
 impl Parker {
+    /// Creates a new parker.
     pub fn new() -> Self {
         Self {
             inner: Arc::new((Mutex::new(false), Condvar::new())),
         }
     }
 
+    /// Parks the current thread until notified.
     pub fn park(&self) {
         let (lock, cvar) = &*self.inner;
         let mut notified = lock.lock().unwrap();
@@ -99,6 +111,7 @@ impl Parker {
         *notified = false;
     }
 
+    /// Parks the current thread with a timeout.
     pub fn park_timeout(&self, duration: Duration) {
         let (lock, cvar) = &*self.inner;
         let notified = lock.lock().unwrap();
@@ -107,6 +120,7 @@ impl Parker {
         }
     }
 
+    /// Unparks a parked thread.
     pub fn unpark(&self) {
         let (lock, cvar) = &*self.inner;
         let mut notified = lock.lock().unwrap();
