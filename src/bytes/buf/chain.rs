@@ -154,7 +154,7 @@ mod tests {
 
         // Advance and check
         chain.advance(4);
-        assert_eq!(*chain.first_ref(), &[][..]);
+        assert_eq!(*chain.first_ref(), b"");
         assert_eq!(*chain.last_ref(), &[5, 6][..]);
     }
 

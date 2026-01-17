@@ -149,7 +149,7 @@ impl RuntimeState {
             // so we create a minimal test cx. In full implementation, this would
             // be the task's actual Cx.
             let cx = crate::cx::Cx::for_testing();
-            let _ = result_tx.send(&cx, Ok(result));
+            let _ = result_tx.send(&cx, Ok::<_, JoinError>(result));
         };
 
         // Store the wrapped future

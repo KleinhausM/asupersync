@@ -167,7 +167,7 @@ mod tests {
         assert!(!handle.is_finished());
 
         // Send the result
-        tx.send(&cx, Ok(42)).expect("send failed");
+        tx.send(&cx, Ok::<i32, JoinError>(42)).expect("send failed");
 
         // Join should succeed
         let result = handle.join(&cx);
@@ -183,7 +183,7 @@ mod tests {
         let handle = TaskHandle::new(task_id, rx);
 
         // Send a cancelled result
-        tx.send(&cx, Err(JoinError::Cancelled))
+        tx.send(&cx, Err::<i32, JoinError>(JoinError::Cancelled))
             .expect("send failed");
 
         let result = handle.join(&cx);
@@ -198,7 +198,8 @@ mod tests {
 
         let handle = TaskHandle::new(task_id, rx);
 
-        tx.send(&cx, Err(JoinError::Panicked)).expect("send failed");
+        tx.send(&cx, Err::<i32, JoinError>(JoinError::Panicked))
+            .expect("send failed");
 
         let result = handle.join(&cx);
         assert_eq!(result, Err(JoinError::Panicked));

@@ -19,7 +19,7 @@
 //! - `drop(permit)`: Equivalent to abort (RAII cleanup)
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 
 use crate::cx::Cx;
 use crate::error::{RecvError, SendError};
@@ -37,10 +37,24 @@ struct ChannelInner<T> {
     receiver_dropped: bool,
     /// Number of active senders.
     sender_count: usize,
-    /// Waiters to wake when space becomes available.
-    send_waiters: Vec<std::sync::atomic::AtomicBool>,
-    /// Waiters to wake when messages become available.
-    recv_waiters: Vec<std::sync::atomic::AtomicBool>,
+}
+
+/// Shared state wrapper with condition variables for notification.
+struct ChannelShared<T> {
+    /// Protected channel state.
+    inner: Mutex<ChannelInner<T>>,
+    /// Notifies senders when space becomes available.
+    space_available: Condvar,
+    /// Notifies receivers when messages become available.
+    message_available: Condvar,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for ChannelShared<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelShared")
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> ChannelInner<T> {
@@ -51,8 +65,6 @@ impl<T> ChannelInner<T> {
             reserved: 0,
             receiver_dropped: false,
             sender_count: 1,
-            send_waiters: Vec::new(),
-            recv_waiters: Vec::new(),
         }
     }
 
@@ -87,11 +99,15 @@ impl<T> ChannelInner<T> {
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     assert!(capacity > 0, "channel capacity must be non-zero");
 
-    let inner = Arc::new(Mutex::new(ChannelInner::new(capacity)));
+    let shared = Arc::new(ChannelShared {
+        inner: Mutex::new(ChannelInner::new(capacity)),
+        space_available: Condvar::new(),
+        message_available: Condvar::new(),
+    });
     let sender = Sender {
-        inner: Arc::clone(&inner),
+        shared: Arc::clone(&shared),
     };
-    let receiver = Receiver { inner };
+    let receiver = Receiver { shared };
 
     (sender, receiver)
 }
@@ -102,7 +118,7 @@ pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
 /// All `Sender`s share the same underlying channel.
 #[derive(Debug)]
 pub struct Sender<T> {
-    inner: Arc<Mutex<ChannelInner<T>>>,
+    shared: Arc<ChannelShared<T>>,
 }
 
 impl<T> Sender<T> {
@@ -132,28 +148,17 @@ impl<T> Sender<T> {
             cx.trace("mpsc::reserve called with cancel pending");
         }
 
+        let mut inner = self.shared.inner.lock().expect("channel lock poisoned");
+
         loop {
-            // Try to reserve within a tight scope
-            let reservation_result = {
-                let mut inner = self.inner.lock().expect("channel lock poisoned");
+            // Check if receiver is gone
+            if inner.receiver_dropped {
+                return Err(SendError::Disconnected(()));
+            }
 
-                // Check if receiver is gone
-                if inner.receiver_dropped {
-                    return Err(SendError::Disconnected(()));
-                }
-
-                // Try to reserve a slot
-                if inner.has_capacity() {
-                    inner.reserved += 1;
-                    drop(inner);
-                    Some(())
-                } else {
-                    None
-                }
-            }; // Lock released here
-
-            // If we got a reservation, return the permit
-            if reservation_result.is_some() {
+            // Try to reserve a slot
+            if inner.has_capacity() {
+                inner.reserved += 1;
                 // In full implementation, we would register an obligation here:
                 // let obligation_id = state.obligations.insert(
                 //     ObligationRecord::new(id, ObligationKind::SendPermit, cx.task_id(), cx.region_id())
@@ -173,9 +178,14 @@ impl<T> Sender<T> {
                 return Err(SendError::Disconnected(()));
             }
 
-            // Phase 0: Simple spin-wait with yield
-            // Future: integrate with scheduler via proper waker
-            std::thread::yield_now();
+            // Wait for space to become available using condvar
+            // Use wait_timeout to allow periodic cancellation checks
+            let (guard, _timeout_result) = self
+                .shared
+                .space_available
+                .wait_timeout(inner, std::time::Duration::from_millis(10))
+                .expect("channel lock poisoned");
+            inner = guard;
         }
     }
 
@@ -205,22 +215,15 @@ impl<T> Sender<T> {
     /// - `SendError::Disconnected(())` if the receiver has been dropped
     /// - `SendError::Full(())` if the channel is at capacity
     pub fn try_reserve(&self) -> Result<SendPermit<'_, T>, SendError<()>> {
-        let reservation_result = {
-            let mut inner = self.inner.lock().expect("channel lock poisoned");
+        let mut inner = self.shared.inner.lock().expect("channel lock poisoned");
 
-            if inner.receiver_dropped {
-                return Err(SendError::Disconnected(()));
-            }
+        if inner.receiver_dropped {
+            return Err(SendError::Disconnected(()));
+        }
 
-            if inner.has_capacity() {
-                inner.reserved += 1;
-                true
-            } else {
-                false
-            }
-        }; // Lock released here
-
-        if reservation_result {
+        if inner.has_capacity() {
+            inner.reserved += 1;
+            drop(inner); // Release lock before returning
             Ok(SendPermit {
                 sender: self,
                 sent: false,
@@ -250,7 +253,8 @@ impl<T> Sender<T> {
     /// Returns true if the receiver has been dropped.
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        self.inner
+        self.shared
+            .inner
             .lock()
             .expect("channel lock poisoned")
             .receiver_dropped
@@ -259,7 +263,11 @@ impl<T> Sender<T> {
     /// Returns the channel's capacity.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.inner.lock().expect("channel lock poisoned").capacity
+        self.shared
+            .inner
+            .lock()
+            .expect("channel lock poisoned")
+            .capacity
     }
 
     /// Returns a weak reference to this sender.
@@ -269,7 +277,7 @@ impl<T> Sender<T> {
     #[must_use]
     pub fn downgrade(&self) -> WeakSender<T> {
         WeakSender {
-            inner: Arc::downgrade(&self.inner),
+            shared: Arc::downgrade(&self.shared),
         }
     }
 }
@@ -277,24 +285,25 @@ impl<T> Sender<T> {
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
         {
-            let mut inner = self.inner.lock().expect("channel lock poisoned");
+            let mut inner = self.shared.inner.lock().expect("channel lock poisoned");
             inner.sender_count += 1;
         }
         Self {
-            inner: Arc::clone(&self.inner),
+            shared: Arc::clone(&self.shared),
         }
     }
 }
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        let mut inner = self.inner.lock().expect("channel lock poisoned");
+        let mut inner = self.shared.inner.lock().expect("channel lock poisoned");
         inner.sender_count -= 1;
+        let all_senders_gone = inner.sender_count == 0;
+        drop(inner); // Release lock before notifying
 
         // If all senders are gone, wake any waiting receivers
-        if inner.sender_count == 0 {
-            // In full implementation, we'd wake recv waiters here
-            // For now, they'll see is_closed() on next poll
+        if all_senders_gone {
+            self.shared.message_available.notify_all();
         }
     }
 }
@@ -303,9 +312,14 @@ impl<T> Drop for Sender<T> {
 ///
 /// Does not prevent the channel from being closed, but can be upgraded
 /// to a `Sender` if the channel is still alive.
-#[derive(Debug)]
 pub struct WeakSender<T> {
-    inner: Weak<Mutex<ChannelInner<T>>>,
+    shared: Weak<ChannelShared<T>>,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for WeakSender<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WeakSender").finish_non_exhaustive()
+    }
 }
 
 impl<T> WeakSender<T> {
@@ -314,12 +328,12 @@ impl<T> WeakSender<T> {
     /// Returns `None` if all senders and the receiver have been dropped.
     #[must_use]
     pub fn upgrade(&self) -> Option<Sender<T>> {
-        self.inner.upgrade().map(|inner| {
+        self.shared.upgrade().map(|shared| {
             {
-                let mut guard = inner.lock().expect("channel lock poisoned");
+                let mut guard = shared.inner.lock().expect("channel lock poisoned");
                 guard.sender_count += 1;
             }
-            Sender { inner }
+            Sender { shared }
         })
     }
 }
@@ -327,7 +341,7 @@ impl<T> WeakSender<T> {
 impl<T> Clone for WeakSender<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            shared: self.shared.clone(),
         }
     }
 }
@@ -367,17 +381,23 @@ impl<T> SendPermit<'_, T> {
     pub fn send(mut self, value: T) {
         self.sent = true;
 
-        let mut inner = self.sender.inner.lock().expect("channel lock poisoned");
+        {
+            let mut inner = self
+                .sender
+                .shared
+                .inner
+                .lock()
+                .expect("channel lock poisoned");
 
-        // Release the reservation
-        inner.reserved -= 1;
+            // Release the reservation
+            inner.reserved -= 1;
 
-        // Add to queue
-        inner.queue.push_back(value);
+            // Add to queue
+            inner.queue.push_back(value);
+        }
 
-        // In full implementation, we would:
-        // 1. Resolve the obligation as Committed
-        // 2. Wake any waiting receivers
+        // Notify any waiting receivers that a message is available
+        self.sender.shared.message_available.notify_one();
     }
 
     /// Aborts the send, releasing the reserved slot.
@@ -387,12 +407,18 @@ impl<T> SendPermit<'_, T> {
     pub fn abort(mut self) {
         self.sent = true; // Prevent double-release in Drop
 
-        let mut inner = self.sender.inner.lock().expect("channel lock poisoned");
-        inner.reserved -= 1;
+        {
+            let mut inner = self
+                .sender
+                .shared
+                .inner
+                .lock()
+                .expect("channel lock poisoned");
+            inner.reserved -= 1;
+        }
 
-        // In full implementation, we would:
-        // 1. Resolve the obligation as Aborted
-        // 2. Wake any waiting senders (capacity freed)
+        // Notify any waiting senders that capacity is freed
+        self.sender.shared.space_available.notify_one();
     }
 }
 
@@ -400,12 +426,18 @@ impl<T> Drop for SendPermit<'_, T> {
     fn drop(&mut self) {
         if !self.sent {
             // Permit dropped without send() - abort the reservation
-            let mut inner = self.sender.inner.lock().expect("channel lock poisoned");
-            inner.reserved -= 1;
+            {
+                let mut inner = self
+                    .sender
+                    .shared
+                    .inner
+                    .lock()
+                    .expect("channel lock poisoned");
+                inner.reserved -= 1;
+            }
 
-            // In full implementation, we would:
-            // 1. Resolve the obligation as Aborted
-            // 2. Wake any waiting senders
+            // Notify any waiting senders that capacity is freed
+            self.sender.shared.space_available.notify_one();
         }
     }
 }
@@ -414,9 +446,16 @@ impl<T> Drop for SendPermit<'_, T> {
 ///
 /// Only one `Receiver` exists per channel (single-consumer).
 /// When the `Receiver` is dropped, the channel is closed.
-#[derive(Debug)]
 pub struct Receiver<T> {
-    inner: Arc<Mutex<ChannelInner<T>>>,
+    shared: Arc<ChannelShared<T>>,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Receiver<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Receiver")
+            .field("shared", &self.shared)
+            .finish()
+    }
 }
 
 impl<T> Receiver<T> {
@@ -433,25 +472,22 @@ impl<T> Receiver<T> {
     /// # Blocking
     ///
     /// If the channel is empty, this will wait until a message is available.
-    /// (In Phase 0, this uses spin-waiting. Future phases will integrate with
-    /// the scheduler for proper async waiting.)
+    /// Uses condvar-based waiting for efficient notification.
     pub fn recv(&self, cx: &Cx) -> Result<T, RecvError> {
+        let mut inner = self.shared.inner.lock().expect("channel lock poisoned");
+
         loop {
-            {
-                let mut inner = self.inner.lock().expect("channel lock poisoned");
+            // Try to receive a message
+            if let Some(value) = inner.queue.pop_front() {
+                drop(inner); // Release lock before notifying
+                             // Notify any waiting senders that space is available
+                self.shared.space_available.notify_one();
+                return Ok(value);
+            }
 
-                // Try to receive a message
-                if let Some(value) = inner.queue.pop_front() {
-                    // In full implementation, we'd wake any waiting senders
-                    return Ok(value);
-                }
-
-                // Queue is empty - check if channel is closed
-                if inner.is_closed() {
-                    return Err(RecvError::Disconnected);
-                }
-
-                // Need to wait for messages
+            // Queue is empty - check if channel is closed
+            if inner.is_closed() {
+                return Err(RecvError::Disconnected);
             }
 
             // Check cancellation before waiting
@@ -460,9 +496,14 @@ impl<T> Receiver<T> {
                 return Err(RecvError::Disconnected);
             }
 
-            // Phase 0: Simple spin-wait with yield
-            // Future: integrate with scheduler via proper waker
-            std::thread::yield_now();
+            // Wait for a message to become available using condvar
+            // Use wait_timeout to allow periodic cancellation checks
+            let (guard, _timeout_result) = self
+                .shared
+                .message_available
+                .wait_timeout(inner, std::time::Duration::from_millis(10))
+                .expect("channel lock poisoned");
+            inner = guard;
         }
     }
 
@@ -473,24 +514,30 @@ impl<T> Receiver<T> {
     /// - `RecvError::Empty` if the channel is empty but senders exist
     /// - `RecvError::Disconnected` if all senders dropped and queue is empty
     pub fn try_recv(&self) -> Result<T, RecvError> {
-        let mut inner = self.inner.lock().expect("channel lock poisoned");
+        let mut inner = self.shared.inner.lock().expect("channel lock poisoned");
 
-        inner.queue.pop_front().map_or_else(
-            || {
+        match inner.queue.pop_front() {
+            Some(value) => {
+                drop(inner); // Release lock before notifying
+                             // Notify any waiting senders that space is available
+                self.shared.space_available.notify_one();
+                Ok(value)
+            }
+            None => {
                 if inner.is_closed() {
                     Err(RecvError::Disconnected)
                 } else {
                     Err(RecvError::Empty)
                 }
-            },
-            Ok,
-        )
+            }
+        }
     }
 
     /// Returns true if all senders have been dropped.
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        self.inner
+        self.shared
+            .inner
             .lock()
             .expect("channel lock poisoned")
             .is_closed()
@@ -500,6 +547,7 @@ impl<T> Receiver<T> {
     #[must_use]
     pub fn has_messages(&self) -> bool {
         !self
+            .shared
             .inner
             .lock()
             .expect("channel lock poisoned")
@@ -510,7 +558,8 @@ impl<T> Receiver<T> {
     /// Returns the number of messages waiting in the queue.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner
+        self.shared
+            .inner
             .lock()
             .expect("channel lock poisoned")
             .queue
@@ -520,7 +569,8 @@ impl<T> Receiver<T> {
     /// Returns true if the queue is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner
+        self.shared
+            .inner
             .lock()
             .expect("channel lock poisoned")
             .queue
@@ -530,17 +580,23 @@ impl<T> Receiver<T> {
     /// Returns the channel's capacity.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.inner.lock().expect("channel lock poisoned").capacity
+        self.shared
+            .inner
+            .lock()
+            .expect("channel lock poisoned")
+            .capacity
     }
 }
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
-        let mut inner = self.inner.lock().expect("channel lock poisoned");
-        inner.receiver_dropped = true;
+        {
+            let mut inner = self.shared.inner.lock().expect("channel lock poisoned");
+            inner.receiver_dropped = true;
+        }
 
-        // In full implementation, we'd wake all waiting senders
-        // so they can observe the disconnection
+        // Wake all waiting senders so they can observe the disconnection
+        self.shared.space_available.notify_all();
     }
 }
 

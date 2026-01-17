@@ -246,11 +246,11 @@ impl fmt::Display for LogEntry {
 }
 
 #[cfg(test)]
-mod tests {
+mod extra_tests {
     use super::*;
 
     #[test]
-    fn entry_accessors_and_fields() {
+    fn create_entries() {
         let entry = LogEntry::info("hello")
             .with_field("k1", "v1")
             .with_field("k2", "v2")
