@@ -396,7 +396,9 @@ impl Budget {
     pub fn remaining_time(&self, now: Time) -> Option<Time> {
         self.deadline.and_then(|d| {
             if now < d {
-                Some(Time::from_nanos(d.as_nanos().saturating_sub(now.as_nanos())))
+                Some(Time::from_nanos(
+                    d.as_nanos().saturating_sub(now.as_nanos()),
+                ))
             } else {
                 None
             }
@@ -828,5 +830,146 @@ mod tests {
         c.poll_quota = 50;
         assert_eq!(a.poll_quota, 100);
         assert_eq!(c.poll_quota, 50);
+    }
+
+    // =========================================================================
+    // New Convenience Method Tests
+    // =========================================================================
+
+    #[test]
+    fn unlimited_returns_infinite() {
+        assert_eq!(Budget::unlimited(), Budget::INFINITE);
+    }
+
+    #[test]
+    fn with_deadline_secs_constructor() {
+        let budget = Budget::with_deadline_secs(30);
+        assert_eq!(budget.deadline, Some(Time::from_secs(30)));
+        assert_eq!(budget.poll_quota, u32::MAX);
+        assert_eq!(budget.cost_quota, None);
+        assert_eq!(budget.priority, 128);
+    }
+
+    #[test]
+    fn with_deadline_ns_constructor() {
+        let budget = Budget::with_deadline_ns(30_000_000_000);
+        assert_eq!(budget.deadline, Some(Time::from_nanos(30_000_000_000)));
+    }
+
+    #[test]
+    fn meet_is_alias_for_combine() {
+        let a = Budget::new()
+            .with_deadline(Time::from_secs(10))
+            .with_poll_quota(100);
+
+        let b = Budget::new()
+            .with_deadline(Time::from_secs(5))
+            .with_poll_quota(200);
+
+        assert_eq!(a.meet(b), a.combine(b));
+    }
+
+    // =========================================================================
+    // consume_cost Tests
+    // =========================================================================
+
+    #[test]
+    fn consume_cost_basic() {
+        let mut budget = Budget::new().with_cost_quota(100);
+
+        assert!(budget.consume_cost(30));
+        assert_eq!(budget.cost_quota, Some(70));
+
+        assert!(budget.consume_cost(70));
+        assert_eq!(budget.cost_quota, Some(0));
+
+        assert!(!budget.consume_cost(1));
+        assert_eq!(budget.cost_quota, Some(0));
+    }
+
+    #[test]
+    fn consume_cost_unlimited() {
+        let mut budget = Budget::new(); // No cost quota = unlimited
+        assert!(budget.consume_cost(1_000_000));
+        assert_eq!(budget.cost_quota, None);
+    }
+
+    #[test]
+    fn consume_cost_exact_amount() {
+        let mut budget = Budget::new().with_cost_quota(50);
+        assert!(budget.consume_cost(50));
+        assert_eq!(budget.cost_quota, Some(0));
+    }
+
+    #[test]
+    fn consume_cost_transitions_to_exhausted() {
+        let mut budget = Budget::new().with_cost_quota(10).with_poll_quota(u32::MAX);
+        assert!(!budget.is_exhausted());
+
+        budget.consume_cost(10);
+        assert!(budget.is_exhausted());
+    }
+
+    // =========================================================================
+    // Inspection Method Tests
+    // =========================================================================
+
+    #[test]
+    fn remaining_time_basic() {
+        let budget = Budget::with_deadline_secs(30);
+        let now = Time::from_secs(10);
+
+        let remaining = budget.remaining_time(now);
+        assert_eq!(remaining, Some(Time::from_secs(20)));
+    }
+
+    #[test]
+    fn remaining_time_no_deadline() {
+        let budget = Budget::unlimited();
+        assert_eq!(budget.remaining_time(Time::from_secs(1000)), None);
+    }
+
+    #[test]
+    fn remaining_time_past_deadline() {
+        let budget = Budget::with_deadline_secs(10);
+        assert_eq!(budget.remaining_time(Time::from_secs(15)), None);
+    }
+
+    #[test]
+    fn remaining_time_at_deadline() {
+        let budget = Budget::with_deadline_secs(10);
+        assert_eq!(budget.remaining_time(Time::from_secs(10)), None);
+    }
+
+    #[test]
+    fn remaining_polls_basic() {
+        let budget = Budget::new().with_poll_quota(100);
+        assert_eq!(budget.remaining_polls(), 100);
+    }
+
+    #[test]
+    fn remaining_polls_unlimited() {
+        let budget = Budget::unlimited();
+        assert_eq!(budget.remaining_polls(), u32::MAX);
+    }
+
+    #[test]
+    fn remaining_cost_basic() {
+        let budget = Budget::new().with_cost_quota(1000);
+        assert_eq!(budget.remaining_cost(), Some(1000));
+    }
+
+    #[test]
+    fn remaining_cost_unlimited() {
+        let budget = Budget::unlimited();
+        assert_eq!(budget.remaining_cost(), None);
+    }
+
+    #[test]
+    fn to_timeout_is_alias_for_remaining_time() {
+        let budget = Budget::with_deadline_secs(30);
+        let now = Time::from_secs(10);
+
+        assert_eq!(budget.to_timeout(now), budget.remaining_time(now));
     }
 }
