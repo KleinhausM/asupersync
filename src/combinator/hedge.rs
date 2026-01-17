@@ -242,9 +242,7 @@ impl<T, E> HedgeResult<T, E> {
     pub fn winner_outcome(&self) -> &Outcome<T, E> {
         match self {
             Self::PrimaryFast(o) => o,
-            Self::Raced {
-                winner_outcome, ..
-            } => winner_outcome,
+            Self::Raced { winner_outcome, .. } => winner_outcome,
         }
     }
 
@@ -253,9 +251,7 @@ impl<T, E> HedgeResult<T, E> {
     pub fn into_winner_outcome(self) -> Outcome<T, E> {
         match self {
             Self::PrimaryFast(o) => o,
-            Self::Raced {
-                winner_outcome, ..
-            } => winner_outcome,
+            Self::Raced { winner_outcome, .. } => winner_outcome,
         }
     }
 
@@ -641,7 +637,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "backup_outcome required")]
     fn hedge_outcomes_panics_without_backup_outcome() {
-        let _ = hedge_outcomes::<i32, &str>(Outcome::Ok(42), true, None, Some(HedgeWinner::Primary));
+        let _ =
+            hedge_outcomes::<i32, &str>(Outcome::Ok(42), true, None, Some(HedgeWinner::Primary));
     }
 
     #[test]

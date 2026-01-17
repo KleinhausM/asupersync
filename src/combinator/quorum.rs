@@ -259,7 +259,10 @@ impl<T, E> QuorumResult<T, E> {
 /// assert_eq!(result.success_count(), 2);
 /// ```
 #[must_use]
-pub fn quorum_outcomes<T, E: Clone>(required: usize, outcomes: Vec<Outcome<T, E>>) -> QuorumResult<T, E> {
+pub fn quorum_outcomes<T, E: Clone>(
+    required: usize,
+    outcomes: Vec<Outcome<T, E>>,
+) -> QuorumResult<T, E> {
     let total = outcomes.len();
 
     // Handle invalid quorum
@@ -457,11 +460,8 @@ mod tests {
 
     #[test]
     fn quorum_not_met() {
-        let outcomes: Vec<Outcome<i32, &str>> = vec![
-            Outcome::Ok(1),
-            Outcome::Err("e1"),
-            Outcome::Err("e2"),
-        ];
+        let outcomes: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Err("e1"), Outcome::Err("e2")];
         let result = quorum_outcomes(2, outcomes);
 
         assert!(!result.quorum_met);
