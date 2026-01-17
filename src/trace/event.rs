@@ -68,6 +68,10 @@ pub enum TraceData {
     },
     /// Cancellation data.
     Cancel {
+        /// The task involved.
+        task: TaskId,
+        /// The region involved.
+        region: RegionId,
         /// The reason for cancellation.
         reason: CancelReason,
     },
@@ -169,13 +173,17 @@ impl TraceEvent {
         time: Time,
         task: TaskId,
         region: RegionId,
-        _reason: CancelReason,
+        reason: CancelReason,
     ) -> Self {
         Self::new(
             seq,
             time,
             TraceEventKind::CancelRequest,
-            TraceData::Task { task, region },
+            TraceData::Cancel {
+                task,
+                region,
+                reason,
+            },
         )
     }
 
@@ -206,7 +214,11 @@ impl fmt::Display for TraceEvent {
             TraceData::Obligation { obligation, task } => {
                 write!(f, " {obligation} held by {task}")?;
             }
-            TraceData::Cancel { reason } => write!(f, " {reason}")?,
+            TraceData::Cancel {
+                task,
+                region,
+                reason,
+            } => write!(f, " {task} in {region} reason={reason}")?,
             TraceData::Time { old, new } => write!(f, " {old} -> {new}")?,
             TraceData::Futurelock {
                 task,

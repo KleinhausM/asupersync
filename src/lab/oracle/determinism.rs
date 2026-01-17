@@ -130,8 +130,12 @@ impl TraceEventSummary {
             TraceData::Obligation { obligation, task } => {
                 format!("obligation={obligation} task={task}")
             }
-            TraceData::Cancel { reason } => {
-                format!("reason={reason}")
+            TraceData::Cancel {
+                task,
+                region,
+                reason,
+            } => {
+                format!("task={task} region={region} reason={reason}")
             }
             TraceData::Time { old, new } => {
                 format!("old={old} new={new}")

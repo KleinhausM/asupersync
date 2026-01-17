@@ -18,12 +18,12 @@ mod tests {
     impl Future for PendingOnce {
         type Output = ();
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-            if !self.polled {
+            if self.polled {
+                Poll::Ready(())
+            } else {
                 self.polled = true;
                 cx.waker().wake_by_ref();
                 Poll::Pending
-            } else {
-                Poll::Ready(())
             }
         }
     }
@@ -36,12 +36,12 @@ mod tests {
         // A future that we will cancel
         let bracket_fut = bracket(
             async { Ok::<_, ()>(()) }, // Acquire
-            |_| async {
+            |()| async {
                 // Use: suspend once to allow cancellation
                 PendingOnce { polled: false }.await;
                 Ok::<_, ()>(())
             },
-            move |_| {
+            move |()| {
                 rel.store(true, Ordering::SeqCst);
                 async {}
             },

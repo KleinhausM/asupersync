@@ -78,7 +78,8 @@ impl<Res, T, E, A, U, UF, R, RF> Unpin for Bracket<Res, T, E, A, U, UF, R, RF>
 where
     R: FnOnce(Res) -> RF,
     RF: Future<Output = ()>,
-{}
+{
+}
 
 impl<Res, T, E, A, U, UF, R, RF> Bracket<Res, T, E, A, U, UF, R, RF>
 where
@@ -143,9 +144,10 @@ where
 
                 BracketPhase::Using(use_fut) => {
                     // Catch panics during use
-                    let poll_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        use_fut.as_mut().poll(cx)
-                    }));
+                    let poll_result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            use_fut.as_mut().poll(cx)
+                        }));
 
                     match poll_result {
                         Ok(Poll::Pending) => return Poll::Pending,

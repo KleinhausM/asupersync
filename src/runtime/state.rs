@@ -90,7 +90,7 @@ impl RuntimeState {
     pub fn live_region_count(&self) -> usize {
         self.regions
             .iter()
-            .filter(|(_, r)| !r.state.is_terminal())
+            .filter(|(_, r)| !r.state().is_terminal())
             .count()
     }
 
@@ -132,7 +132,7 @@ impl RuntimeState {
             return;
         };
 
-        for &task_id in &region_record.tasks {
+        for task_id in region_record.task_ids() {
             if task_id == child {
                 continue;
             }
@@ -179,7 +179,7 @@ impl RuntimeState {
 
         // First pass: mark regions with cancellation reason
         for &rid in &regions_to_cancel {
-            if let Some(region) = self.regions.get_mut(rid.arena_index()) {
+            if let Some(region) = self.regions.get(rid.arena_index()) {
                 // Strengthen or set the cancel reason
                 // Use ParentCancelled for descendants, original reason for target
                 let region_reason = if rid == region_id {
@@ -187,15 +187,7 @@ impl RuntimeState {
                 } else {
                     CancelReason::parent_cancelled()
                 };
-
-                match &mut region.cancel_reason {
-                    Some(existing) => {
-                        existing.strengthen(&region_reason);
-                    }
-                    None => {
-                        region.cancel_reason = Some(region_reason);
-                    }
-                }
+                region.strengthen_cancel_reason(region_reason);
             }
         }
 
@@ -205,7 +197,7 @@ impl RuntimeState {
             let task_ids: Vec<TaskId> = self
                 .regions
                 .get(rid.arena_index())
-                .map(|r| r.tasks.clone())
+                .map(RegionRecord::task_ids)
                 .unwrap_or_default();
 
             for task_id in task_ids {
@@ -241,7 +233,7 @@ impl RuntimeState {
 
         while let Some(rid) = stack.pop() {
             if let Some(region) = self.regions.get(rid.arena_index()) {
-                for &child_id in &region.children {
+                for child_id in region.child_ids() {
                     result.push(child_id);
                     stack.push(child_id);
                 }
@@ -262,17 +254,17 @@ impl RuntimeState {
         };
 
         // Check all tasks are terminal
-        let all_tasks_done = region.tasks.iter().all(|&task_id| {
+        let all_tasks_done = region.task_ids().iter().all(|&task_id| {
             self.tasks
                 .get(task_id.arena_index())
                 .is_none_or(|t| t.state.is_terminal())
         });
 
         // Check all child regions are closed
-        let all_children_closed = region.children.iter().all(|&child_id| {
+        let all_children_closed = region.child_ids().iter().all(|&child_id| {
             self.regions
                 .get(child_id.arena_index())
-                .is_none_or(|r| r.state.is_terminal())
+                .is_none_or(|r| r.state().is_terminal())
         });
 
         all_tasks_done && all_children_closed
@@ -292,7 +284,7 @@ impl RuntimeState {
         let waiters = task.waiters.clone();
 
         // Remove task from owning region to prevent memory leak
-        if let Some(region) = self.regions.get_mut(owner.arena_index()) {
+        if let Some(region) = self.regions.get(owner.arena_index()) {
             region.remove_task(task_id);
         }
 
@@ -320,12 +312,12 @@ impl RuntimeState {
     where
         F: FnOnce() + Send + 'static,
     {
-        let Some(region) = self.regions.get_mut(region_id.arena_index()) else {
+        let Some(region) = self.regions.get(region_id.arena_index()) else {
             return false;
         };
 
         // Only allow registration while region is Open
-        if !region.state.can_spawn() {
+        if !region.state().can_spawn() {
             return false;
         }
 
@@ -349,12 +341,12 @@ impl RuntimeState {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let Some(region) = self.regions.get_mut(region_id.arena_index()) else {
+        let Some(region) = self.regions.get(region_id.arena_index()) else {
             return false;
         };
 
         // Only allow registration while region is Open
-        if !region.state.can_spawn() {
+        if !region.state().can_spawn() {
             return false;
         }
 
@@ -370,7 +362,7 @@ impl RuntimeState {
     /// # Returns
     /// The next finalizer to run, or `None` if all finalizers have been executed.
     pub fn pop_region_finalizer(&mut self, region_id: RegionId) -> Option<Finalizer> {
-        let region = self.regions.get_mut(region_id.arena_index())?;
+        let region = self.regions.get(region_id.arena_index())?;
         region.pop_finalizer()
     }
 
@@ -438,7 +430,7 @@ impl RuntimeState {
         };
 
         // Must be in Finalizing state
-        if region.state != crate::record::region::RegionState::Finalizing {
+        if region.state() != crate::record::region::RegionState::Finalizing {
             return false;
         }
 
@@ -574,9 +566,9 @@ mod tests {
             .regions
             .get(region.arena_index())
             .expect("region missing");
-        assert!(region_record.cancel_reason.is_some());
+        assert!(region_record.cancel_reason().is_some());
         assert_eq!(
-            region_record.cancel_reason.as_ref().unwrap().kind,
+            region_record.cancel_reason().as_ref().unwrap().kind,
             CancelKind::Timeout
         );
     }
@@ -625,7 +617,7 @@ mod tests {
         // Root region gets original reason
         let root_record = state.regions.get(root.arena_index()).expect("root missing");
         assert_eq!(
-            root_record.cancel_reason.as_ref().unwrap().kind,
+            root_record.cancel_reason().as_ref().unwrap().kind,
             CancelKind::User
         );
 
@@ -635,7 +627,7 @@ mod tests {
             .get(child.arena_index())
             .expect("child missing");
         assert_eq!(
-            child_record.cancel_reason.as_ref().unwrap().kind,
+            child_record.cancel_reason().as_ref().unwrap().kind,
             CancelKind::ParentCancelled
         );
 
@@ -644,7 +636,7 @@ mod tests {
             .get(grandchild.arena_index())
             .expect("grandchild missing");
         assert_eq!(
-            grandchild_record.cancel_reason.as_ref().unwrap().kind,
+            grandchild_record.cancel_reason().as_ref().unwrap().kind,
             CancelKind::ParentCancelled
         );
 
@@ -701,7 +693,7 @@ mod tests {
             .get(region.arena_index())
             .expect("region missing");
         assert_eq!(
-            region_record.cancel_reason.as_ref().unwrap().kind,
+            region_record.cancel_reason().as_ref().unwrap().kind,
             CancelKind::Shutdown
         );
 
@@ -917,10 +909,11 @@ mod tests {
 
         // Verify all tasks are in the region
         let region_record = state.regions.get(region.arena_index()).expect("region");
-        assert_eq!(region_record.tasks.len(), 3);
-        assert!(region_record.tasks.contains(&task1));
-        assert!(region_record.tasks.contains(&task2));
-        assert!(region_record.tasks.contains(&task3));
+        let task_ids = region_record.task_ids();
+        assert_eq!(task_ids.len(), 3);
+        assert!(task_ids.contains(&task1));
+        assert!(task_ids.contains(&task2));
+        assert!(task_ids.contains(&task3));
 
         // Complete task2 (transition to Completed state first)
         state
@@ -935,10 +928,11 @@ mod tests {
 
         // Verify task2 is removed from the region
         let region_record = state.regions.get(region.arena_index()).expect("region");
-        assert_eq!(region_record.tasks.len(), 2);
-        assert!(region_record.tasks.contains(&task1));
-        assert!(!region_record.tasks.contains(&task2)); // task2 should be removed
-        assert!(region_record.tasks.contains(&task3));
+        let task_ids = region_record.task_ids();
+        assert_eq!(task_ids.len(), 2);
+        assert!(task_ids.contains(&task1));
+        assert!(!task_ids.contains(&task2)); // task2 should be removed
+        assert!(task_ids.contains(&task3));
 
         // Complete remaining tasks
         state
@@ -957,6 +951,6 @@ mod tests {
 
         // Verify all tasks removed from region
         let region_record = state.regions.get(region.arena_index()).expect("region");
-        assert!(region_record.tasks.is_empty());
+        assert!(region_record.task_ids().is_empty());
     }
 }

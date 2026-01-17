@@ -133,7 +133,7 @@ impl ObligationLeakOracle {
         }
 
         for (_, region) in state.regions.iter() {
-            if region.state.is_terminal() {
+            if region.state().is_terminal() {
                 self.region_closes.push((region.id, now));
             }
         }

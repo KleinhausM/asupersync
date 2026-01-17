@@ -182,7 +182,7 @@ impl LabRuntime {
                 .state
                 .regions
                 .get(obligation.region.arena_index())
-                .is_none_or(|r| r.state.is_terminal());
+                .is_none_or(|r| r.state().is_terminal());
 
             if holder_terminal || region_closed {
                 leaks.push(ObligationLeak {
@@ -208,20 +208,20 @@ impl LabRuntime {
     fn quiescence_violations(&self) -> Vec<InvariantViolation> {
         let mut violations = Vec::new();
         for (_, region) in self.state.regions.iter() {
-            if region.state.is_terminal() {
+            if region.state().is_terminal() {
                 // Check if any children or tasks are NOT terminal
-                let live_tasks = region.tasks.iter().any(|&tid| {
+                let live_tasks = region.task_ids().iter().any(|&tid| {
                     self.state
                         .tasks
                         .get(tid.arena_index())
                         .is_some_and(|t| !t.state.is_terminal())
                 });
 
-                let live_children = region.children.iter().any(|&rid| {
+                let live_children = region.child_ids().iter().any(|&rid| {
                     self.state
                         .regions
                         .get(rid.arena_index())
-                        .is_some_and(|r| !r.state.is_terminal())
+                        .is_some_and(|r| !r.state().is_terminal())
                 });
 
                 if live_tasks || live_children {
