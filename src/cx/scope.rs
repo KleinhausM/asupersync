@@ -4,7 +4,7 @@
 //! and registering finalizers.
 
 use crate::channel::oneshot;
-use crate::combinator::race::{Either, Select};
+use crate::combinator::{Either, Select};
 use crate::cx::Cx;
 use crate::record::TaskRecord;
 use crate::runtime::task_handle::{JoinError, TaskHandle};

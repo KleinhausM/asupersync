@@ -27,6 +27,7 @@ pub mod pipeline;
 pub mod quorum;
 pub mod race;
 pub mod retry;
+pub mod select;
 pub mod timeout;
 
 pub use bracket::{bracket, bracket_move, commit_section, try_commit_section};
@@ -65,14 +66,15 @@ pub use quorum::{
 };
 pub use race::{
     make_race_all_result, race2_outcomes, race2_to_result, race_all_outcomes, race_all_to_result,
-    Either, Race, Race2Result, RaceAll, RaceAllError, RaceAllResult, RaceError, RaceResult,
-    RaceWinner, Select,
+    Race, Race2Result, RaceAll, RaceAllError, RaceAllResult, RaceError, RaceResult,
+    RaceWinner,
 };
 pub use retry::{
     calculate_deadline as retry_deadline, calculate_delay, make_retry_result, total_delay_budget,
     AlwaysRetry, NeverRetry, RetryError, RetryFailure, RetryIf, RetryPolicy, RetryPredicate,
     RetryResult, RetryState,
 };
+pub use select::{Either, Select};
 pub use timeout::{
     effective_deadline, make_timed_result, TimedError, TimedResult, Timeout, TimeoutConfig,
     TimeoutError,

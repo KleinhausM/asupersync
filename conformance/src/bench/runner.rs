@@ -337,7 +337,7 @@ fn scaled_warmup(base: u32, multiplier: f32) -> u32 {
     if multiplier <= 0.0 || !multiplier.is_finite() || base == 0 {
         return 0;
     }
-    let scaled = f32::from(base) * multiplier;
+    let scaled = (base as f32) * multiplier;
     if !scaled.is_finite() || scaled <= 0.0 {
         return 0;
     }
