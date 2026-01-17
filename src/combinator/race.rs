@@ -64,6 +64,64 @@ impl<A, B> Default for Race<A, B> {
     }
 }
 
+/// An N-way race combinator for running multiple operations in parallel.
+///
+/// This is a builder/marker type representing a race of N operations.
+/// The first operation to complete wins; all others are cancelled and drained.
+///
+/// # Type Parameters
+/// * `T` - The element type for each operation
+///
+/// # Semantics
+///
+/// Given futures `f[0..n)`:
+/// 1. Spawn all as children in a subregion
+/// 2. Wait for the first to reach terminal state
+/// 3. Cancel all other (loser) tasks
+/// 4. Drain all losers (await until terminal)
+/// 5. Return winner's outcome
+///
+/// # Critical Invariants
+///
+/// - **Losers are drained**: Every loser reaches terminal state
+/// - **Region quiescence**: All children done before return
+/// - **Deterministic**: Same seed → same winner in lab runtime (on ties)
+///
+/// # Example (API shape)
+/// ```ignore
+/// let result = scope.race_all(cx, vec![
+///     async { fetch_from_primary(cx).await },
+///     async { fetch_from_replica_1(cx).await },
+///     async { fetch_from_replica_2(cx).await },
+/// ]).await;
+/// ```
+#[derive(Debug)]
+pub struct RaceAll<T> {
+    _t: PhantomData<T>,
+}
+
+impl<T> RaceAll<T> {
+    /// Creates a new N-way race combinator (internal use).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { _t: PhantomData }
+    }
+}
+
+impl<T> Default for RaceAll<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Clone for RaceAll<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for RaceAll<T> {}
+
 /// The result of a race, indicating which branch won.
 #[derive(Debug, Clone)]
 pub enum RaceResult<A, B> {
@@ -131,6 +189,74 @@ impl<E: fmt::Display> fmt::Display for RaceError<E> {
 }
 
 impl<E: fmt::Debug + fmt::Display> std::error::Error for RaceError<E> {}
+
+/// Error type for N-way race operations.
+///
+/// When an N-way race fails (winner has an error/cancel/panic), this type
+/// preserves the winner's index for debugging and analysis.
+#[derive(Debug, Clone)]
+pub enum RaceAllError<E> {
+    /// The winner had an error at the specified index.
+    Error {
+        /// The error value.
+        error: E,
+        /// Index of the winning branch that errored.
+        winner_index: usize,
+    },
+    /// The winner was cancelled.
+    Cancelled(CancelReason),
+    /// The winner panicked.
+    Panicked(PanicPayload),
+}
+
+impl<E> RaceAllError<E> {
+    /// Returns the winner index if the error was an application error.
+    #[must_use]
+    pub const fn winner_index(&self) -> Option<usize> {
+        match self {
+            Self::Error { winner_index, .. } => Some(*winner_index),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this was an application error (not cancel/panic).
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
+        matches!(self, Self::Error { .. })
+    }
+
+    /// Returns true if the winner was cancelled.
+    #[must_use]
+    pub const fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled(_))
+    }
+
+    /// Returns true if the winner panicked.
+    #[must_use]
+    pub const fn is_panicked(&self) -> bool {
+        matches!(self, Self::Panicked(_))
+    }
+}
+
+impl<E: fmt::Display> fmt::Display for RaceAllError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Error {
+                error,
+                winner_index,
+            } => {
+                write!(
+                    f,
+                    "race winner at index {winner_index} failed with error: {error}"
+                )
+            }
+            Self::Cancelled(r) => write!(f, "race winner was cancelled: {r}"),
+            Self::Panicked(p) => write!(f, "race winner panicked: {p}"),
+        }
+    }
+}
+
+impl<E: fmt::Debug + fmt::Display> std::error::Error for RaceAllError<E> {}
 
 /// Which branch won the race.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,14 +443,72 @@ pub fn race_all_outcomes<T, E>(
 /// Converts a race-all result to a Result for fail-fast handling.
 ///
 /// If the winner succeeded, returns `Ok` with the value.
-/// If the winner failed, returns `Err` with a `RaceError`.
-pub fn race_all_to_result<T, E>(result: RaceAllResult<T, E>) -> Result<T, RaceError<E>> {
+/// If the winner failed, returns `Err` with a `RaceAllError` that includes
+/// the winner's index for debugging.
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::race::{race_all_to_result, RaceAllResult, RaceAllError};
+/// use asupersync::types::Outcome;
+/// use asupersync::types::cancel::CancelReason;
+///
+/// let result: RaceAllResult<i32, &str> = RaceAllResult::new(
+///     Outcome::Ok(42),
+///     1,
+///     vec![(0, Outcome::Cancelled(CancelReason::race_loser()))],
+/// );
+///
+/// let value = race_all_to_result(result);
+/// assert_eq!(value.unwrap(), 42);
+/// ```
+pub fn race_all_to_result<T, E>(result: RaceAllResult<T, E>) -> Result<T, RaceAllError<E>> {
     match result.winner_outcome {
         Outcome::Ok(v) => Ok(v),
-        Outcome::Err(e) => Err(RaceError::First(e)), // Use First for any error (could add index info)
-        Outcome::Cancelled(r) => Err(RaceError::Cancelled(r)),
-        Outcome::Panicked(p) => Err(RaceError::Panicked(p)),
+        Outcome::Err(e) => Err(RaceAllError::Error {
+            error: e,
+            winner_index: result.winner_index,
+        }),
+        Outcome::Cancelled(r) => Err(RaceAllError::Cancelled(r)),
+        Outcome::Panicked(p) => Err(RaceAllError::Panicked(p)),
     }
+}
+
+/// Creates a race-all result from raw outcomes, intended for runtime implementations.
+///
+/// This is the primary "escape hatch" for constructing N-way race results
+/// when you have the winner index and all outcomes after draining.
+///
+/// # Arguments
+/// * `winner_index` - Index of the winning branch
+/// * `outcomes` - All outcomes in their original order (losers should be drained)
+///
+/// # Returns
+/// `Ok(value)` if the winner succeeded, `Err(RaceAllError)` otherwise.
+///
+/// # Panics
+/// Panics if `winner_index` is out of bounds.
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::race::{make_race_all_result, RaceAllError};
+/// use asupersync::types::Outcome;
+/// use asupersync::types::cancel::CancelReason;
+///
+/// let outcomes: Vec<Outcome<i32, &str>> = vec![
+///     Outcome::Ok(42),
+///     Outcome::Cancelled(CancelReason::race_loser()),
+///     Outcome::Cancelled(CancelReason::race_loser()),
+/// ];
+///
+/// let result = make_race_all_result(0, outcomes);
+/// assert_eq!(result.unwrap(), 42);
+/// ```
+pub fn make_race_all_result<T, E>(
+    winner_index: usize,
+    outcomes: Vec<Outcome<T, E>>,
+) -> Result<T, RaceAllError<E>> {
+    let result = race_all_outcomes(winner_index, outcomes);
+    race_all_to_result(result)
 }
 
 /// Macro for racing multiple futures (placeholder).
@@ -511,12 +695,24 @@ mod tests {
     fn race_all_to_result_error() {
         let result: RaceAllResult<i32, &str> = RaceAllResult::new(
             Outcome::Err("failed"),
-            0,
-            vec![(1, Outcome::Cancelled(CancelReason::race_loser()))],
+            2,
+            vec![
+                (0, Outcome::Cancelled(CancelReason::race_loser())),
+                (1, Outcome::Cancelled(CancelReason::race_loser())),
+            ],
         );
 
         let value = race_all_to_result(result);
-        assert!(matches!(value, Err(RaceError::First("failed"))));
+        match value {
+            Err(RaceAllError::Error {
+                error,
+                winner_index,
+            }) => {
+                assert_eq!(error, "failed");
+                assert_eq!(winner_index, 2);
+            }
+            _ => panic!("expected RaceAllError::Error"),
+        }
     }
 
     #[test]
@@ -576,5 +772,186 @@ mod tests {
         } else {
             panic!("Expected both winners to be Ok");
         }
+    }
+
+    // ========== RaceAll tests ==========
+
+    #[test]
+    fn race_all_marker_type() {
+        let _race: RaceAll<i32> = RaceAll::new();
+        let _race_default: RaceAll<String> = RaceAll::default();
+
+        // Test Clone and Copy
+        let r1: RaceAll<i32> = RaceAll::new();
+        let r2 = r1;
+        let r3 = r1; // Copy, not clone
+        assert!(std::mem::size_of_val(&r1) == std::mem::size_of_val(&r2));
+        assert!(std::mem::size_of_val(&r1) == std::mem::size_of_val(&r3));
+    }
+
+    // ========== RaceAllError tests ==========
+
+    #[test]
+    fn race_all_error_predicates() {
+        let err: RaceAllError<&str> = RaceAllError::Error {
+            error: "test",
+            winner_index: 2,
+        };
+        assert!(err.is_error());
+        assert!(!err.is_cancelled());
+        assert!(!err.is_panicked());
+        assert_eq!(err.winner_index(), Some(2));
+
+        let err: RaceAllError<&str> = RaceAllError::Cancelled(CancelReason::timeout());
+        assert!(!err.is_error());
+        assert!(err.is_cancelled());
+        assert!(!err.is_panicked());
+        assert_eq!(err.winner_index(), None);
+
+        let err: RaceAllError<&str> = RaceAllError::Panicked(PanicPayload::new("boom"));
+        assert!(!err.is_error());
+        assert!(!err.is_cancelled());
+        assert!(err.is_panicked());
+        assert_eq!(err.winner_index(), None);
+    }
+
+    #[test]
+    fn race_all_error_display() {
+        let err: RaceAllError<&str> = RaceAllError::Error {
+            error: "test error",
+            winner_index: 3,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("index 3"));
+        assert!(msg.contains("test error"));
+
+        let err: RaceAllError<&str> = RaceAllError::Cancelled(CancelReason::timeout());
+        assert!(err.to_string().contains("cancelled"));
+
+        let err: RaceAllError<&str> = RaceAllError::Panicked(PanicPayload::new("crash"));
+        assert!(err.to_string().contains("panicked"));
+    }
+
+    // ========== make_race_all_result tests ==========
+
+    #[test]
+    fn make_race_all_result_success() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Cancelled(CancelReason::race_loser()),
+            Outcome::Ok(42),
+            Outcome::Cancelled(CancelReason::race_loser()),
+        ];
+
+        let result = make_race_all_result(1, outcomes);
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn make_race_all_result_error_preserves_index() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Cancelled(CancelReason::race_loser()),
+            Outcome::Cancelled(CancelReason::race_loser()),
+            Outcome::Err("failed at index 2"),
+        ];
+
+        let result = make_race_all_result(2, outcomes);
+        match result {
+            Err(RaceAllError::Error {
+                error,
+                winner_index,
+            }) => {
+                assert_eq!(error, "failed at index 2");
+                assert_eq!(winner_index, 2);
+            }
+            _ => panic!("expected RaceAllError::Error"),
+        }
+    }
+
+    #[test]
+    fn make_race_all_result_cancelled() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Cancelled(CancelReason::timeout()),
+            Outcome::Cancelled(CancelReason::race_loser()),
+        ];
+
+        let result = make_race_all_result(0, outcomes);
+        assert!(matches!(result, Err(RaceAllError::Cancelled(_))));
+    }
+
+    #[test]
+    fn make_race_all_result_panicked() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Panicked(PanicPayload::new("boom")),
+            Outcome::Cancelled(CancelReason::race_loser()),
+        ];
+
+        let result = make_race_all_result(0, outcomes);
+        assert!(matches!(result, Err(RaceAllError::Panicked(_))));
+    }
+
+    #[test]
+    fn race_all_to_result_cancelled() {
+        let result: RaceAllResult<i32, &str> = RaceAllResult::new(
+            Outcome::Cancelled(CancelReason::timeout()),
+            0,
+            vec![(1, Outcome::Cancelled(CancelReason::race_loser()))],
+        );
+
+        let value = race_all_to_result(result);
+        assert!(matches!(value, Err(RaceAllError::Cancelled(_))));
+    }
+
+    #[test]
+    fn race_all_to_result_panicked() {
+        let result: RaceAllResult<i32, &str> = RaceAllResult::new(
+            Outcome::Panicked(PanicPayload::new("crash")),
+            1,
+            vec![(0, Outcome::Cancelled(CancelReason::race_loser()))],
+        );
+
+        let value = race_all_to_result(result);
+        assert!(matches!(value, Err(RaceAllError::Panicked(_))));
+    }
+
+    #[test]
+    fn race_all_last_wins() {
+        // Test when the last index wins
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Cancelled(CancelReason::race_loser()),
+            Outcome::Cancelled(CancelReason::race_loser()),
+            Outcome::Cancelled(CancelReason::race_loser()),
+            Outcome::Ok(999),
+        ];
+
+        let result = race_all_outcomes(3, outcomes);
+        assert_eq!(result.winner_index, 3);
+        assert!(result.winner_succeeded());
+        assert_eq!(result.loser_outcomes.len(), 3);
+
+        // All loser indices should be 0, 1, 2
+        let loser_indices: Vec<usize> = result.loser_outcomes.iter().map(|(i, _)| *i).collect();
+        assert_eq!(loser_indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn race_all_single_entry() {
+        // Edge case: racing a single future
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(42)];
+
+        let result = race_all_outcomes(0, outcomes);
+        assert_eq!(result.winner_index, 0);
+        assert!(result.winner_succeeded());
+        assert!(result.loser_outcomes.is_empty());
+
+        let value = race_all_to_result(result);
+        assert_eq!(value.unwrap(), 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "winner_index out of bounds")]
+    fn race_all_outcomes_panics_on_invalid_index() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(1), Outcome::Ok(2)];
+
+        let _ = race_all_outcomes(5, outcomes);
     }
 }
