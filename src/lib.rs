@@ -32,6 +32,7 @@
 //! - [`security`]: Symbol authentication and security primitives
 //! - [`time`]: Sleep and timeout primitives for time-based operations
 //! - [`io`]: Async I/O traits and adapters
+//! - [`net`]: Async networking primitives (Phase 0: synchronous wrappers)
 //! - [`bytes`]: Zero-copy buffer types (Bytes, BytesMut, Buf, BufMut)
 
 #![forbid(unsafe_code)]
@@ -54,7 +55,8 @@ pub mod cx;
 pub mod error;
 pub mod io;
 pub mod lab;
-// pub mod observability;
+pub mod net;
+pub mod observability;
 pub mod record;
 pub mod runtime;
 pub mod security;

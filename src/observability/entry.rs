@@ -174,28 +174,20 @@ impl LogEntry {
     pub fn format_json(&self) -> String {
         let mut s = String::from("{");
 
-        // Level
         s.push_str("\"level\":\"");
         s.push_str(self.level.as_str_lower());
-        s.push('"');
-
-        // Timestamp
-        s.push_str(",\"timestamp_ns\":");
+        s.push_str("\",\"timestamp_ns\":");
         s.push_str(&self.timestamp.as_nanos().to_string());
-
-        // Message
         s.push_str(",\"message\":\"");
         push_json_escaped(&mut s, &self.message);
         s.push('"');
 
-        // Target
         if let Some(ref target) = self.target {
             s.push_str(",\"target\":\"");
             push_json_escaped(&mut s, target);
             s.push('"');
         }
 
-        // Fields
         for (k, v) in &self.fields {
             s.push_str(",\"");
             push_json_escaped(&mut s, k);
@@ -246,71 +238,8 @@ impl fmt::Display for LogEntry {
 }
 
 #[cfg(test)]
-mod extra_tests {
+mod tests {
     use super::*;
-
-    #[test]
-    fn create_entries() {
-        let entry = LogEntry::info("hello")
-            .with_field("k1", "v1")
-            .with_field("k2", "v2")
-            .with_target("mod::sub")
-            .with_timestamp(Time::from_nanos(123));
-
-        assert_eq!(entry.level(), LogLevel::Info);
-        assert_eq!(entry.message(), "hello");
-        assert_eq!(entry.timestamp(), Time::from_nanos(123));
-        assert_eq!(entry.target(), Some("mod::sub"));
-        assert_eq!(entry.field_count(), 2);
-        assert_eq!(entry.get_field("k1"), Some("v1"));
-        assert_eq!(entry.get_field("missing"), None);
-
-        let fields: Vec<_> = entry.fields().collect();
-        assert!(fields.contains(&("k1", "v1")));
-        assert!(fields.contains(&("k2", "v2")));
-    }
-
-    #[test]
-    fn entry_field_limit_enforced() {
-        let mut entry = LogEntry::info("test");
-        for i in 0..(MAX_FIELDS + 2) {
-            entry = entry.with_field(format!("k{i}"), "v");
-        }
-
-        assert_eq!(entry.field_count(), MAX_FIELDS);
-        assert!(entry.get_field("k0").is_some());
-        assert!(entry.get_field("k15").is_some());
-        assert!(entry.get_field("k16").is_none());
-    }
-
-    #[test]
-    fn entry_format_compact_contains_fields() {
-        let entry = LogEntry::warn("something happened")
-            .with_field("code", "42")
-            .with_field("phase", "test");
-
-        let compact = entry.format_compact();
-        assert!(compact.contains("[W]"));
-        assert!(compact.contains("something happened"));
-        assert!(compact.contains("code=42"));
-        assert!(compact.contains("phase=test"));
-    }
-
-    #[test]
-    fn entry_format_json_escapes_and_includes_target() {
-        let entry = LogEntry::debug("quote:\" backslash:\\ newline:\n\t")
-            .with_target("mod::json")
-            .with_field("key", "value");
-
-        let json = entry.format_json();
-        assert!(json.contains("\"level\":\"debug\""));
-        assert!(json.contains("\"target\":\"mod::json\""));
-        assert!(json.contains("\"key\":\"value\""));
-        assert!(json.contains("\\\""));
-        assert!(json.contains("\\\\"));
-        assert!(json.contains("\\n"));
-        assert!(json.contains("\\t"));
-    }
 
     #[test]
     fn create_entries() {
