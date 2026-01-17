@@ -13,8 +13,10 @@
 //! - [`pipeline`]: Chain transformations with staged processing
 //! - [`map_reduce`]: Parallel map followed by monoid-based reduction
 //! - [`circuit_breaker`]: Failure detection and prevention
+//! - [`bulkhead`]: Resource isolation and concurrency limiting
 
 pub mod bracket;
+pub mod bulkhead;
 pub mod circuit_breaker;
 pub mod first_ok;
 pub mod hedge;
@@ -68,4 +70,8 @@ pub use retry::{
 pub use timeout::{
     effective_deadline, make_timed_result, TimedError, TimedResult, Timeout, TimeoutConfig,
     TimeoutError,
+};
+pub use bulkhead::{
+    Bulkhead, BulkheadError, BulkheadMetrics, BulkheadPermit, BulkheadPolicy,
+    BulkheadPolicyBuilder, BulkheadRegistry, FullCallback,
 };
