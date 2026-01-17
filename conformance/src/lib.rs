@@ -35,7 +35,15 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::Duration;
 
+pub mod logging;
+pub mod runner;
 pub mod tests;
+
+pub use logging::{LogCollector, LogConfig, LogEntry, LogLevel};
+pub use runner::{
+    compare_results, run_comparison, ComparisonResult, ComparisonStatus, ComparisonSummary,
+    RunConfig, RunSummary, SingleRunResult, TestRunner,
+};
 
 // ============================================================================
 // Test Result Types
@@ -89,7 +97,7 @@ impl TestResult {
 }
 
 /// A checkpoint recorded during test execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Checkpoint {
     /// Name of the checkpoint.
     pub name: String,
