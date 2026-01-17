@@ -634,22 +634,34 @@ mod tests {
                 reason: reason.clone(),
                 cleanup_budget,
             },
-            &TaskState::Cancelling { cleanup_budget },
+            &TaskState::Cancelling {
+                reason: reason.clone(),
+                cleanup_budget,
+            },
             Time::from_nanos(200),
         );
 
         // Cancelling -> Finalizing
         oracle.on_transition(
             task,
-            &TaskState::Cancelling { cleanup_budget },
-            &TaskState::Finalizing { cleanup_budget },
+            &TaskState::Cancelling {
+                reason: reason.clone(),
+                cleanup_budget,
+            },
+            &TaskState::Finalizing {
+                reason: reason.clone(),
+                cleanup_budget,
+            },
             Time::from_nanos(300),
         );
 
         // Finalizing -> CompletedCancelled
         oracle.on_transition(
             task,
-            &TaskState::Finalizing { cleanup_budget },
+            &TaskState::Finalizing {
+                reason: reason.clone(),
+                cleanup_budget,
+            },
             &TaskState::Completed(Outcome::Cancelled(reason)),
             Time::from_nanos(400),
         );
@@ -688,20 +700,32 @@ mod tests {
                 reason: reason.clone(),
                 cleanup_budget,
             },
-            &TaskState::Cancelling { cleanup_budget },
+            &TaskState::Cancelling {
+                reason: reason.clone(),
+                cleanup_budget,
+            },
             Time::from_nanos(100),
         );
 
         oracle.on_transition(
             task,
-            &TaskState::Cancelling { cleanup_budget },
-            &TaskState::Finalizing { cleanup_budget },
+            &TaskState::Cancelling {
+                reason: reason.clone(),
+                cleanup_budget,
+            },
+            &TaskState::Finalizing {
+                reason: reason.clone(),
+                cleanup_budget,
+            },
             Time::from_nanos(200),
         );
 
         oracle.on_transition(
             task,
-            &TaskState::Finalizing { cleanup_budget },
+            &TaskState::Finalizing {
+                reason: reason.clone(),
+                cleanup_budget,
+            },
             &TaskState::Completed(Outcome::Cancelled(reason)),
             Time::from_nanos(300),
         );
@@ -721,12 +745,16 @@ mod tests {
         // _reason unused here - test verifies skipped state detection doesn't need cancel request
         let _reason = CancelReason::timeout();
         let cleanup_budget = Budget::INFINITE;
+        let reason = CancelReason::timeout();
 
         // Running -> Finalizing (skipping CancelRequested and Cancelling!)
         oracle.on_transition(
             task,
             &TaskState::Running,
-            &TaskState::Finalizing { cleanup_budget },
+            &TaskState::Finalizing {
+                reason,
+                cleanup_budget,
+            },
             Time::from_nanos(100),
         );
 
@@ -788,18 +816,30 @@ mod tests {
                 reason: reason2.clone(),
                 cleanup_budget,
             },
-            &TaskState::Cancelling { cleanup_budget },
+            &TaskState::Cancelling {
+                reason: reason2.clone(),
+                cleanup_budget,
+            },
             Time::from_nanos(200),
         );
         oracle.on_transition(
             task,
-            &TaskState::Cancelling { cleanup_budget },
-            &TaskState::Finalizing { cleanup_budget },
+            &TaskState::Cancelling {
+                reason: reason2.clone(),
+                cleanup_budget,
+            },
+            &TaskState::Finalizing {
+                reason: reason2.clone(),
+                cleanup_budget,
+            },
             Time::from_nanos(300),
         );
         oracle.on_transition(
             task,
-            &TaskState::Finalizing { cleanup_budget },
+            &TaskState::Finalizing {
+                reason: reason2.clone(),
+                cleanup_budget,
+            },
             &TaskState::Completed(Outcome::Cancelled(reason2)),
             Time::from_nanos(400),
         );
@@ -925,14 +965,20 @@ mod tests {
                 reason: CancelReason::timeout(),
                 cleanup_budget,
             },
-            &TaskState::Cancelling { cleanup_budget },
+            &TaskState::Cancelling {
+                reason: CancelReason::timeout(),
+                cleanup_budget,
+            },
             Time::from_nanos(200),
         );
 
         // Error during cleanup (valid)
         oracle.on_transition(
             task,
-            &TaskState::Cancelling { cleanup_budget },
+            &TaskState::Cancelling {
+                reason: CancelReason::timeout(),
+                cleanup_budget,
+            },
             &TaskState::Completed(Outcome::Err(crate::error::Error::new(
                 crate::error::ErrorKind::User,
             ))),

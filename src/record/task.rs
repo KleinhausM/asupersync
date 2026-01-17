@@ -24,11 +24,15 @@ pub enum TaskState {
     },
     /// Task has acknowledged cancel and is running cleanup code.
     Cancelling {
+        /// The reason for cancellation.
+        reason: CancelReason,
         /// Budget for bounded cleanup.
         cleanup_budget: Budget,
     },
     /// Cleanup done; task is running finalizers.
     Finalizing {
+        /// The reason for cancellation.
+        reason: CancelReason,
         /// Budget for bounded cleanup.
         cleanup_budget: Budget,
     },
@@ -139,8 +143,15 @@ impl TaskRecord {
                 *existing_budget = existing_budget.combine(cleanup_budget);
                 false
             }
-            TaskState::Cancelling { cleanup_budget: b }
-            | TaskState::Finalizing { cleanup_budget: b } => {
+            TaskState::Cancelling {
+                reason: existing_reason,
+                cleanup_budget: b,
+            }
+            | TaskState::Finalizing {
+                reason: existing_reason,
+                cleanup_budget: b,
+            } => {
+                existing_reason.strengthen(&reason);
                 *b = b.combine(cleanup_budget);
                 false
             }
@@ -193,7 +204,7 @@ impl TaskRecord {
     ///
     /// # State Transition
     /// ```text
-    /// CancelRequested { reason, cleanup_budget } → Cancelling { cleanup_budget }
+    /// CancelRequested { reason, cleanup_budget } → Cancelling { reason, cleanup_budget }
     /// ```
     pub fn acknowledge_cancel(&mut self) -> Option<CancelReason> {
         match &self.state {
@@ -204,6 +215,7 @@ impl TaskRecord {
                 let reason = reason.clone();
                 let budget = *cleanup_budget;
                 self.state = TaskState::Cancelling {
+                    reason: reason.clone(),
                     cleanup_budget: budget,
                 };
                 Some(reason)
@@ -218,13 +230,18 @@ impl TaskRecord {
     ///
     /// # State Transition
     /// ```text
-    /// Cancelling { cleanup_budget } → Finalizing { cleanup_budget }
+    /// Cancelling { reason, cleanup_budget } → Finalizing { reason, cleanup_budget }
     /// ```
     pub fn cleanup_done(&mut self) -> bool {
         match &self.state {
-            TaskState::Cancelling { cleanup_budget } => {
+            TaskState::Cancelling {
+                reason,
+                cleanup_budget,
+            } => {
+                let reason = reason.clone();
                 let budget = *cleanup_budget;
                 self.state = TaskState::Finalizing {
+                    reason,
                     cleanup_budget: budget,
                 };
                 true
@@ -241,13 +258,13 @@ impl TaskRecord {
     /// ```text
     /// Finalizing { .. } → Completed(Cancelled(reason))
     /// ```
-    pub fn finalize_done(&mut self, reason: CancelReason) -> bool {
-        if matches!(self.state, TaskState::Finalizing { .. }) {
-            self.state = TaskState::Completed(Outcome::Cancelled(reason));
-            true
-        } else {
-            false
-        }
+    pub fn finalize_done(&mut self) -> bool {
+        let TaskState::Finalizing { reason, .. } = &self.state else {
+            return false;
+        };
+        let reason = reason.clone();
+        self.state = TaskState::Completed(Outcome::Cancelled(reason));
+        true
     }
 
     /// Returns the cancel reason if the task is being cancelled.
@@ -256,7 +273,9 @@ impl TaskRecord {
     #[must_use]
     pub fn cancel_reason(&self) -> Option<&CancelReason> {
         match &self.state {
-            TaskState::CancelRequested { reason, .. } => Some(reason),
+            TaskState::CancelRequested { reason, .. }
+            | TaskState::Cancelling { reason, .. }
+            | TaskState::Finalizing { reason, .. } => Some(reason),
             _ => None,
         }
     }
@@ -266,8 +285,8 @@ impl TaskRecord {
     pub fn cleanup_budget(&self) -> Option<Budget> {
         match &self.state {
             TaskState::CancelRequested { cleanup_budget, .. }
-            | TaskState::Cancelling { cleanup_budget }
-            | TaskState::Finalizing { cleanup_budget } => Some(*cleanup_budget),
+            | TaskState::Cancelling { cleanup_budget, .. }
+            | TaskState::Finalizing { cleanup_budget, .. } => Some(*cleanup_budget),
             _ => None,
         }
     }
@@ -375,7 +394,16 @@ mod tests {
         let reason = t.acknowledge_cancel();
         assert!(reason.is_some());
         assert_eq!(reason.unwrap().kind, crate::types::CancelKind::Timeout);
-        assert!(matches!(t.state, TaskState::Cancelling { .. }));
+        assert!(matches!(
+            t.state,
+            TaskState::Cancelling {
+                reason: CancelReason {
+                    kind: crate::types::CancelKind::Timeout,
+                    ..
+                },
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -417,7 +445,7 @@ mod tests {
         let _ = t.cleanup_done();
 
         assert!(matches!(t.state, TaskState::Finalizing { .. }));
-        assert!(t.finalize_done(CancelReason::timeout()));
+        assert!(t.finalize_done());
         assert!(t.state.is_terminal());
         match &t.state {
             TaskState::Completed(Outcome::Cancelled(reason)) => {
@@ -448,7 +476,7 @@ mod tests {
         assert!(matches!(t.state, TaskState::Finalizing { .. }));
 
         // Step 4: Finalizers complete
-        assert!(t.finalize_done(reason));
+        assert!(t.finalize_done());
         assert!(t.state.is_terminal());
         assert!(matches!(
             t.state,
