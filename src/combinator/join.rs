@@ -151,7 +151,11 @@ pub struct JoinAllResult<T, E> {
 impl<T, E> JoinAllResult<T, E> {
     /// Creates a new join-all result.
     #[must_use]
-    pub fn new(decision: AggregateDecision<E>, successes: Vec<(usize, T)>, total_count: usize) -> Self {
+    pub fn new(
+        decision: AggregateDecision<E>,
+        successes: Vec<(usize, T)>,
+        total_count: usize,
+    ) -> Self {
         Self {
             decision,
             successes,
@@ -162,7 +166,8 @@ impl<T, E> JoinAllResult<T, E> {
     /// Returns true if all branches succeeded.
     #[must_use]
     pub fn all_succeeded(&self) -> bool {
-        matches!(self.decision, AggregateDecision::AllOk) && self.successes.len() == self.total_count
+        matches!(self.decision, AggregateDecision::AllOk)
+            && self.successes.len() == self.total_count
     }
 
     /// Returns the number of successful branches.
@@ -443,7 +448,9 @@ pub fn make_join_all_result<T, E: Clone>(outcomes: Vec<Outcome<T, E>>) -> JoinAl
 /// let values = join_all_to_result(result);
 /// assert_eq!(values.unwrap(), vec![1, 2, 3]);
 /// ```
-pub fn join_all_to_result<T, E: Clone>(result: JoinAllResult<T, E>) -> Result<Vec<T>, JoinAllError<E>> {
+pub fn join_all_to_result<T, E: Clone>(
+    result: JoinAllResult<T, E>,
+) -> Result<Vec<T>, JoinAllError<E>> {
     match result.decision {
         AggregateDecision::AllOk => {
             // All succeeded - extract values in order
