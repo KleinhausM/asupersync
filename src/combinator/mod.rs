@@ -27,6 +27,11 @@ pub mod retry;
 pub mod timeout;
 
 pub use bracket::{bracket, bracket_move, commit_section, try_commit_section, Bracket};
+pub use circuit_breaker::{
+    CircuitBreaker, CircuitBreakerError, CircuitBreakerMetrics, CircuitBreakerPolicy,
+    CircuitBreakerPolicyBuilder, FailurePredicate, Permit, SlidingWindowConfig, State,
+    StateChangeCallback,
+};
 pub use first_ok::{
     first_ok_outcomes, first_ok_to_result, FirstOk, FirstOkError, FirstOkFailure, FirstOkResult,
     FirstOkSuccess,
@@ -63,9 +68,4 @@ pub use retry::{
 pub use timeout::{
     effective_deadline, make_timed_result, TimedError, TimedResult, Timeout, TimeoutConfig,
     TimeoutError,
-};
-pub use circuit_breaker::{
-    CircuitBreaker, CircuitBreakerError, CircuitBreakerMetrics, CircuitBreakerPolicy,
-    CircuitBreakerPolicyBuilder, FailurePredicate, Permit, SlidingWindowConfig, State,
-    StateChangeCallback,
 };

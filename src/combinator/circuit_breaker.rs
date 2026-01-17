@@ -514,7 +514,10 @@ impl CircuitBreaker {
         let counts_as_failure = self.policy.failure_predicate.is_failure(error);
 
         if !counts_as_failure {
-            self.metrics.write().expect("lock poisoned").total_ignored_errors += 1;
+            self.metrics
+                .write()
+                .expect("lock poisoned")
+                .total_ignored_errors += 1;
 
             // Still need to release probe if applicable
             if matches!(permit, Permit::Probe) {
@@ -524,14 +527,14 @@ impl CircuitBreaker {
         }
 
         // Check sliding window if enabled (before acquiring metrics lock)
-        let (window_triggered, failure_rate) = self.sliding_window.as_ref().map_or(
-            (false, None),
-            |window| {
-                let mut w = window.write().expect("lock poisoned");
-                w.record_failure(now_millis);
-                (w.should_open(), Some(w.failure_rate()))
-            },
-        );
+        let (window_triggered, failure_rate) =
+            self.sliding_window
+                .as_ref()
+                .map_or((false, None), |window| {
+                    let mut w = window.write().expect("lock poisoned");
+                    w.record_failure(now_millis);
+                    (w.should_open(), Some(w.failure_rate()))
+                });
 
         let mut metrics = self.metrics.write().expect("lock poisoned");
         metrics.total_failure += 1;
@@ -562,8 +565,7 @@ impl CircuitBreaker {
             since_millis: now_millis,
         };
 
-        self.state_bits
-            .store(new_state.to_bits(), Ordering::SeqCst);
+        self.state_bits.store(new_state.to_bits(), Ordering::SeqCst);
         self.failure_count.store(0, Ordering::SeqCst);
         self.success_count.store(0, Ordering::SeqCst);
         self.probes_active.store(0, Ordering::SeqCst);
@@ -585,8 +587,7 @@ impl CircuitBreaker {
         let old_state = self.state();
         let new_state = State::Closed;
 
-        self.state_bits
-            .store(new_state.to_bits(), Ordering::SeqCst);
+        self.state_bits.store(new_state.to_bits(), Ordering::SeqCst);
         self.failure_count.store(0, Ordering::SeqCst);
         self.success_count.store(0, Ordering::SeqCst);
         self.probes_active.store(0, Ordering::SeqCst);
