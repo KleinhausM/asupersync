@@ -385,16 +385,27 @@ impl Recoverability {
 /// High-level error category for grouping related errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCategory {
+    /// Cancellation-related failures.
     Cancellation,
+    /// Budget/time/resource limit failures.
     Budget,
+    /// Channel and messaging failures.
     Channel,
+    /// Obligation lifecycle failures.
     Obligation,
+    /// Region lifecycle failures.
     Region,
+    /// Encoding failures.
     Encoding,
+    /// Decoding failures.
     Decoding,
+    /// Transport-layer failures.
     Transport,
+    /// Distributed runtime failures.
     Distributed,
+    /// Internal runtime errors.
     Internal,
+    /// User-originated errors.
     User,
 }
 

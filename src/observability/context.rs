@@ -130,7 +130,7 @@ impl DiagnosticContext {
     ///
     /// (For Phase 0, this is a placeholder as we don't have thread-local
     /// context storage yet).
-    pub fn enter(&self) -> ContextGuard {
+    pub fn enter(&self) -> ContextGuard<'_> {
         ContextGuard { _ctx: self }
     }
 

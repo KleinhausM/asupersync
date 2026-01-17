@@ -23,10 +23,15 @@ impl Token {
 /// I/O event from the reactor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Event {
+    /// Token identifying the registered source.
     pub token: Token,
+    /// True if the source is readable.
     pub readable: bool,
+    /// True if the source is writable.
     pub writable: bool,
+    /// True if an error was reported.
     pub error: bool,
+    /// True if the source reported hangup.
     pub hangup: bool,
 }
 

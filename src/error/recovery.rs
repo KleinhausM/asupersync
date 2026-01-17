@@ -96,8 +96,11 @@ impl RecoveryStrategy for ExponentialBackoff {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CircuitState {
+    /// Normal operation; requests flow through.
     Closed = 0,   // Normal operation
+    /// Circuit is open; requests are rejected.
     Open = 1,     // Failing, reject requests
+    /// Half-open probing state.
     HalfOpen = 2, // Testing recovery
 }
 
