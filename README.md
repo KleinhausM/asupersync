@@ -397,6 +397,13 @@ for automation**. These are *guidelines*, not a promise of current implementatio
 - `NO_COLOR` disables ANSI; `CLICOLOR_FORCE` enables ANSI.
 - `ASUPERSYNC_NO_PROMPT` disables interactive prompts.
 
+### Agent-Friendly Output Contract
+- **Auto-detect defaults**: if `CI=true` or stdout is not a TTY, default to JSON (or JSONL for streaming).
+- **JSONL streaming**: one object per line, flushed per line for incremental consumption.
+- **Errors on stderr**: in machine modes, emit structured errors as JSON lines to stderr.
+- **Stable ordering**: deterministic record ordering and stable key sets for diffability.
+- **No ambient prompts**: prompts only when explicitly requested; honor `ASUPERSYNC_NO_PROMPT`.
+
 ### Structured Error Example (JSON line)
 ```json
 {"type":"invalid_argument","title":"Invalid argument: --foo","detail":"--foo expects an integer","suggestion":"Try --foo 123","exit_code":1}
