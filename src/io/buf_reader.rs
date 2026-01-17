@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn buf_reader_read_small() {
-        let mut data: &[u8] = b"hello world";
+        let data: &[u8] = b"hello world";
         let mut reader = BufReader::with_capacity(16, data);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn buf_reader_read_exact_buffer_size() {
-        let mut data: &[u8] = b"exactly sixteen!";
+        let data: &[u8] = b"exactly sixteen!";
         let mut reader = BufReader::with_capacity(16, data);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn buf_reader_large_read_bypasses_buffer() {
-        let mut data: &[u8] = b"large data that exceeds buffer capacity easily";
+        let data: &[u8] = b"large data that exceeds buffer capacity easily";
         let mut reader = BufReader::with_capacity(8, data);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn buf_reader_poll_fill_buf() {
-        let mut data: &[u8] = b"buffered content";
+        let data: &[u8] = b"buffered content";
         let mut reader = BufReader::with_capacity(32, data);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn buf_reader_consume() {
-        let mut data: &[u8] = b"consume me";
+        let data: &[u8] = b"consume me";
         let mut reader = BufReader::with_capacity(32, data);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn buf_reader_discard_buffer() {
-        let mut data: &[u8] = b"discard this";
+        let data: &[u8] = b"discard this";
         let mut reader = BufReader::with_capacity(32, data);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn buf_reader_empty_source() {
-        let mut data: &[u8] = b"";
+        let data: &[u8] = b"";
         let mut reader = BufReader::new(data);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn buf_reader_multiple_reads() {
-        let mut data: &[u8] = b"first second third";
+        let data: &[u8] = b"first second third";
         let mut reader = BufReader::with_capacity(8, data);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);

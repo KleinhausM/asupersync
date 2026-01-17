@@ -91,7 +91,7 @@ impl<P: Policy> Scope<'_, P> {
     pub fn spawn<F, Fut>(
         &self,
         state: &mut RuntimeState,
-        cx: &Cx,
+        _cx: &Cx,
         f: F,
     ) -> (TaskHandle<Fut::Output>, StoredTask)
     where
@@ -110,7 +110,7 @@ impl<P: Policy> Scope<'_, P> {
 
         // Create the child task's capability context
         let child_cx = Cx::new(self.region, task_id, self.budget);
-        
+
         // Capture child_cx for result sending
         let cx_for_send = child_cx.clone();
 
@@ -222,7 +222,7 @@ impl<P: Policy> Scope<'_, P> {
     pub fn spawn_blocking<F, R>(
         &self,
         state: &mut RuntimeState,
-        cx: &Cx, // Parent Cx
+        _cx: &Cx, // Parent Cx
         f: F,
     ) -> (TaskHandle<R>, StoredTask)
     where
@@ -240,7 +240,7 @@ impl<P: Policy> Scope<'_, P> {
 
         // Create the child task's capability context
         let child_cx = Cx::new(self.region, task_id, self.budget);
-        
+
         // Capture child_cx for result sending
         let cx_for_send = child_cx.clone();
 
@@ -284,12 +284,18 @@ impl<P: Policy> Scope<'_, P> {
             if !region.add_task(task_id) {
                 // Rollback task creation
                 state.tasks.remove(idx);
-                panic!("Attempted to spawn task into closing/draining region {:?}", self.region);
+                panic!(
+                    "Attempted to spawn task into closing/draining region {:?}",
+                    self.region
+                );
             }
         } else {
             // Rollback task creation
             state.tasks.remove(idx);
-            panic!("Attempted to spawn task into non-existent region {:?}", self.region);
+            panic!(
+                "Attempted to spawn task into non-existent region {:?}",
+                self.region
+            );
         }
 
         task_id
@@ -470,8 +476,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "Attempted to spawn task into closing/draining region")]
     fn spawn_into_closing_region_should_fail() {
-        use crate::types::CancelReason;
-
         let mut state = RuntimeState::new();
         let cx = test_cx();
         let region = state.create_root_region(Budget::INFINITE);

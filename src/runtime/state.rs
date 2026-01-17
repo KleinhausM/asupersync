@@ -130,7 +130,15 @@ impl RuntimeState {
 
         // Add task to the region's task list
         if let Some(region_record) = self.regions.get(region.arena_index()) {
-            region_record.add_task(task_id);
+            if !region_record.add_task(task_id) {
+                // Rollback task creation
+                self.tasks.remove(idx);
+                panic!("Attempted to spawn task into closing/draining region {region:?}");
+            }
+        } else {
+            // Rollback task creation
+            self.tasks.remove(idx);
+            panic!("Attempted to spawn task into non-existent region {region:?}");
         }
 
         // Wrap the future to send the result through the channel
@@ -577,11 +585,11 @@ mod tests {
         ));
         let id = TaskId::from_arena(idx);
         state.tasks.get_mut(idx).expect("task missing").id = id;
-        state
+        assert!(state
             .regions
             .get_mut(region.arena_index())
             .expect("region missing")
-            .add_task(id);
+            .add_task(id));
         id
     }
 
@@ -690,11 +698,11 @@ mod tests {
         ));
         let id = RegionId::from_arena(idx);
         state.regions.get_mut(idx).expect("region missing").id = id;
-        state
+        assert!(state
             .regions
             .get_mut(parent.arena_index())
             .expect("parent missing")
-            .add_child(id);
+            .add_child(id));
         id
     }
 
