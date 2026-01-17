@@ -101,7 +101,7 @@ impl Parker {
 
     pub fn park_timeout(&self, duration: Duration) {
         let (lock, cvar) = &*self.inner;
-        let mut notified = lock.lock().unwrap();
+        let notified = lock.lock().unwrap();
         if !*notified {
             let _ = cvar.wait_timeout(notified, duration).unwrap();
         }

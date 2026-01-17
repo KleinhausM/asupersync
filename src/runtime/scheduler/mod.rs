@@ -41,7 +41,7 @@ impl WorkStealingScheduler {
         // We'll create workers then extract stealers?
         // No, Worker owns LocalQueue.
         // We'll create LocalQueues first.
-        let mut local_queues: Vec<LocalQueue> = (0..worker_count).map(|_| LocalQueue::new()).collect();
+        let local_queues: Vec<LocalQueue> = (0..worker_count).map(|_| LocalQueue::new()).collect();
         
         for q in &local_queues {
             stealers.push(q.stealer());

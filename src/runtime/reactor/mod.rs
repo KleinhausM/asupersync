@@ -4,6 +4,7 @@ pub mod interest;
 pub mod lab;
 
 pub use interest::Interest;
+pub use lab::LabReactor;
 
 use std::io;
 use std::time::Duration;

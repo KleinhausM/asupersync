@@ -334,7 +334,7 @@ struct ResourceTrackerInner {
 }
 
 /// Resource tracker for enforcing limits.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct ResourceTracker {
     inner: Arc<Mutex<ResourceTrackerInner>>,
 }
@@ -428,7 +428,6 @@ impl ResourceTracker {
 }
 
 /// RAII guard that releases resources on drop.
-#[derive(Debug)]
 pub(crate) struct ResourceGuard {
     inner: Arc<Mutex<ResourceTrackerInner>>,
     acquired: ResourceUsage,

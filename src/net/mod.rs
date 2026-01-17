@@ -114,8 +114,10 @@ impl TcpStream {
     }
 
     /// Sets the keepalive option for this socket.
-    pub fn set_keepalive(&self, keepalive: Option<Duration>) -> io::Result<()> {
-        (&*self.inner).set_keepalive(keepalive)
+    pub fn set_keepalive(&self, _keepalive: Option<Duration>) -> io::Result<()> {
+        // (&*self.inner).set_keepalive(keepalive)
+        // Not supported in std::net::TcpStream
+        Err(io::Error::new(io::ErrorKind::Unsupported, "set_keepalive not supported in Phase 0"))
     }
 
     /// Returns a cancel-safe write permit for this stream.

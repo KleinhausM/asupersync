@@ -60,9 +60,10 @@ impl LabReactor {
     }
 
     /// Injects an event into the reactor.
-    pub fn inject_event(&self, token: Token, event: Event, delay: Duration) {
+    pub fn inject_event(&self, token: Token, mut event: Event, delay: Duration) {
         let mut inner = self.inner.lock().unwrap();
         let time = inner.time.saturating_add_nanos(delay.as_nanos() as u64);
+        event.token = token;
         inner.pending.push(TimedEvent { time, event });
     }
 }
