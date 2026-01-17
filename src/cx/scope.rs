@@ -112,6 +112,12 @@ impl<P: Policy> Scope<'_, P> {
         // Create the child task's capability context
         let child_cx = Cx::new(self.region, task_id, self.budget);
 
+        // Set the shared inner state in the TaskRecord
+        // This links the user-facing Cx to the runtime's TaskRecord
+        if let Some(record) = state.tasks.get_mut(task_id.arena_index()) {
+            record.set_cx_inner(child_cx.inner.clone());
+        }
+
         // Capture child_cx for result sending
         let cx_for_send = child_cx.clone();
 
@@ -241,6 +247,11 @@ impl<P: Policy> Scope<'_, P> {
 
         // Create the child task's capability context
         let child_cx = Cx::new(self.region, task_id, self.budget);
+
+        // Set the shared inner state in the TaskRecord
+        if let Some(record) = state.tasks.get_mut(task_id.arena_index()) {
+            record.set_cx_inner(child_cx.inner.clone());
+        }
 
         // Capture child_cx for result sending
         let cx_for_send = child_cx.clone();
@@ -536,6 +547,23 @@ mod tests {
         assert!(region_record.task_ids().contains(&handle1.task_id()));
         assert!(region_record.task_ids().contains(&handle2.task_id()));
         assert!(region_record.task_ids().contains(&handle3.task_id()));
+    }
+
+    #[test]
+    #[should_panic(expected = "Attempted to spawn task into closing/draining region")]
+    fn spawn_into_closing_region_should_fail() {
+        let mut state = RuntimeState::new();
+        let cx = test_cx();
+        let region = state.create_root_region(Budget::INFINITE);
+        let scope = test_scope(region, Budget::INFINITE);
+
+        // Transition region to Closing
+        let region_record = state.regions.get_mut(region.arena_index()).expect("region");
+        region_record.begin_close(None);
+
+        // Attempt to spawn
+        // This should now panic
+        let _ = scope.spawn(&mut state, &cx, |_| async { 42 });
     }
 
     #[test]

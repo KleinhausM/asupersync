@@ -141,14 +141,18 @@ impl RuntimeState {
             panic!("Attempted to spawn task into non-existent region {region:?}");
         }
 
+        // Create the task's capability context
+        let cx = crate::cx::Cx::new(region, task_id, budget);
+        
+        // Link the shared state to the TaskRecord
+        if let Some(record) = self.tasks.get_mut(idx) {
+            record.set_cx_inner(cx.inner.clone());
+        }
+
         // Wrap the future to send the result through the channel
         let wrapped_future = async move {
             let result = future.await;
             // Send the result - ignore error if TaskHandle was dropped
-            // Note: We need a Cx for the oneshot send, but we're inside the future
-            // so we create a minimal test cx. In full implementation, this would
-            // be the task's actual Cx.
-            let cx = crate::cx::Cx::for_testing();
             let _ = result_tx.send(&cx, Ok::<_, JoinError>(result));
         };
 
