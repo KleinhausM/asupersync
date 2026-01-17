@@ -416,6 +416,24 @@ proptest! {
         prop_assert_eq!(result_ab.severity(), result_ba.severity());
     }
 
+    /// LAW-JOIN-ASSOC: join2_outcomes severity is associative
+    ///
+    /// join2(join2(a, b), c) ≃ join2(a, join2(b, c))
+    #[test]
+    fn join2_outcomes_associative_severity(
+        a in arb_outcome(),
+        b in arb_outcome(),
+        c in arb_outcome()
+    ) {
+        let (ab, _, _) = join2_outcomes(a.clone(), b.clone());
+        let (abc, _, _) = join2_outcomes(ab, c.clone());
+
+        let (bc, _, _) = join2_outcomes(b, c);
+        let (a_bc, _, _) = join2_outcomes(a, bc);
+
+        prop_assert_eq!(abc.severity(), a_bc.severity());
+    }
+
     /// LAW: join_all_outcomes aggregation takes worst severity
     ///
     /// The aggregate decision reflects the worst outcome.
