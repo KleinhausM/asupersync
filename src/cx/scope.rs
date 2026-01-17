@@ -3,8 +3,12 @@
 //! A `Scope` provides the API for spawning tasks, creating child regions,
 //! and registering finalizers.
 
-use crate::runtime::RuntimeState;
-use crate::types::{Budget, Policy, RegionId};
+use crate::channel::oneshot;
+use crate::cx::Cx;
+use crate::record::TaskRecord;
+use crate::runtime::task_handle::JoinError;
+use crate::runtime::{RuntimeState, StoredTask, TaskHandle};
+use crate::types::{Budget, Policy, RegionId, TaskId};
 use std::future::Future;
 use std::marker::PhantomData;
 
@@ -48,12 +52,225 @@ impl<P: Policy> Scope<'_, P> {
         self.budget
     }
 
-    // Note: Actual spawn methods will be implemented in later phases
-    // when we have the full runtime infrastructure.
+    // =========================================================================
+    // Task Spawning
+    // =========================================================================
 
-    /// Placeholder for spawn (to be implemented in Phase 0 kernel work).
-    pub fn spawn_placeholder(&self) {
-        // This is a placeholder that will be replaced with real implementation
+    /// Spawns a new task within this scope's region.
+    ///
+    /// The task will be owned by the region and will be cancelled if the
+    /// region is cancelled. The returned `TaskHandle` can be used to await
+    /// the task's result.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The runtime state
+    /// * `cx` - The capability context (used for creating the oneshot channel)
+    /// * `future` - The future to spawn
+    ///
+    /// # Returns
+    ///
+    /// A `TaskHandle<T>` that can be used to await the task's result.
+    ///
+    /// # Type Bounds
+    ///
+    /// * `F: Future + Send + 'static` - The future must be Send for work-stealing
+    /// * `F::Output: Send + 'static` - The output must be Send to cross task boundaries
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let handle = scope.spawn(&mut state, &cx, async {
+    ///     compute_value().await
+    /// });
+    ///
+    /// let result = handle.join(&cx)?;
+    /// ```
+    pub fn spawn<F>(
+        &self,
+        state: &mut RuntimeState,
+        cx: &Cx,
+        future: F,
+    ) -> (TaskHandle<F::Output>, StoredTask)
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        // Create oneshot channel for result delivery
+        let (tx, rx) = oneshot::channel::<Result<F::Output, JoinError>>();
+
+        // Create task record
+        let task_id = self.create_task_record(state);
+
+        // Create the TaskHandle
+        let handle = TaskHandle::new(task_id, rx);
+
+        // Capture the Cx for the wrapped future
+        let cx_clone = cx.clone();
+
+        // Wrap the future to send its result through the channel
+        let wrapped = async move {
+            let result = future.await;
+            // Send the result (ignore errors if receiver dropped)
+            let _ = tx.send(&cx_clone, Ok(result));
+        };
+
+        // Create stored task
+        let stored = StoredTask::new(wrapped);
+
+        (handle, stored)
+    }
+
+    /// Spawns a local (non-Send) task within this scope's region.
+    ///
+    /// Local tasks are pinned to the current worker thread and cannot be
+    /// stolen by other workers. This is useful for futures that contain
+    /// `!Send` types like `Rc` or `RefCell`.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The runtime state
+    /// * `cx` - The capability context
+    /// * `future` - The future to spawn
+    ///
+    /// # Panics
+    ///
+    /// Panics if called from a blocking thread (spawn_blocking context).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use std::rc::Rc;
+    /// use std::cell::RefCell;
+    ///
+    /// // In Phase 1+, this will work with !Send futures:
+    /// let counter = Rc::new(RefCell::new(0));
+    /// let counter_clone = counter.clone();
+    ///
+    /// let (handle, stored) = scope.spawn_local(&mut state, &cx, async move {
+    ///     *counter_clone.borrow_mut() += 1;
+    /// });
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// In Phase 0 (single-threaded), this requires `Send` bounds since we use
+    /// a shared task storage. In Phase 1+, `spawn_local` will use thread-local
+    /// storage and accept `!Send` futures.
+    pub fn spawn_local<F>(
+        &self,
+        state: &mut RuntimeState,
+        cx: &Cx,
+        future: F,
+    ) -> (TaskHandle<F::Output>, StoredTask)
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        // In Phase 0, spawn_local behaves identically to spawn since
+        // everything runs on a single thread. The distinction matters
+        // in Phase 1+ with work-stealing where local tasks cannot migrate.
+        //
+        // TODO(Phase 1): Implement true thread-local task storage that
+        // accepts !Send futures.
+        self.spawn(state, cx, future)
+    }
+
+    /// Spawns a blocking operation on a dedicated thread pool.
+    ///
+    /// This is used for CPU-bound or legacy synchronous operations that
+    /// should not block async workers. The closure runs on a separate
+    /// thread pool designed for blocking work.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The runtime state
+    /// * `cx` - The capability context
+    /// * `f` - The blocking closure to run
+    ///
+    /// # Type Bounds
+    ///
+    /// * `F: FnOnce() -> R + Send + 'static` - The closure must be Send
+    /// * `R: Send + 'static` - The result must be Send
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let (handle, stored) = scope.spawn_blocking(&mut state, &cx, || {
+    ///     // CPU-intensive work
+    ///     expensive_computation()
+    /// });
+    ///
+    /// let result = handle.join(&cx)?;
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// In Phase 0 (single-threaded), blocking operations run inline.
+    /// A proper blocking pool is implemented in Phase 1+.
+    pub fn spawn_blocking<F, R>(
+        &self,
+        state: &mut RuntimeState,
+        cx: &Cx,
+        f: F,
+    ) -> (TaskHandle<R>, StoredTask)
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        // Create oneshot channel for result delivery
+        let (tx, rx) = oneshot::channel::<Result<R, JoinError>>();
+
+        // Create task record
+        let task_id = self.create_task_record(state);
+
+        // Create the TaskHandle
+        let handle = TaskHandle::new(task_id, rx);
+
+        // Capture the Cx for the wrapped future
+        let cx_clone = cx.clone();
+
+        // For Phase 0, we run blocking code as an async task
+        // In Phase 1+, this would spawn on a blocking thread pool
+        let wrapped = async move {
+            // Execute the blocking closure
+            let result = f();
+            // Send the result
+            let _ = tx.send(&cx_clone, Ok(result));
+        };
+
+        let stored = StoredTask::new(wrapped);
+
+        (handle, stored)
+    }
+
+    /// Creates a task record in the runtime state.
+    ///
+    /// This is a helper method used by all spawn variants.
+    fn create_task_record(&self, state: &mut RuntimeState) -> TaskId {
+        use crate::util::ArenaIndex;
+
+        // Create placeholder task record
+        let idx = state.tasks.insert(TaskRecord::new(
+            TaskId::from_arena(ArenaIndex::new(0, 0)), // placeholder ID
+            self.region,
+            self.budget,
+        ));
+
+        // Get the real task ID from the arena index
+        let task_id = TaskId::from_arena(idx);
+
+        // Update the task record with the correct ID
+        if let Some(record) = state.tasks.get_mut(idx) {
+            record.id = task_id;
+        }
+
+        // Add task to the owning region
+        if let Some(region) = state.regions.get(self.region.arena_index()) {
+            region.add_task(task_id);
+        }
+
+        task_id
     }
 
     // =========================================================================
@@ -120,5 +337,111 @@ impl<P: Policy> std::fmt::Debug for Scope<'_, P> {
             .field("region", &self.region)
             .field("budget", &self.budget)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::RuntimeState;
+    use crate::util::ArenaIndex;
+
+    fn test_cx() -> Cx {
+        Cx::new(
+            RegionId::from_arena(ArenaIndex::new(0, 0)),
+            TaskId::from_arena(ArenaIndex::new(0, 0)),
+            Budget::INFINITE,
+        )
+    }
+
+    fn test_scope(region: RegionId, budget: Budget) -> Scope<'static> {
+        Scope::new(region, budget)
+    }
+
+    #[test]
+    fn spawn_creates_task_record() {
+        let mut state = RuntimeState::new();
+        let cx = test_cx();
+        let region = state.create_root_region(Budget::INFINITE);
+        let scope = test_scope(region, Budget::INFINITE);
+
+        let (handle, _stored) = scope.spawn(&mut state, &cx, async { 42 });
+
+        // Task should exist in state
+        let task = state.tasks.get(handle.task_id().arena_index());
+        assert!(task.is_some());
+
+        // Task should be owned by the region
+        let task = task.unwrap();
+        assert_eq!(task.owner, region);
+    }
+
+    #[test]
+    fn spawn_blocking_creates_task_record() {
+        let mut state = RuntimeState::new();
+        let cx = test_cx();
+        let region = state.create_root_region(Budget::INFINITE);
+        let scope = test_scope(region, Budget::INFINITE);
+
+        let (handle, _stored) = scope.spawn_blocking(&mut state, &cx, || 42);
+
+        // Task should exist
+        let task = state.tasks.get(handle.task_id().arena_index());
+        assert!(task.is_some());
+        assert_eq!(task.unwrap().owner, region);
+    }
+
+    #[test]
+    fn spawn_local_creates_task_record() {
+        let mut state = RuntimeState::new();
+        let cx = test_cx();
+        let region = state.create_root_region(Budget::INFINITE);
+        let scope = test_scope(region, Budget::INFINITE);
+
+        // In Phase 0, spawn_local requires Send bounds
+        // In Phase 1+, this will work with !Send futures
+        let (handle, _stored) = scope.spawn_local(&mut state, &cx, async move { 42 });
+
+        // Task should exist
+        let task = state.tasks.get(handle.task_id().arena_index());
+        assert!(task.is_some());
+        assert_eq!(task.unwrap().owner, region);
+    }
+
+    #[test]
+    fn task_added_to_region() {
+        let mut state = RuntimeState::new();
+        let cx = test_cx();
+        let region = state.create_root_region(Budget::INFINITE);
+        let scope = test_scope(region, Budget::INFINITE);
+
+        let (handle, _stored) = scope.spawn(&mut state, &cx, async { 42 });
+
+        // Check region has the task
+        let region_record = state.regions.get(region.arena_index()).unwrap();
+        assert!(region_record.task_ids().contains(&handle.task_id()));
+    }
+
+    #[test]
+    fn multiple_spawns_create_distinct_tasks() {
+        let mut state = RuntimeState::new();
+        let cx = test_cx();
+        let region = state.create_root_region(Budget::INFINITE);
+        let scope = test_scope(region, Budget::INFINITE);
+
+        let (handle1, _) = scope.spawn(&mut state, &cx, async { 1 });
+        let (handle2, _) = scope.spawn(&mut state, &cx, async { 2 });
+        let (handle3, _) = scope.spawn(&mut state, &cx, async { 3 });
+
+        // All task IDs should be different
+        assert_ne!(handle1.task_id(), handle2.task_id());
+        assert_ne!(handle2.task_id(), handle3.task_id());
+        assert_ne!(handle1.task_id(), handle3.task_id());
+
+        // All tasks should be in the region
+        let region_record = state.regions.get(region.arena_index()).unwrap();
+        assert!(region_record.task_ids().contains(&handle1.task_id()));
+        assert!(region_record.task_ids().contains(&handle2.task_id()));
+        assert!(region_record.task_ids().contains(&handle3.task_id()));
     }
 }

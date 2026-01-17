@@ -8,10 +8,12 @@
 
 use crate::record::finalizer::Finalizer;
 use crate::record::{ObligationRecord, RegionRecord, TaskRecord};
+use crate::runtime::stored_task::StoredTask;
 use crate::trace::TraceBuffer;
 use crate::types::policy::PolicyAction;
 use crate::types::{Budget, CancelReason, Outcome, Policy, RegionId, TaskId, Time};
 use crate::util::Arena;
+use std::collections::HashMap;
 use std::future::Future;
 
 /// The global runtime state.
@@ -34,6 +36,11 @@ pub struct RuntimeState {
     pub trace: TraceBuffer,
     /// Next trace sequence number.
     pub trace_seq: u64,
+    /// Stored futures for polling.
+    ///
+    /// Maps task IDs to their pollable futures. When a task is created via
+    /// `spawn()`, its wrapped future is stored here for the executor to poll.
+    pub(crate) stored_futures: HashMap<TaskId, StoredTask>,
 }
 
 impl RuntimeState {
@@ -48,6 +55,7 @@ impl RuntimeState {
             root_region: None,
             trace: TraceBuffer::new(4096),
             trace_seq: 0,
+            stored_futures: HashMap::new(),
         }
     }
 
@@ -67,6 +75,97 @@ impl RuntimeState {
 
         self.root_region = Some(id);
         id
+    }
+
+    /// Creates a task and stores its future for polling.
+    ///
+    /// This is the core spawn primitive. It:
+    /// 1. Creates a TaskRecord in the specified region
+    /// 2. Wraps the future to send its result through a oneshot channel
+    /// 3. Stores the wrapped future for the executor to poll
+    /// 4. Returns a TaskHandle for awaiting the result
+    ///
+    /// # Arguments
+    /// * `region` - The region that will own this task
+    /// * `budget` - The budget for this task
+    /// * `future` - The future to execute
+    ///
+    /// # Returns
+    /// A tuple of (TaskId, TaskHandle) where TaskHandle can be used to await the result.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let (task_id, handle) = state.create_task(region, budget, async { 42 });
+    /// // Later: scheduler.schedule(task_id);
+    /// // Even later: let result = handle.join(cx)?;
+    /// ```
+    pub fn create_task<F, T>(
+        &mut self,
+        region: RegionId,
+        budget: Budget,
+        future: F,
+    ) -> (TaskId, crate::runtime::TaskHandle<T>)
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        use crate::channel::oneshot;
+        use crate::runtime::task_handle::JoinError;
+
+        // Create oneshot channel for the result
+        let (result_tx, result_rx) = oneshot::channel::<Result<T, JoinError>>();
+
+        // Create the TaskRecord
+        let idx = self.tasks.insert(TaskRecord::new(
+            TaskId::from_arena(crate::util::ArenaIndex::new(0, 0)), // placeholder
+            region,
+            budget,
+        ));
+        let task_id = TaskId::from_arena(idx);
+
+        // Update the record with the correct ID
+        if let Some(record) = self.tasks.get_mut(idx) {
+            record.id = task_id;
+        }
+
+        // Add task to the region's task list
+        if let Some(region_record) = self.regions.get(region.arena_index()) {
+            region_record.add_task(task_id);
+        }
+
+        // Wrap the future to send the result through the channel
+        let wrapped_future = async move {
+            let result = future.await;
+            // Send the result - ignore error if TaskHandle was dropped
+            // Note: We need a Cx for the oneshot send, but we're inside the future
+            // so we create a minimal test cx. In full implementation, this would
+            // be the task's actual Cx.
+            let cx = crate::cx::Cx::for_testing();
+            let _ = result_tx.send(&cx, Ok(result));
+        };
+
+        // Store the wrapped future
+        self.stored_futures
+            .insert(task_id, StoredTask::new(wrapped_future));
+
+        // Create the TaskHandle
+        let handle = crate::runtime::TaskHandle::new(task_id, result_rx);
+
+        (task_id, handle)
+    }
+
+    /// Gets a mutable reference to a stored future for polling.
+    ///
+    /// Returns `None` if no future is stored for this task.
+    pub fn get_stored_future(&mut self, task_id: TaskId) -> Option<&mut StoredTask> {
+        self.stored_futures.get_mut(&task_id)
+    }
+
+    /// Removes and returns a stored future.
+    ///
+    /// Called when a task completes to clean up the future storage.
+    pub fn remove_stored_future(&mut self, task_id: TaskId) -> Option<StoredTask> {
+        self.stored_futures.remove(&task_id)
     }
 
     /// Returns the next trace sequence number and increments it.
