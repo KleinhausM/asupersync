@@ -12,8 +12,15 @@
 //!
 //! The [`h2`] module provides HTTP/2 protocol support including frame
 //! parsing, HPACK compression, and flow control.
+//!
+//! # Connection Pooling
+//!
+//! The [`pool`] module provides connection pool management for HTTP clients,
+//! enabling connection reuse for improved performance.
 
 pub mod body;
 pub mod h2;
+pub mod pool;
 
 pub use body::{Body, Empty, Frame, Full, HeaderMap, HeaderName, HeaderValue, SizeHint};
+pub use pool::{Pool, PoolConfig, PoolKey, PoolStats, PooledConnectionMeta, PooledConnectionState};
