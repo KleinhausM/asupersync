@@ -2,9 +2,11 @@
 
 pub mod interest;
 pub mod lab;
+pub mod source;
 
 pub use interest::Interest;
 pub use lab::LabReactor;
+pub use source::{next_source_id, Source, SourceId, SourceWrapper};
 
 use std::io;
 use std::time::Duration;
@@ -138,18 +140,48 @@ pub struct Registration {
 }
 
 /// Trait for an I/O reactor.
+///
+/// Reactors provide platform-specific I/O event notification (epoll, kqueue, IOCP).
+/// Sources are registered with interest flags and receive events through polling.
 pub trait Reactor: Send + Sync {
-    /// Registers interest in I/O events.
+    /// Registers interest in I/O events for a source.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The I/O source to register
+    /// * `token` - A unique token to identify this registration in events
+    /// * `interest` - The events to monitor (readable, writable)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if registration fails (e.g., invalid fd, too many registrations).
     fn register(&self, source: &dyn Source, token: Token, interest: Interest) -> io::Result<()>;
 
-    /// Deregisters a source.
+    /// Deregisters a previously registered source.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The I/O source to deregister
+    /// * `token` - The token used during registration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deregistration fails (e.g., source not registered).
     fn deregister(&self, source: &dyn Source, token: Token) -> io::Result<()>;
 
-    /// Polls for events, blocking up to `timeout`.
+    /// Polls for I/O events, blocking up to `timeout`.
+    ///
+    /// # Arguments
+    ///
+    /// * `events` - Buffer to store received events
+    /// * `timeout` - Maximum time to wait, or None for indefinite wait
+    ///
+    /// # Returns
+    ///
+    /// The number of events received.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling fails (e.g., interrupted).
     fn poll(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize>;
 }
-
-/// Trait for an I/O source.
-pub trait Source: std::os::fd::AsRawFd + Send + Sync {}
-
-impl<T: std::os::fd::AsRawFd + Send + Sync> Source for T {}
