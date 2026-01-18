@@ -234,6 +234,7 @@ where
                             
                             // Try to clone the request for potential retry
                             let backup = policy.clone_request(&req);
+                            // println!("PollReady: req={:?}, backup={:?}", std::any::type_name::<Request>(), backup.is_some());
                             
                             let future = service.call(req);
 
@@ -290,7 +291,7 @@ where
                     }
                 },
                 RetryState::Checking {
-                    service,
+                    service: _service,
                     request,
                     mut result,
                     mut retry_future,
@@ -298,7 +299,7 @@ where
                     match Pin::new(&mut retry_future).poll(cx) {
                         Poll::Pending => {
                             this.state = RetryState::Checking {
-                                service,
+                                service: _service,
                                 request,
                                 result,
                                 retry_future,
@@ -307,11 +308,12 @@ where
                         }
                         Poll::Ready(new_policy) => {
                             // Try to clone the request for retry
-                            let req_ref = request.as_ref().expect("request should exist");
-                            match new_policy.clone_request(req_ref) {
+                            let next_request = request.as_ref().and_then(|r| new_policy.clone_request(r));
+                            
+                            match next_request {
                                 Some(new_request) => {
                                     this.state = RetryState::PollReady {
-                                        service,
+                                        service: _service,
                                         policy: new_policy,
                                         request: Some(new_request),
                                     };
