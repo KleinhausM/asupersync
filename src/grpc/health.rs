@@ -231,8 +231,7 @@ impl HealthService {
     pub fn check_async(
         &self,
         request: Request<HealthCheckRequest>,
-    ) -> Pin<Box<dyn Future<Output = Result<Response<HealthCheckResponse>, Status>> + Send>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<Response<HealthCheckResponse>, Status>> + Send>> {
         let result = self.check(request.get_ref());
         Box::pin(async move { result.map(Response::new) })
     }
@@ -257,7 +256,8 @@ impl ServiceHandler for HealthService {
                 "/grpc.health.v1.Health/Watch",
             ),
         ];
-        static DESC: ServiceDescriptor = ServiceDescriptor::new("Health", "grpc.health.v1", METHODS);
+        static DESC: ServiceDescriptor =
+            ServiceDescriptor::new("Health", "grpc.health.v1", METHODS);
         &DESC
     }
 
@@ -288,12 +288,14 @@ impl HealthReporter {
 
     /// Mark the service as serving.
     pub fn set_serving(&self) {
-        self.service.set_status(&self.service_name, ServingStatus::Serving);
+        self.service
+            .set_status(&self.service_name, ServingStatus::Serving);
     }
 
     /// Mark the service as not serving.
     pub fn set_not_serving(&self) {
-        self.service.set_status(&self.service_name, ServingStatus::NotServing);
+        self.service
+            .set_status(&self.service_name, ServingStatus::NotServing);
     }
 
     /// Get the current status.
@@ -361,7 +363,10 @@ mod tests {
         assert_eq!(ServingStatus::from_i32(0), Some(ServingStatus::Unknown));
         assert_eq!(ServingStatus::from_i32(1), Some(ServingStatus::Serving));
         assert_eq!(ServingStatus::from_i32(2), Some(ServingStatus::NotServing));
-        assert_eq!(ServingStatus::from_i32(3), Some(ServingStatus::ServiceUnknown));
+        assert_eq!(
+            ServingStatus::from_i32(3),
+            Some(ServingStatus::ServiceUnknown)
+        );
         assert_eq!(ServingStatus::from_i32(4), None);
     }
 
@@ -493,7 +498,10 @@ mod tests {
             .add_serving(["a", "b", "c"])
             .build();
 
-        assert_eq!(service.get_status("explicit"), Some(ServingStatus::NotServing));
+        assert_eq!(
+            service.get_status("explicit"),
+            Some(ServingStatus::NotServing)
+        );
         assert_eq!(service.get_status("a"), Some(ServingStatus::Serving));
         assert_eq!(service.get_status("b"), Some(ServingStatus::Serving));
         assert_eq!(service.get_status("c"), Some(ServingStatus::Serving));

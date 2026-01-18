@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::bytes::Bytes;
 
 use super::server::Interceptor;
-use super::status::{Code, Status};
+use super::status::Status;
 use super::streaming::{MetadataValue, Request, Response};
 
 /// A composable layer of interceptors.
@@ -39,7 +39,10 @@ pub struct InterceptorLayer {
 impl std::fmt::Debug for InterceptorLayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InterceptorLayer")
-            .field("interceptors", &format!("[{} interceptors]", self.interceptors.len()))
+            .field(
+                "interceptors",
+                &format!("[{} interceptors]", self.interceptors.len()),
+            )
             .finish()
     }
 }
@@ -185,10 +188,13 @@ impl Interceptor for TracingInterceptor {
     fn intercept_request(&self, request: &mut Request<Bytes>) -> Result<(), Status> {
         if self.generate_request_id && request.metadata().get("x-request-id").is_none() {
             // Generate a simple request ID (in production, use UUID)
-            let id = format!("req-{:016x}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64);
+            let id = format!(
+                "req-{:016x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64
+            );
             request.metadata_mut().insert("x-request-id", id);
         }
         Ok(())
@@ -323,16 +329,17 @@ impl Interceptor for MetadataPropagator {
     fn intercept_request(&self, request: &mut Request<Bytes>) -> Result<(), Status> {
         // For propagation, we store the keys to propagate in a special metadata entry
         // This is a simplified approach that stores the key names
-        let keys_to_propagate: Vec<String> = self.keys.iter()
+        let keys_to_propagate: Vec<String> = self
+            .keys
+            .iter()
             .filter(|key| request.metadata().get(key).is_some())
             .cloned()
             .collect();
 
         if !keys_to_propagate.is_empty() {
-            request.metadata_mut().insert(
-                "x-propagate-keys",
-                keys_to_propagate.join(","),
-            );
+            request
+                .metadata_mut()
+                .insert("x-propagate-keys", keys_to_propagate.join(","));
         }
         Ok(())
     }
@@ -347,7 +354,9 @@ impl Interceptor for MetadataPropagator {
 
 /// Create a metadata propagation interceptor.
 #[must_use]
-pub fn metadata_propagator(keys: impl IntoIterator<Item = impl Into<String>>) -> MetadataPropagator {
+pub fn metadata_propagator(
+    keys: impl IntoIterator<Item = impl Into<String>>,
+) -> MetadataPropagator {
     MetadataPropagator::new(keys)
 }
 
@@ -374,8 +383,7 @@ impl RateLimitInterceptor {
 
     /// Reset the request counter.
     pub fn reset(&self) {
-        self.current
-            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.current.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Get the current request count.
@@ -507,6 +515,7 @@ pub fn timeout_interceptor(timeout_ms: u64) -> TimeoutInterceptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grpc::Code;
 
     #[test]
     fn interceptor_layer_empty() {
