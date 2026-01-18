@@ -70,6 +70,7 @@ pub mod record;
 pub mod runtime;
 pub mod security;
 pub mod service;
+pub mod signal;
 pub mod stream;
 pub mod sync;
 pub mod time;
