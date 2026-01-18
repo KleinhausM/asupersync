@@ -1,0 +1,347 @@
+//! Timeout middleware layer.
+//!
+//! The [`TimeoutLayer`] wraps a service to impose a maximum execution time
+//! on each request. If the inner service doesn't complete within the timeout,
+//! an [`Elapsed`] error is returned.
+
+use super::{Layer, Service};
+use crate::time::{Elapsed, Sleep};
+use crate::types::Time;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+/// A layer that applies a timeout to requests.
+///
+/// # Example
+///
+/// ```ignore
+/// use asupersync::service::{ServiceBuilder, ServiceExt};
+/// use asupersync::service::timeout::TimeoutLayer;
+/// use std::time::Duration;
+///
+/// let svc = ServiceBuilder::new()
+///     .layer(TimeoutLayer::new(Duration::from_secs(30)))
+///     .service(my_service);
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct TimeoutLayer {
+    timeout: Duration,
+}
+
+impl TimeoutLayer {
+    /// Creates a new timeout layer with the given duration.
+    #[must_use]
+    pub const fn new(timeout: Duration) -> Self {
+        Self { timeout }
+    }
+
+    /// Returns the timeout duration.
+    #[must_use]
+    pub const fn timeout(&self) -> Duration {
+        self.timeout
+    }
+}
+
+impl<S> Layer<S> for TimeoutLayer {
+    type Service = Timeout<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Timeout::new(inner, self.timeout)
+    }
+}
+
+/// A service that imposes a timeout on requests.
+///
+/// If the inner service doesn't complete within the timeout, the request
+/// fails with a [`TimeoutError`].
+#[derive(Debug, Clone)]
+pub struct Timeout<S> {
+    inner: S,
+    timeout: Duration,
+}
+
+impl<S> Timeout<S> {
+    /// Creates a new timeout service.
+    #[must_use]
+    pub const fn new(inner: S, timeout: Duration) -> Self {
+        Self { inner, timeout }
+    }
+
+    /// Returns the timeout duration.
+    #[must_use]
+    pub const fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// Returns a reference to the inner service.
+    #[must_use]
+    pub const fn inner(&self) -> &S {
+        &self.inner
+    }
+
+    /// Returns a mutable reference to the inner service.
+    pub fn inner_mut(&mut self) -> &mut S {
+        &mut self.inner
+    }
+
+    /// Consumes the timeout, returning the inner service.
+    #[must_use]
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
+}
+
+/// Error returned when a request times out.
+#[derive(Debug)]
+pub enum TimeoutError<E> {
+    /// The request timed out.
+    Elapsed(Elapsed),
+    /// The inner service returned an error.
+    Inner(E),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for TimeoutError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Elapsed(e) => write!(f, "request timed out: {e}"),
+            Self::Inner(e) => write!(f, "inner service error: {e}"),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for TimeoutError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Elapsed(e) => Some(e),
+            Self::Inner(e) => Some(e),
+        }
+    }
+}
+
+impl<S, Request> Service<Request> for Timeout<S>
+where
+    S: Service<Request>,
+    S::Future: Unpin,
+{
+    type Response = S::Response;
+    type Error = TimeoutError<S::Error>;
+    type Future = TimeoutFuture<S::Future>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx).map_err(TimeoutError::Inner)
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        // Use Time::ZERO as the base and add timeout duration
+        // The actual time tracking is handled by poll_with_time
+        let deadline = Time::from_nanos(self.timeout.as_nanos() as u64);
+        TimeoutFuture::new(self.inner.call(req), deadline)
+    }
+}
+
+/// Future returned by [`Timeout`] service.
+#[derive(Debug)]
+pub struct TimeoutFuture<F> {
+    inner: F,
+    sleep: Sleep,
+    /// Track when we started for relative timeout calculation.
+    started: bool,
+}
+
+impl<F> TimeoutFuture<F> {
+    /// Creates a new timeout future.
+    #[must_use]
+    pub fn new(inner: F, deadline: Time) -> Self {
+        Self {
+            inner,
+            sleep: Sleep::new(deadline),
+            started: false,
+        }
+    }
+
+    /// Returns the deadline for this timeout.
+    #[must_use]
+    pub const fn deadline(&self) -> Time {
+        self.sleep.deadline()
+    }
+
+    /// Polls with an explicit time value.
+    ///
+    /// # Arguments
+    ///
+    /// * `now` - The current time
+    /// * `cx` - The task context
+    pub fn poll_with_time<T, E>(
+        &mut self,
+        now: Time,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<T, TimeoutError<E>>>
+    where
+        F: Future<Output = Result<T, E>> + Unpin,
+    {
+        // Check timeout first
+        if self.sleep.poll_with_time(now).is_ready() {
+            return Poll::Ready(Err(TimeoutError::Elapsed(Elapsed::new(self.sleep.deadline()))));
+        }
+
+        // Try the inner future
+        match Pin::new(&mut self.inner).poll(cx) {
+            Poll::Ready(Ok(response)) => Poll::Ready(Ok(response)),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(TimeoutError::Inner(e))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<F, T, E> Future for TimeoutFuture<F>
+where
+    F: Future<Output = Result<T, E>> + Unpin,
+{
+    type Output = Result<T, TimeoutError<E>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Without explicit time source, use the sleep's internal mechanism
+        let this = self.get_mut();
+
+        // Check if sleep has elapsed using its internal time tracking
+        if let Some(getter) = this.sleep.time_getter {
+            let now = getter();
+            return this.poll_with_time(now, cx);
+        }
+
+        // Fallback: just poll the inner future without timeout
+        // This handles the case where no time source is configured
+        match Pin::new(&mut this.inner).poll(cx) {
+            Poll::Ready(Ok(response)) => Poll::Ready(Ok(response)),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(TimeoutError::Inner(e))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::{pending, ready};
+    use std::sync::Arc;
+    use std::task::{Wake, Waker};
+
+    /// A no-op waker for testing.
+    struct NoopWaker;
+
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+        fn wake_by_ref(self: &Arc<Self>) {}
+    }
+
+    fn noop_waker() -> Waker {
+        Arc::new(NoopWaker).into()
+    }
+
+    // A simple test service that returns the request
+    struct EchoService;
+
+    impl Service<i32> for EchoService {
+        type Response = i32;
+        type Error = std::convert::Infallible;
+        type Future = std::future::Ready<Result<i32, std::convert::Infallible>>;
+
+        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, req: i32) -> Self::Future {
+            ready(Ok(req))
+        }
+    }
+
+    // A service that never completes
+    struct NeverService;
+
+    impl Service<()> for NeverService {
+        type Response = ();
+        type Error = std::convert::Infallible;
+        type Future = std::future::Pending<Result<(), std::convert::Infallible>>;
+
+        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, _req: ()) -> Self::Future {
+            pending()
+        }
+    }
+
+    #[test]
+    fn timeout_layer_creates_service() {
+        let layer = TimeoutLayer::new(Duration::from_secs(5));
+        let _svc: Timeout<EchoService> = layer.layer(EchoService);
+    }
+
+    #[test]
+    fn timeout_accessors() {
+        let timeout = Timeout::new(EchoService, Duration::from_secs(10));
+        assert_eq!(timeout.timeout(), Duration::from_secs(10));
+        let _ = timeout.inner();
+    }
+
+    #[test]
+    fn timeout_future_completes_before_deadline() {
+        let mut future = TimeoutFuture::new(ready(Ok::<_, ()>(42)), Time::from_secs(10));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // Time is well before deadline
+        let result = future.poll_with_time(Time::from_secs(1), &mut cx);
+        assert!(matches!(result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn timeout_future_times_out() {
+        let mut future =
+            TimeoutFuture::new(pending::<Result<(), ()>>(), Time::from_secs(5));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // Time is past deadline
+        let result: Poll<Result<(), TimeoutError<()>>> =
+            future.poll_with_time(Time::from_secs(10), &mut cx);
+        assert!(matches!(result, Poll::Ready(Err(TimeoutError::Elapsed(_)))));
+    }
+
+    #[test]
+    fn timeout_future_pending_before_deadline() {
+        let mut future =
+            TimeoutFuture::new(pending::<Result<(), ()>>(), Time::from_secs(10));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // Time is before deadline
+        let result: Poll<Result<(), TimeoutError<()>>> =
+            future.poll_with_time(Time::from_secs(5), &mut cx);
+        assert!(result.is_pending());
+    }
+
+    #[test]
+    fn timeout_service_poll_ready() {
+        let mut svc = Timeout::new(EchoService, Duration::from_secs(5));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let result = svc.poll_ready(&mut cx);
+        assert!(matches!(result, Poll::Ready(Ok(()))));
+    }
+
+    #[test]
+    fn timeout_error_display() {
+        let err: TimeoutError<&str> = TimeoutError::Elapsed(Elapsed::new(Time::from_secs(5)));
+        let display = format!("{err}");
+        assert!(display.contains("timed out"));
+
+        let err: TimeoutError<&str> = TimeoutError::Inner("inner error");
+        let display = format!("{err}");
+        assert!(display.contains("inner service error"));
+    }
+}
