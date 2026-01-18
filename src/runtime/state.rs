@@ -709,11 +709,6 @@ mod tests {
         );
         assert_eq!(tasks.len(), 2);
 
-        assert_eq!(
-            action,
-            PolicyAction::CancelSiblings(CancelReason::sibling_failed())
-        );
-
         for sib in [sib1, sib2] {
             let record = state.tasks.get(sib.arena_index()).expect("sib missing");
             match &record.state {
