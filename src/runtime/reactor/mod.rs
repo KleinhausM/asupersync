@@ -3,10 +3,12 @@
 pub mod interest;
 pub mod lab;
 pub mod source;
+pub mod token;
 
 pub use interest::Interest;
 pub use lab::LabReactor;
 pub use source::{next_source_id, Source, SourceId, SourceWrapper};
+pub use token::{SlabToken, TokenSlab};
 
 use std::io;
 use std::time::Duration;
