@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="asupersync_illustration.webp" alt="Asupersync - Spec-first, cancel-correct async for Rust" width="800">
+</p>
+
 # Asupersync
 
 <div align="center">
