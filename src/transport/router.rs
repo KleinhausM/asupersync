@@ -167,6 +167,7 @@ impl Endpoint {
 
     /// Returns the failure rate (failures / total operations).
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn failure_rate(&self) -> f64 {
         let sent = self.symbols_sent.load(Ordering::Relaxed);
         let failures = self.failures.load(Ordering::Relaxed);
@@ -184,9 +185,10 @@ impl Endpoint {
 // ============================================================================
 
 /// Load balancing strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LoadBalanceStrategy {
     /// Simple round-robin across all healthy endpoints.
+    #[default]
     RoundRobin,
 
     /// Weighted round-robin based on endpoint weights.
@@ -206,12 +208,6 @@ pub enum LoadBalanceStrategy {
 
     /// Always use first available endpoint.
     FirstAvailable,
-}
-
-impl Default for LoadBalanceStrategy {
-    fn default() -> Self {
-        Self::RoundRobin
-    }
 }
 
 /// State for load balancer.
@@ -244,10 +240,7 @@ impl LoadBalancer {
         endpoints: &'a [Arc<Endpoint>],
         object_id: Option<ObjectId>,
     ) -> Option<&'a Arc<Endpoint>> {
-        let available: Vec<_> = endpoints
-            .iter()
-            .filter(|e| e.state.can_receive())
-            .collect();
+        let available: Vec<_> = endpoints.iter().filter(|e| e.state.can_receive()).collect();
 
         if available.is_empty() {
             return None;
@@ -266,7 +259,7 @@ impl LoadBalancer {
                 }
 
                 let counter = self.rr_counter.fetch_add(1, Ordering::Relaxed);
-                let target = (counter % total_weight as u64) as u32;
+                let target = (counter % u64::from(total_weight)) as u32;
 
                 let mut cumulative = 0u32;
                 for endpoint in &available {
@@ -278,46 +271,43 @@ impl LoadBalancer {
                 available.last().copied()
             }
 
-            LoadBalanceStrategy::LeastConnections => {
-                available
-                    .iter()
-                    .min_by_key(|e| e.connection_count())
-                    .copied()
-            }
+            LoadBalanceStrategy::LeastConnections => available
+                .iter()
+                .min_by_key(|e| e.connection_count())
+                .copied(),
 
-            LoadBalanceStrategy::WeightedLeastConnections => {
-                available
-                    .iter()
-                    .min_by(|a, b| {
-                        let a_score = a.connection_count() as f64 / a.weight.max(1) as f64;
-                        let b_score = b.connection_count() as f64 / b.weight.max(1) as f64;
-                        a_score.partial_cmp(&b_score).unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .copied()
-            }
+            LoadBalanceStrategy::WeightedLeastConnections => available
+                .iter()
+                .min_by(|a, b| {
+                    let a_score = f64::from(a.connection_count()) / f64::from(a.weight.max(1));
+                    let b_score = f64::from(b.connection_count()) / f64::from(b.weight.max(1));
+                    a_score
+                        .partial_cmp(&b_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .copied(),
 
             LoadBalanceStrategy::Random => {
                 // Simple LCG random
                 let seed = self.random_seed.fetch_add(1, Ordering::Relaxed);
-                let random = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let random = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
                 let idx = (random as usize) % available.len();
                 Some(available[idx])
             }
 
-            LoadBalanceStrategy::HashBased => {
-                if let Some(oid) = object_id {
-                    let hash = oid.as_u128() as usize;
-                    Some(available[hash % available.len()])
-                } else {
+            LoadBalanceStrategy::HashBased => object_id.map_or_else(
+                || {
                     // Fall back to round-robin
                     let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) as usize;
                     Some(available[idx % available.len()])
-                }
-            }
+                },
+                |oid| {
+                    let hash = oid.as_u128() as usize;
+                    Some(available[hash % available.len()])
+                },
+            ),
 
-            LoadBalanceStrategy::FirstAvailable => {
-                available.first().copied()
-            }
+            LoadBalanceStrategy::FirstAvailable => available.first().copied(),
         }
     }
 }
@@ -347,6 +337,7 @@ pub struct RoutingEntry {
 
 impl RoutingEntry {
     /// Creates a new routing entry.
+    #[must_use]
     pub fn new(endpoints: Vec<Arc<Endpoint>>, created_at: Time) -> Self {
         Self {
             endpoints,
@@ -381,16 +372,14 @@ impl RoutingEntry {
     /// Returns true if this entry has expired.
     #[must_use]
     pub fn is_expired(&self, now: Time) -> bool {
-        match self.ttl {
-            None => false,
-            Some(ttl) => {
-                let expiry = self.created_at.saturating_add_nanos(ttl.as_nanos());
-                now > expiry
-            }
-        }
+        self.ttl.is_some_and(|ttl| {
+            let expiry = self.created_at.saturating_add_nanos(ttl.as_nanos());
+            now > expiry
+        })
     }
 
     /// Selects an endpoint for routing.
+    #[must_use]
     pub fn select_endpoint(&self, object_id: Option<ObjectId>) -> Option<Arc<Endpoint>> {
         self.load_balancer
             .select(&self.endpoints, object_id)
@@ -475,13 +464,11 @@ impl RoutingTable {
 
     /// Updates endpoint state.
     pub fn update_endpoint_state(&self, id: EndpointId, _state: EndpointState) -> bool {
-        if let Some(_endpoint) = self.endpoints.read().expect("lock poisoned").get(&id) {
-            // Note: In real implementation, endpoint.state would need interior mutability
-            // For now, this is a placeholder showing the API
-            true
-        } else {
-            false
-        }
+        self.endpoints
+            .read()
+            .expect("lock poisoned")
+            .get(&id)
+            .is_some_and(|_endpoint| true)
     }
 
     /// Adds a route.
@@ -521,20 +508,25 @@ impl RoutingTable {
         }
 
         // Try fallback strategies
-        match key {
-            RouteKey::ObjectAndRegion(oid, rid) => {
-                // Try object-only
-                if let Some(entry) = self.routes.read().expect("lock poisoned").
-get(&RouteKey::Object(*oid)) {
-                    return Some(entry.clone());
-                }
-                // Try region-only
-                if let Some(entry) = self.routes.read().expect("lock poisoned").
-get(&RouteKey::Region(*rid)) {
-                    return Some(entry.clone());
-                }
+        if let RouteKey::ObjectAndRegion(oid, rid) = key {
+            // Try object-only
+            if let Some(entry) = self
+                .routes
+                .read()
+                .expect("lock poisoned")
+                .get(&RouteKey::Object(*oid))
+            {
+                return Some(entry.clone());
             }
-            _ => {}
+            // Try region-only
+            if let Some(entry) = self
+                .routes
+                .read()
+                .expect("lock poisoned")
+                .get(&RouteKey::Region(*rid))
+            {
+                return Some(entry.clone());
+            }
         }
 
         // Fall back to default
@@ -565,7 +557,7 @@ get(&RouteKey::Region(*rid)) {
     #[must_use]
     pub fn route_count(&self) -> usize {
         let routes = self.routes.read().expect("lock poisoned").len();
-        let default = self.default_route.read().expect("lock poisoned").is_some() as usize;
+        let default = usize::from(self.default_route.read().expect("lock poisoned").is_some());
         routes + default
     }
 }
@@ -640,10 +632,7 @@ impl SymbolRouter {
         let object_id = symbol.object_id();
 
         // Build route keys to try, in order of specificity
-        let keys = vec![
-            RouteKey::Object(object_id),
-            RouteKey::Default,
-        ];
+        let keys = vec![RouteKey::Object(object_id), RouteKey::Default];
 
         for key in &keys {
             if let Some(entry) = self.table.lookup(key) {
@@ -682,7 +671,9 @@ impl SymbolRouter {
 
         // Get the routing entry
         let key = RouteKey::Object(object_id);
-        let entry = self.table.lookup(&key)
+        let entry = self
+            .table
+            .lookup(&key)
             .or_else(|| self.table.lookup(&RouteKey::Default))
             .ok_or_else(|| RoutingError::NoRoute {
                 object_id,
@@ -690,7 +681,8 @@ impl SymbolRouter {
             })?;
 
         // Select multiple endpoints
-        let available: Vec<_> = entry.endpoints
+        let available: Vec<_> = entry
+            .endpoints
             .iter()
             .filter(|e| e.state.can_receive())
             .cloned()
@@ -726,25 +718,26 @@ impl SymbolRouter {
 // ============================================================================
 
 /// Strategy for dispatching symbols.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DispatchStrategy {
     /// Send to single endpoint.
+    #[default]
     Unicast,
 
     /// Send to multiple endpoints.
-    Multicast { count: usize },
+    Multicast {
+        /// Number of endpoints to send to.
+        count: usize,
+    },
 
     /// Send to all available endpoints.
     Broadcast,
 
     /// Send to endpoints until threshold confirmed.
-    QuorumCast { required: usize },
-}
-
-impl Default for DispatchStrategy {
-    fn default() -> Self {
-        Self::Unicast
-    }
+    QuorumCast {
+        /// Number of successful sends required.
+        required: usize,
+    },
 }
 
 /// Result of a dispatch operation.
@@ -846,6 +839,7 @@ pub struct SymbolDispatcher {
 
 impl SymbolDispatcher {
     /// Creates a new dispatcher.
+    #[must_use]
     pub fn new(router: Arc<SymbolRouter>, config: DispatchConfig) -> Self {
         Self {
             router,
@@ -858,7 +852,8 @@ impl SymbolDispatcher {
 
     /// Dispatches a symbol using the default strategy.
     pub async fn dispatch(&self, symbol: Symbol) -> Result<DispatchResult, DispatchError> {
-        self.dispatch_with_strategy(symbol, self.config.default_strategy).await
+        self.dispatch_with_strategy(symbol, self.config.default_strategy)
+            .await
     }
 
     /// Dispatches a symbol with a specific strategy.
@@ -874,17 +869,10 @@ impl SymbolDispatcher {
             return Err(DispatchError::Overloaded);
         }
 
-        let _start = Time::ZERO; // Would use actual time in impl
         let result = match strategy {
-            DispatchStrategy::Unicast => {
-                self.dispatch_unicast(&symbol).await
-            }
-            DispatchStrategy::Multicast { count } => {
-                self.dispatch_multicast(&symbol, count).await
-            }
-            DispatchStrategy::Broadcast => {
-                self.dispatch_broadcast(&symbol).await
-            }
+            DispatchStrategy::Unicast => self.dispatch_unicast(&symbol).await,
+            DispatchStrategy::Multicast { count } => self.dispatch_multicast(&symbol, count).await,
+            DispatchStrategy::Broadcast => self.dispatch_broadcast(&symbol).await,
             DispatchStrategy::QuorumCast { required } => {
                 self.dispatch_quorum(&symbol, required).await
             }
@@ -894,8 +882,10 @@ impl SymbolDispatcher {
 
         match &result {
             Ok(r) => {
-                self.total_dispatched.fetch_add(r.successes as u64, Ordering::Relaxed);
-                self.total_failures.fetch_add(r.failures as u64, Ordering::Relaxed);
+                self.total_dispatched
+                    .fetch_add(r.successes as u64, Ordering::Relaxed);
+                self.total_failures
+                    .fetch_add(r.failures as u64, Ordering::Relaxed);
             }
             Err(_) => {
                 self.total_failures.fetch_add(1, Ordering::Relaxed);
@@ -906,6 +896,7 @@ impl SymbolDispatcher {
     }
 
     /// Dispatches to a single endpoint.
+    #[allow(clippy::unused_async)]
     async fn dispatch_unicast(&self, symbol: &Symbol) -> Result<DispatchResult, DispatchError> {
         let route = self.router.route(symbol)?;
 
@@ -936,6 +927,7 @@ impl SymbolDispatcher {
     }
 
     /// Dispatches to multiple endpoints.
+    #[allow(clippy::unused_async)]
     async fn dispatch_multicast(
         &self,
         symbol: &Symbol,
@@ -987,6 +979,7 @@ impl SymbolDispatcher {
     }
 
     /// Dispatches to all endpoints.
+    #[allow(clippy::unused_async)]
     async fn dispatch_broadcast(&self, _symbol: &Symbol) -> Result<DispatchResult, DispatchError> {
         let endpoints = self.router.table().healthy_endpoints();
 
@@ -1034,6 +1027,7 @@ impl SymbolDispatcher {
     }
 
     /// Dispatches until quorum is reached.
+    #[allow(clippy::unused_async)]
     async fn dispatch_quorum(
         &self,
         _symbol: &Symbol,
@@ -1151,10 +1145,10 @@ impl std::fmt::Display for RoutingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoRoute { object_id, reason } => {
-                write!(f, "no route for object {:?}: {}", object_id, reason)
+                write!(f, "no route for object {object_id:?}: {reason}")
             }
             Self::NoHealthyEndpoints { object_id } => {
-                write!(f, "no healthy endpoints for object {:?}", object_id)
+                write!(f, "no healthy endpoints for object {object_id:?}")
             }
             Self::EmptyTable => write!(f, "routing table is empty"),
         }
@@ -1163,11 +1157,11 @@ impl std::fmt::Display for RoutingError {
 
 impl std::error::Error for RoutingError {}
 
-    impl From<RoutingError> for Error {
-        fn from(e: RoutingError) -> Self {
-            Error::new(ErrorKind::RoutingFailed).with_message(e.to_string())
-        }
+impl From<RoutingError> for Error {
+    fn from(e: RoutingError) -> Self {
+        Self::new(ErrorKind::RoutingFailed).with_message(e.to_string())
     }
+}
 /// Errors from dispatch.
 #[derive(Debug, Clone)]
 pub enum DispatchError {
@@ -1211,17 +1205,23 @@ pub enum DispatchError {
 impl std::fmt::Display for DispatchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RoutingFailed(e) => write!(f, "routing failed: {}", e),
+            Self::RoutingFailed(e) => write!(f, "routing failed: {e}"),
             Self::SendFailed { endpoint, reason } => {
-                write!(f, "send to {} failed: {}", endpoint, reason)
+                write!(f, "send to {endpoint} failed: {reason}")
             }
             Self::Overloaded => write!(f, "dispatcher overloaded"),
             Self::NoEndpoints => write!(f, "no endpoints available"),
-            Self::InsufficientEndpoints { available, required } => {
-                write!(f, "insufficient endpoints: {} available, {} required", available, required)
+            Self::InsufficientEndpoints {
+                available,
+                required,
+            } => {
+                write!(
+                    f,
+                    "insufficient endpoints: {available} available, {required} required"
+                )
             }
             Self::QuorumNotReached { achieved, required } => {
-                write!(f, "quorum not reached: {} of {} required", achieved, required)
+                write!(f, "quorum not reached: {achieved} of {required} required")
             }
             Self::Timeout => write!(f, "dispatch timeout"),
         }
@@ -1236,28 +1236,25 @@ impl From<RoutingError> for DispatchError {
     }
 }
 
-    impl From<DispatchError> for Error {
-        fn from(e: DispatchError) -> Self {
-            match e {
-                DispatchError::RoutingFailed(_) => {
-                    Error::new(ErrorKind::RoutingFailed).with_message(e.to_string())
-                }
-                DispatchError::QuorumNotReached { .. } => {
-                    Error::new(ErrorKind::QuorumNotReached).with_message(e.to_string())
-                }
-                _ => {
-                    Error::new(ErrorKind::DispatchFailed).with_message(e.to_string())
-                }
+impl From<DispatchError> for Error {
+    fn from(e: DispatchError) -> Self {
+        match e {
+            DispatchError::RoutingFailed(_) => {
+                Self::new(ErrorKind::RoutingFailed).with_message(e.to_string())
             }
+            DispatchError::QuorumNotReached { .. } => {
+                Self::new(ErrorKind::QuorumNotReached).with_message(e.to_string())
+            }
+            _ => Self::new(ErrorKind::DispatchFailed).with_message(e.to_string()),
         }
     }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::ArenaIndex;
 
     fn test_endpoint(id: u64) -> Endpoint {
-        Endpoint::new(EndpointId(id), format!("node-{}:8080", id))
+        Endpoint::new(EndpointId(id), format!("node-{id}:8080"))
     }
 
     // Test 1: Endpoint state predicates
@@ -1295,9 +1292,7 @@ mod tests {
     fn test_load_balancer_round_robin() {
         let lb = LoadBalancer::new(LoadBalanceStrategy::RoundRobin);
 
-        let endpoints: Vec<Arc<Endpoint>> = (1..=3)
-            .map(|i| Arc::new(test_endpoint(i)))
-            .collect();
+        let endpoints: Vec<Arc<Endpoint>> = (1..=3).map(|i| Arc::new(test_endpoint(i))).collect();
 
         let e1 = lb.select(&endpoints, None);
         let e2 = lb.select(&endpoints, None);
@@ -1334,9 +1329,7 @@ mod tests {
     fn test_load_balancer_hash_based() {
         let lb = LoadBalancer::new(LoadBalanceStrategy::HashBased);
 
-        let endpoints: Vec<Arc<Endpoint>> = (1..=3)
-            .map(|i| Arc::new(test_endpoint(i)))
-            .collect();
+        let endpoints: Vec<Arc<Endpoint>> = (1..=3).map(|i| Arc::new(test_endpoint(i))).collect();
 
         let oid = ObjectId::new_for_test(42);
 
@@ -1372,12 +1365,12 @@ mod tests {
         let e2 = table.register_endpoint(test_endpoint(2));
 
         // Add default route
-        let default = RoutingEntry::new(vec![e1.clone()], Time::ZERO);
+        let default = RoutingEntry::new(vec![e1], Time::ZERO);
         table.add_route(RouteKey::Default, default);
 
         // Add specific object route
         let oid = ObjectId::new_for_test(42);
-        let specific = RoutingEntry::new(vec![e2.clone()], Time::ZERO);
+        let specific = RoutingEntry::new(vec![e2], Time::ZERO);
         table.add_route(RouteKey::Object(oid), specific);
 
         // Lookup specific route
@@ -1393,8 +1386,7 @@ mod tests {
     // Test 8: Routing entry TTL
     #[test]
     fn test_routing_entry_ttl() {
-        let entry = RoutingEntry::new(vec![], Time::from_secs(100))
-            .with_ttl(Time::from_secs(60));
+        let entry = RoutingEntry::new(vec![], Time::from_secs(100)).with_ttl(Time::from_secs(60));
 
         assert!(!entry.is_expired(Time::from_secs(150)));
         assert!(entry.is_expired(Time::from_secs(170)));
@@ -1408,10 +1400,9 @@ mod tests {
         let e1 = table.register_endpoint(test_endpoint(1));
 
         // Add routes with different TTLs
-        let entry1 = RoutingEntry::new(vec![e1.clone()], Time::from_secs(0))
-            .with_ttl(Time::from_secs(10));
-        let entry2 = RoutingEntry::new(vec![e1], Time::from_secs(0))
-            .with_ttl(Time::from_secs(100));
+        let entry1 =
+            RoutingEntry::new(vec![e1.clone()], Time::from_secs(0)).with_ttl(Time::from_secs(10));
+        let entry2 = RoutingEntry::new(vec![e1], Time::from_secs(0)).with_ttl(Time::from_secs(100));
 
         table.add_route(RouteKey::Object(ObjectId::new_for_test(1)), entry1);
         table.add_route(RouteKey::Object(ObjectId::new_for_test(2)), entry2);
@@ -1521,7 +1512,7 @@ mod tests {
             required: 3,
         };
         assert!(quorum.to_string().contains("quorum"));
-        assert!(quorum.to_string().contains("2"));
-        assert!(quorum.to_string().contains("3"));
+        assert!(quorum.to_string().contains('2'));
+        assert!(quorum.to_string().contains('3'));
     }
 }

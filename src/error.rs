@@ -700,6 +700,7 @@ impl<T> From<SendError<T>> for Error {
 }
 
 /// Extension trait for adding context to Results.
+#[allow(clippy::result_large_err)]
 pub trait ResultExt<T> {
     /// Attach a context message on error.
     fn context(self, msg: impl Into<String>) -> Result<T>;
@@ -810,7 +811,7 @@ mod tests {
     #[test]
     fn error_with_full_context() {
         use crate::util::ArenaIndex;
-        
+
         let task_id = TaskId::from_arena(ArenaIndex::new(1, 0));
         let region_id = RegionId::from_arena(ArenaIndex::new(2, 0));
         let object_id = ObjectId::new_for_test(123);
@@ -824,7 +825,7 @@ mod tests {
         };
 
         let err = Error::new(ErrorKind::Internal).with_context(ctx);
-        
+
         assert_eq!(err.context().task_id, Some(task_id));
         assert_eq!(err.context().region_id, Some(region_id));
         assert_eq!(err.context().object_id, Some(object_id));
