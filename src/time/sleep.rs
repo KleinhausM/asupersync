@@ -7,8 +7,11 @@ use crate::types::Time;
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+static START_TIME: OnceLock<Instant> = OnceLock::new();
 
 /// A future that completes after a specified deadline.
 ///
@@ -176,10 +179,20 @@ impl Sleep {
 
     /// Gets the current time using the configured time getter or default.
     fn current_time(&self) -> Time {
-        // Default: for standalone use without a time getter, return MAX
-        // so sleep never completes without a time source.
-        // In a real runtime, the time source would be provided by context.
-        self.time_getter.map_or(Time::MAX, |getter| getter())
+        self.time_getter.map_or_else(
+            || {
+                // Production: Use wall clock
+                let start = START_TIME.get_or_init(Instant::now);
+                let now = Instant::now();
+                if now < *start {
+                    Time::ZERO
+                } else {
+                    let elapsed = now.duration_since(*start);
+                    Time::from_nanos(elapsed.as_nanos() as u64)
+                }
+            },
+            |getter| getter(),
+        )
     }
 
     /// Polls this sleep with an explicit time value.
@@ -201,9 +214,25 @@ impl Sleep {
 impl Future for Sleep {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let now = self.current_time();
-        self.poll_with_time(now)
+        match self.poll_with_time(now) {
+            Poll::Ready(()) => Poll::Ready(()),
+            Poll::Pending => {
+                // If we are pending and have no time getter (using wall clock),
+                // spawn a background waiter to wake us up.
+                // This ensures we don't hang in a runtime without a timer driver.
+                if self.time_getter.is_none() {
+                    let duration = self.remaining(now);
+                    let waker = cx.waker().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(duration);
+                        waker.wake();
+                    });
+                }
+                Poll::Pending
+            }
+        }
     }
 }
 

@@ -3,7 +3,8 @@
 //! The barrier trips when `parties` callers have arrived. Exactly one
 //! caller observes `is_leader = true` per generation.
 
-use std::sync::Mutex as StdMutex;
+use std::sync::{Condvar, Mutex as StdMutex};
+use std::time::Duration;
 
 use crate::cx::Cx;
 
@@ -35,6 +36,7 @@ struct BarrierState {
 pub struct Barrier {
     parties: usize,
     state: StdMutex<BarrierState>,
+    cvar: Condvar,
 }
 
 impl Barrier {
@@ -51,6 +53,7 @@ impl Barrier {
                 arrived: 0,
                 generation: 0,
             }),
+            cvar: Condvar::new(),
         }
     }
 
@@ -67,46 +70,49 @@ impl Barrier {
     pub fn wait(&self, cx: &Cx) -> Result<BarrierWaitResult, BarrierWaitError> {
         cx.trace("barrier::wait starting");
 
-        let generation = {
-            let mut state = self.state.lock().expect("barrier lock poisoned");
-            let generation = state.generation;
-            state.arrived += 1;
+        let mut state = self.state.lock().expect("barrier lock poisoned");
+        let local_gen = state.generation;
+        state.arrived += 1;
 
-            if state.arrived == self.parties {
-                // Trip the barrier and advance the generation.
-                state.arrived = 0;
-                state.generation = state.generation.wrapping_add(1);
-                cx.trace("barrier::wait leader");
-                return Ok(BarrierWaitResult { is_leader: true });
-            }
-
-            generation
-        };
+        if state.arrived == self.parties {
+            // Trip the barrier and advance the generation.
+            state.arrived = 0;
+            state.generation = state.generation.wrapping_add(1);
+            self.cvar.notify_all();
+            cx.trace("barrier::wait leader");
+            return Ok(BarrierWaitResult { is_leader: true });
+        }
 
         loop {
-            {
-                let state = self.state.lock().expect("barrier lock poisoned");
-                if state.generation != generation {
-                    cx.trace("barrier::wait released");
-                    return Ok(BarrierWaitResult { is_leader: false });
-                }
+            if state.generation != local_gen {
+                cx.trace("barrier::wait released");
+                return Ok(BarrierWaitResult { is_leader: false });
             }
 
             if cx.checkpoint().is_err() {
-                let mut state = self.state.lock().expect("barrier lock poisoned");
-                if state.generation != generation {
-                    // Barrier already tripped; treat as normal completion.
+                // Re-check generation in case we were woken by a trip just as we cancelled
+                if state.generation != local_gen {
                     cx.trace("barrier::wait cancelled after trip");
                     return Ok(BarrierWaitResult { is_leader: false });
                 }
+
                 if state.arrived > 0 {
                     state.arrived -= 1;
                 }
+                // Notify others in case they are waiting for this arrival (which is now gone)
+                // Actually, decreasing arrived means we are further from target.
+                // We typically don't need to notify because nobody is waiting for *less* people.
+                // However, if we were the last one and we leave, we aren't the last one anymore.
+                
                 cx.trace("barrier::wait cancelled");
                 return Err(BarrierWaitError::Cancelled);
             }
 
-            std::thread::yield_now();
+            let (guard, _) = self
+                .cvar
+                .wait_timeout(state, Duration::from_millis(10))
+                .expect("barrier lock poisoned");
+            state = guard;
         }
     }
 }

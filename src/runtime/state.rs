@@ -172,9 +172,9 @@ impl RuntimeState {
 
         // Wrap the future to send the result through the channel
         let wrapped_future = async move {
-            let result = future.await;
+            let _result = future.await;
             // Send the result - ignore error if TaskHandle was dropped
-            let _ = result_tx.send(&cx, Ok::<_, JoinError>(result));
+            let _ = result_tx.send(&cx, Ok::<_, JoinError>(_result));
         };
 
         // Store the wrapped future

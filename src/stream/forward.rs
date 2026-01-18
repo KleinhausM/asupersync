@@ -3,6 +3,7 @@
 use crate::channel::mpsc;
 use crate::cx::Cx;
 use crate::error::SendError;
+use crate::runtime::yield_now;
 use crate::stream::{Stream, StreamExt};
 
 /// Sink wrapper for mpsc sender.
@@ -12,6 +13,7 @@ pub struct SinkStream<T> {
 
 impl<T> SinkStream<T> {
     /// Create a new SinkStream.
+    #[must_use]
     pub fn new(sender: mpsc::Sender<T>) -> Self {
         Self { sender }
     }
@@ -22,23 +24,16 @@ impl<T> SinkStream<T> {
     }
 
     /// Send all items from stream.
-    ///
-    /// Note: This is an async method in the sense that it consumes the stream asynchronously,
-    /// but in Phase 0 `send` is blocking (waiting for capacity).
-    /// Since we don't have async trait methods, and `StreamExt::next()` returns a future,
-    /// we need to await the next item.
-    pub async fn send_all<S>(&self, cx: &Cx, mut stream: S) -> Result<(), SendError<S::Item>>
+    pub async fn send_all<S>(&self, cx: &Cx, stream: S) -> Result<(), SendError<S::Item>>
     where
         S: Stream<Item = T> + Unpin,
     {
-        while let Some(item) = stream.next().await {
-            self.sender.send(cx, item)?;
-        }
-        Ok(())
+        forward(cx, stream, self.sender.clone()).await
     }
 }
 
 /// Convert a stream into a channel sender.
+#[must_use]
 pub fn into_sink<T>(sender: mpsc::Sender<T>) -> SinkStream<T> {
     SinkStream::new(sender)
 }
@@ -53,7 +48,24 @@ where
     S: Stream<Item = T> + Unpin,
 {
     while let Some(item) = stream.next().await {
-        sender.send(cx, item)?;
+        // Use try_send + yield_now to avoid blocking the executor
+        // In Phase 0/1, we might not have async blocking send that yields to executor properly
+        // so we spin with yield_now().
+        let mut pending_item = item;
+        loop {
+            match sender.try_send(pending_item) {
+                Ok(()) => break,
+                Err(SendError::Full(val)) => {
+                    pending_item = val;
+                    // Check cancellation before yielding
+                    if let Err(_e) = cx.checkpoint() {
+                        return Err(SendError::Disconnected(pending_item));
+                    }
+                    yield_now().await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
     Ok(())
 }

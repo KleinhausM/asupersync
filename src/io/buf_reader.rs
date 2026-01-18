@@ -108,6 +108,10 @@ impl<R: AsyncRead + Unpin> AsyncRead for BufReader<R> {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+
         let this = self.get_mut();
 
         // If we have buffered data, copy from it

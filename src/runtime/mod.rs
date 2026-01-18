@@ -23,6 +23,8 @@ pub mod stored_task;
 pub mod task_handle;
 pub mod timer;
 pub mod waker;
+/// Yield points for cooperative multitasking.
+pub mod yield_now;
 
 pub use builder::{JoinHandle, Runtime, RuntimeBuilder, RuntimeHandle};
 pub use config::{BlockingPoolConfig, RuntimeConfig};
@@ -32,3 +34,4 @@ pub use scheduler::Scheduler;
 pub use state::{RuntimeState, SpawnError};
 pub use stored_task::StoredTask;
 pub use task_handle::{JoinError, TaskHandle};
+pub use yield_now::yield_now;

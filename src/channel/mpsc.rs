@@ -328,12 +328,16 @@ impl<T> WeakSender<T> {
     /// Returns `None` if all senders and the receiver have been dropped.
     #[must_use]
     pub fn upgrade(&self) -> Option<Sender<T>> {
-        self.shared.upgrade().map(|shared| {
+        self.shared.upgrade().and_then(|shared| {
             {
                 let mut guard = shared.inner.lock().expect("channel lock poisoned");
+                if guard.sender_count == 0 {
+                    return None;
+                }
                 guard.sender_count += 1;
+                drop(guard);
             }
-            Sender { shared }
+            Some(Sender { shared })
         })
     }
 }
@@ -1004,5 +1008,34 @@ mod tests {
 
         // Still at capacity (2 queued)
         assert!(matches!(tx.try_reserve(), Err(SendError::Full(()))));
+    }
+
+    #[test]
+    fn test_channel_resurrection() {
+        let (tx, rx) = channel::<i32>(10);
+        let weak = tx.downgrade();
+        let cx = test_cx();
+
+        drop(tx);
+        // Now sender_count is 0. Channel is closed.
+        assert!(rx.is_closed());
+        assert_eq!(rx.recv(&cx), Err(RecvError::Disconnected));
+
+        // Upgrade weak sender
+        if let Some(tx2) = weak.upgrade() {
+            // If upgrade succeeds, we resurrected the channel
+            assert!(!rx.is_closed(), "Channel should be open if sender exists");
+            tx2.send(&cx, 99).unwrap();
+            
+            // Receiver sees message after Disconnected?
+            match rx.recv(&cx) {
+                Ok(99) => panic!("Channel resurrected! Recv returned Ok after Disconnected"),
+                Err(RecvError::Disconnected) => {}, // This is what we want (but implementation might behave otherwise)
+                _ => panic!("Unexpected result"),
+            }
+        } else {
+            // Upgrade failed - this is good behavior (if intended)
+            println!("Weak sender upgrade failed as expected");
+        }
     }
 }

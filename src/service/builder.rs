@@ -16,6 +16,12 @@ impl ServiceBuilder<Identity> {
     }
 }
 
+impl Default for ServiceBuilder<Identity> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<L> ServiceBuilder<L> {
     /// Adds a new layer to the builder.
     #[must_use]
