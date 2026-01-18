@@ -51,6 +51,7 @@
 //! - Framework can add domain-specific context
 //! - All capabilities flow through the wrapped Cx
 
+use crate::observability::{DiagnosticContext, LogCollector, LogEntry, SpanId};
 use crate::types::{Budget, CxInner, RegionId, TaskId};
 use std::sync::Arc;
 
@@ -110,6 +111,47 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct Cx {
     pub(crate) inner: Arc<std::sync::RwLock<CxInner>>,
+    observability: Arc<std::sync::RwLock<ObservabilityState>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObservabilityState {
+    collector: Option<LogCollector>,
+    context: DiagnosticContext,
+}
+
+impl ObservabilityState {
+    fn new(region: RegionId, task: TaskId) -> Self {
+        let context = DiagnosticContext::new()
+            .with_task_id(task)
+            .with_region_id(region)
+            .with_span_id(SpanId::new());
+        Self {
+            collector: None,
+            context,
+        }
+    }
+
+    fn derive_child(&self, region: RegionId, task: TaskId) -> Self {
+        let mut context = self.context.clone().fork();
+        context = context.with_task_id(task).with_region_id(region);
+        Self {
+            collector: self.collector.clone(),
+            context,
+        }
+    }
+}
+
+/// Guard that restores the cancellation mask on drop.
+struct MaskGuard<'a> {
+    inner: &'a Arc<std::sync::RwLock<CxInner>>,
+}
+
+impl Drop for MaskGuard<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.inner.write().expect("lock poisoned");
+        inner.mask_depth = inner.mask_depth.saturating_sub(1);
+    }
 }
 
 impl Cx {
@@ -117,14 +159,38 @@ impl Cx {
     #[must_use]
     #[allow(dead_code)]
     pub(crate) fn new(region: RegionId, task: TaskId, budget: Budget) -> Self {
-        Self::from_inner(Arc::new(std::sync::RwLock::new(CxInner::new(
-            region, task, budget,
-        ))))
+        Self::new_with_observability(region, task, budget, None)
     }
 
     /// Creates a new capability context from shared state (internal use).
     pub(crate) fn from_inner(inner: Arc<std::sync::RwLock<CxInner>>) -> Self {
-        Self { inner }
+        let (region, task) = {
+            let guard = inner.read().expect("lock poisoned");
+            (guard.region, guard.task)
+        };
+        Self {
+            inner,
+            observability: Arc::new(std::sync::RwLock::new(ObservabilityState::new(
+                region, task,
+            ))),
+        }
+    }
+
+    /// Creates a new capability context with optional observability state (internal use).
+    pub(crate) fn new_with_observability(
+        region: RegionId,
+        task: TaskId,
+        budget: Budget,
+        observability: Option<ObservabilityState>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(std::sync::RwLock::new(CxInner::new(
+                region, task, budget,
+            ))),
+            observability: Arc::new(std::sync::RwLock::new(
+                observability.unwrap_or_else(|| ObservabilityState::new(region, task)),
+            )),
+        }
     }
 
     /// Creates a capability context for testing purposes.
@@ -275,6 +341,7 @@ impl Cx {
     ///     Ok(())
     /// }
     /// ```
+    #[allow(clippy::result_large_err)]
     pub fn checkpoint(&self) -> Result<(), crate::error::Error> {
         let inner = self.inner.read().expect("lock poisoned");
         if inner.cancel_requested && inner.mask_depth == 0 {
@@ -324,18 +391,6 @@ impl Cx {
             inner.mask_depth += 1;
         }
 
-        // RAII guard ensures mask_depth is decremented even on panic
-        struct MaskGuard<'a> {
-            inner: &'a Arc<std::sync::RwLock<CxInner>>,
-        }
-
-        impl<'a> Drop for MaskGuard<'a> {
-            fn drop(&mut self) {
-                let mut inner = self.inner.write().expect("lock poisoned");
-                inner.mask_depth = inner.mask_depth.saturating_sub(1);
-            }
-        }
-
         let _guard = MaskGuard { inner: &self.inner };
         f()
     }
@@ -365,8 +420,59 @@ impl Cx {
     /// This is currently a placeholder. The full implementation will write
     /// to the trace buffer maintained by the runtime.
     pub fn trace(&self, message: &str) {
-        // In the full implementation, this would write to the trace buffer
-        let _ = message;
+        self.log(LogEntry::trace(message))
+    }
+
+    /// Logs a structured entry to the attached collector, if present.
+    pub fn log(&self, entry: LogEntry) {
+        let obs = self.observability.read().expect("lock poisoned");
+        let Some(collector) = obs.collector.as_ref() else {
+            return;
+        };
+        let entry = entry.with_context(&obs.context);
+        collector.log(entry);
+    }
+
+    /// Returns a snapshot of the current diagnostic context.
+    #[must_use]
+    pub fn diagnostic_context(&self) -> DiagnosticContext {
+        self.observability
+            .read()
+            .expect("lock poisoned")
+            .context
+            .clone()
+    }
+
+    /// Replaces the current diagnostic context.
+    pub fn set_diagnostic_context(&self, ctx: DiagnosticContext) {
+        let mut obs = self.observability.write().expect("lock poisoned");
+        obs.context = ctx;
+    }
+
+    /// Attaches a log collector to this context.
+    pub fn set_log_collector(&self, collector: LogCollector) {
+        let mut obs = self.observability.write().expect("lock poisoned");
+        obs.collector = Some(collector);
+    }
+
+    /// Returns the current log collector, if attached.
+    #[must_use]
+    pub fn log_collector(&self) -> Option<LogCollector> {
+        self.observability
+            .read()
+            .expect("lock poisoned")
+            .collector
+            .clone()
+    }
+
+    /// Derives an observability state for a child task.
+    pub(crate) fn child_observability(
+        &self,
+        region: RegionId,
+        task: TaskId,
+    ) -> ObservabilityState {
+        let obs = self.observability.read().expect("lock poisoned");
+        obs.derive_child(region, task)
     }
 
     /// Sets the cancellation flag (internal use).
@@ -451,10 +557,10 @@ mod tests {
     #[test]
     fn masked_panic_safety() {
         use std::panic::{catch_unwind, AssertUnwindSafe};
-        
+
         let cx = test_cx();
         cx.set_cancel_requested(true);
-        
+
         // Ensure initial state is cancelled (unmasked)
         assert!(cx.checkpoint().is_err());
 
@@ -469,7 +575,7 @@ mod tests {
         // After panic, mask depth should have been restored.
         // If it leaked, checkpoint() will return Ok(()) because it thinks it's still masked.
         assert!(
-            cx.checkpoint().is_err(), 
+            cx.checkpoint().is_err(),
             "Cx remains masked after panic! mask_depth leaked."
         );
     }

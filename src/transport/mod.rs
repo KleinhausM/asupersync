@@ -3,12 +3,19 @@
 //! This module defines the core traits for sending and receiving symbols
 //! across different transport mechanisms (TCP, UDP, in-memory, etc.).
 
+pub mod aggregator;
 pub mod error;
 pub mod router;
 pub mod sink;
 pub mod stream;
 mod tests;
 
+pub use aggregator::{
+    AggregatorConfig, AggregatorStats, DeduplicatorConfig, DeduplicatorStats, MultipathAggregator,
+    PathCharacteristics, PathId, PathSelectionPolicy, PathSet, PathSetStats, PathState,
+    ProcessResult, ReordererConfig, ReordererStats, SymbolDeduplicator, SymbolReorderer,
+    TransportPath,
+};
 pub use error::{SinkError, StreamError};
 pub use router::{
     DispatchConfig, DispatchError, DispatchResult, DispatchStrategy, Endpoint, EndpointId,
@@ -53,11 +60,15 @@ impl SharedChannel {
         // Wake everyone
         {
             let mut wakers = self.send_wakers.lock().unwrap();
-            for w in wakers.drain(..) { w.wake(); }
+            for w in wakers.drain(..) {
+                w.wake();
+            }
         }
         {
             let mut wakers = self.recv_wakers.lock().unwrap();
-            for w in wakers.drain(..) { w.wake(); }
+            for w in wakers.drain(..) {
+                w.wake();
+            }
         }
     }
 }

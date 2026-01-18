@@ -1,15 +1,16 @@
 //! Budget extensions for time operations.
 
 use crate::cx::Cx;
-use crate::time::{sleep_until, Elapsed, Sleep, TimeoutFuture};
+use crate::time::{sleep_until, Elapsed, Sleep};
 use crate::types::{Budget, Time};
 use std::future::Future;
+use std::marker::Unpin;
 use std::time::Duration;
 
 /// Extension trait for Budget deadline operations.
 pub trait BudgetTimeExt {
     /// Get remaining time until deadline.
-    fn remaining_time(&self, now: Time) -> Option<Duration>;
+    fn remaining_duration(&self, now: Time) -> Option<Duration>;
 
     /// Create sleep that respects budget deadline.
     fn deadline_sleep(&self) -> Option<Sleep>;
@@ -19,7 +20,7 @@ pub trait BudgetTimeExt {
 }
 
 impl BudgetTimeExt for Budget {
-    fn remaining_time(&self, now: Time) -> Option<Duration> {
+    fn remaining_duration(&self, now: Time) -> Option<Duration> {
         self.deadline.map(|d| {
             if now >= d {
                 Duration::ZERO
@@ -46,29 +47,27 @@ pub async fn budget_sleep(cx: &Cx, duration: Duration, now: Time) -> Result<(), 
     let budget = cx.budget();
 
     // Use shorter of requested duration or remaining budget
-    let effective_duration = match budget.remaining_time(now) {
-        Some(remaining) if remaining < duration => remaining,
+    // Use BudgetTimeExt::remaining_duration explicit call
+    let remaining = BudgetTimeExt::remaining_duration(&budget, now);
+    
+    let effective_duration = match remaining {
+        Some(rem) if rem < duration => rem,
         _ => duration,
     };
 
-    if effective_duration.is_zero() && budget.deadline_elapsed(now) {
-        return Err(Elapsed::new());
+    if effective_duration.is_zero() && BudgetTimeExt::deadline_elapsed(&budget, now) {
+        let deadline = budget.deadline.unwrap_or(now);
+        return Err(Elapsed::new(deadline));
     }
 
-    // We use the primitive sleep which uses the runtime's time source if available?
-    // Or we use `sleep` from `src/time/sleep.rs`.
-    // That sleep takes `now` and `duration`.
     crate::time::sleep(now, effective_duration).await;
 
     // Check if we were cut short by budget
-    // We need current time again?
-    // Or just check if deadline <= now + effective_duration?
-    // If effective_duration was reduced, it means we hit the deadline.
-    // So we should return Elapsed.
-    if let Some(remaining) = budget.remaining_time(now) {
-        if remaining < duration {
+    if let Some(rem) = BudgetTimeExt::remaining_duration(&budget, now) {
+        if rem < duration {
              // We slept for 'remaining', which means deadline is hit.
-             return Err(Elapsed::new());
+             let deadline = budget.deadline.unwrap_or(now);
+             return Err(Elapsed::new(deadline));
         }
     }
 
@@ -76,7 +75,7 @@ pub async fn budget_sleep(cx: &Cx, duration: Duration, now: Time) -> Result<(), 
 }
 
 /// Timeout that respects budget deadline.
-pub async fn budget_timeout<F: Future>(
+pub async fn budget_timeout<F: Future + Unpin>(
     cx: &Cx,
     duration: Duration,
     future: F,
@@ -85,12 +84,13 @@ pub async fn budget_timeout<F: Future>(
     let budget = cx.budget();
 
     // Use shorter of requested timeout or remaining budget
-    let effective_timeout = match budget.remaining_time(now) {
-        Some(remaining) if remaining < duration => remaining,
+    let remaining = BudgetTimeExt::remaining_duration(&budget, now);
+    let effective_timeout = match remaining {
+        Some(rem) if rem < duration => rem,
         _ => duration,
     };
 
-    crate::time::timeout(effective_timeout, future).await
+    crate::time::timeout(now, effective_timeout, future).await
 }
 
 #[cfg(test)]
@@ -131,9 +131,11 @@ mod tests {
         let cx = test_cx(budget);
 
         futures_lite::future::block_on(async {
-            let result = budget_timeout(&cx, Duration::from_secs(10), async {
+            // Box::pin needed because async block is !Unpin and budget_timeout requires Unpin
+            let future = Box::pin(async {
                 crate::time::sleep(now, Duration::from_secs(1)).await;
-            }, now).await;
+            });
+            let result = budget_timeout(&cx, Duration::from_secs(10), future, now).await;
             assert!(result.is_err());
         });
     }
