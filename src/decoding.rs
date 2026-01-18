@@ -65,17 +65,11 @@ pub enum DecodingError {
 impl From<DecodingError> for Error {
     fn from(err: DecodingError) -> Self {
         match &err {
-            DecodingError::AuthenticationFailed { .. } => {
-                Self::new(ErrorKind::CorruptedSymbol)
-            }
-            DecodingError::InsufficientSymbols { .. } => {
-                Self::new(ErrorKind::InsufficientSymbols)
-            }
+            DecodingError::AuthenticationFailed { .. } => Self::new(ErrorKind::CorruptedSymbol),
+            DecodingError::InsufficientSymbols { .. } => Self::new(ErrorKind::InsufficientSymbols),
             DecodingError::MatrixInversionFailed { .. }
             | DecodingError::InconsistentMetadata { .. }
-            | DecodingError::SymbolSizeMismatch { .. } => {
-                Self::new(ErrorKind::DecodingFailed)
-            }
+            | DecodingError::SymbolSizeMismatch { .. } => Self::new(ErrorKind::DecodingFailed),
             DecodingError::BlockTimeout { .. } => Self::new(ErrorKind::ThresholdTimeout),
         }
         .with_message(err.to_string())
@@ -307,7 +301,9 @@ impl DecodingPipeline {
         let symbol = auth_symbol.into_symbol();
 
         if symbol.len() != usize::from(self.config.symbol_size) {
-            return Ok(SymbolAcceptResult::Rejected(RejectReason::SymbolSizeMismatch));
+            return Ok(SymbolAcceptResult::Rejected(
+                RejectReason::SymbolSizeMismatch,
+            ));
         }
 
         if let Some(object_id) = self.object_id {
@@ -320,17 +316,17 @@ impl DecodingPipeline {
 
         let sbn = symbol.sbn();
         if self.completed_blocks.contains(&sbn) {
-            return Ok(SymbolAcceptResult::Rejected(RejectReason::BlockAlreadyDecoded));
+            return Ok(SymbolAcceptResult::Rejected(
+                RejectReason::BlockAlreadyDecoded,
+            ));
         }
 
         // Ensure block entry exists
-        self.blocks
-            .entry(sbn)
-            .or_insert_with(|| BlockDecoder {
-                sbn,
-                state: BlockDecodingState::Collecting,
-                decoded: None,
-            });
+        self.blocks.entry(sbn).or_insert_with(|| BlockDecoder {
+            sbn,
+            state: BlockDecodingState::Collecting,
+            decoded: None,
+        });
 
         let insert_result = self.symbols.insert(symbol);
         match insert_result {
@@ -345,9 +341,9 @@ impl DecodingPipeline {
                 if block_progress.k.is_none() {
                     self.configure_block_k();
                 }
-                let needed = block_progress
-                    .k
-                    .map_or(0, |k| required_symbols(k, self.config.repair_overhead, self.config.min_overhead));
+                let needed = block_progress.k.map_or(0, |k| {
+                    required_symbols(k, self.config.repair_overhead, self.config.min_overhead)
+                });
                 let received = block_progress.total();
 
                 if threshold_reached {
@@ -362,7 +358,10 @@ impl DecodingPipeline {
 
                 // Reset state to Collecting (if not decoded)
                 if let Some(block) = self.blocks.get_mut(&sbn) {
-                    if !matches!(block.state, BlockDecodingState::Decoded | BlockDecodingState::Failed) {
+                    if !matches!(
+                        block.state,
+                        BlockDecodingState::Decoded | BlockDecodingState::Failed
+                    ) {
                         block.state = BlockDecodingState::Collecting;
                     }
                 }
@@ -428,9 +427,9 @@ impl DecodingPipeline {
                 BlockDecodingState::Failed => BlockStateKind::Failed,
             });
 
-        let symbols_needed = progress
-            .k
-            .map_or(0, |k| required_symbols(k, self.config.repair_overhead, self.config.min_overhead));
+        let symbols_needed = progress.k.map_or(0, |k| {
+            required_symbols(k, self.config.repair_overhead, self.config.min_overhead)
+        });
 
         Some(BlockStatus {
             sbn,
@@ -452,7 +451,13 @@ impl DecodingPipeline {
             let received = self.symbols.len();
             let needed = plans
                 .iter()
-                .map(|plan| required_symbols(plan.k as u16, self.config.repair_overhead, self.config.min_overhead))
+                .map(|plan| {
+                    required_symbols(
+                        plan.k as u16,
+                        self.config.repair_overhead,
+                        self.config.min_overhead,
+                    )
+                })
                 .sum();
             return Err(DecodingError::InsufficientSymbols { received, needed });
         }
@@ -511,7 +516,9 @@ impl DecodingPipeline {
                 if let Some(block) = block {
                     block.state = BlockDecodingState::Failed;
                 }
-                return Some(SymbolAcceptResult::Rejected(RejectReason::MemoryLimitReached));
+                return Some(SymbolAcceptResult::Rejected(
+                    RejectReason::MemoryLimitReached,
+                ));
             }
         };
 
@@ -623,9 +630,7 @@ fn decode_block(plan: &BlockPlan, symbols: &[Symbol]) -> Result<Vec<Symbol>, Dec
     }
 
     let solved = gaussian_elimination(rows, k)?;
-    let object_id = symbols
-        .first()
-        .map_or(ObjectId::NIL, Symbol::object_id);
+    let object_id = symbols.first().map_or(ObjectId::NIL, Symbol::object_id);
 
     let mut decoded = Vec::with_capacity(k);
     for (esi, data) in solved.into_iter().enumerate() {
@@ -673,7 +678,11 @@ fn seed_for(object_id: ObjectId, sbn: u8, esi: u32) -> u64 {
     let mut seed = hi ^ lo.rotate_left(13);
     seed ^= u64::from(sbn) << 56;
     seed ^= u64::from(esi);
-    if seed == 0 { 1 } else { seed }
+    if seed == 0 {
+        1
+    } else {
+        seed
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -790,8 +799,7 @@ mod tests {
             block_timeout: Duration::from_secs(30),
             verify_auth: false,
         });
-        let symbols_per_block =
-            (data_len.div_ceil(usize::from(config.symbol_size))) as u16;
+        let symbols_per_block = (data_len.div_ceil(usize::from(config.symbol_size))) as u16;
         decoder
             .set_object_params(ObjectParams::new(
                 object_id,
@@ -815,8 +823,7 @@ mod tests {
             .map(|res| res.unwrap().into_symbol())
             .collect();
 
-        let mut decoder =
-            decoder_with_params(&config, object_id, data.len(), 1.0, 0);
+        let mut decoder = decoder_with_params(&config, object_id, data.len(), 1.0, 0);
 
         for symbol in symbols {
             let auth = AuthenticatedSymbol::from_parts(
@@ -976,10 +983,9 @@ mod tests {
         );
         let _ = decoder.feed(auth).expect("feed");
 
-        let err = decoder.into_data().expect_err("expected insufficient symbols");
-        assert!(matches!(
-            err,
-            DecodingError::InsufficientSymbols { .. }
-        ));
+        let err = decoder
+            .into_data()
+            .expect_err("expected insufficient symbols");
+        assert!(matches!(err, DecodingError::InsufficientSymbols { .. }));
     }
 }

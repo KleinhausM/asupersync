@@ -350,9 +350,7 @@ mod tests {
     fn format_entry_basic() {
         let entry = LogEntry::new(LogLevel::Info, "test message").with_timestamp_ms(42);
 
-        let config = LogConfig::new()
-            .with_timestamps(true)
-            .with_targets(false);
+        let config = LogConfig::new().with_timestamps(true).with_targets(false);
 
         let formatted = format_entry(&entry, &config);
         assert!(formatted.contains("42ms"));

@@ -1016,8 +1016,14 @@ mod tests {
         assert_eq!(symbol.into_value().unwrap(), value);
 
         let value: Vec<Demo> = vec![
-            Demo { id: 1, name: "a".into() },
-            Demo { id: 2, name: "b".into() },
+            Demo {
+                id: 1,
+                name: "a".into(),
+            },
+            Demo {
+                id: 2,
+                name: "b".into(),
+            },
         ];
         let symbol = TypedSymbol::from_value(&value, SerializationFormat::Bincode).unwrap();
         assert_eq!(symbol.into_value().unwrap(), value);
@@ -1036,7 +1042,10 @@ mod tests {
 
     #[test]
     fn test_messagepack_format() {
-        let value = Demo { id: 1, name: "msgpack".to_string() };
+        let value = Demo {
+            id: 1,
+            name: "msgpack".to_string(),
+        };
         let symbol = TypedSymbol::from_value(&value, SerializationFormat::MessagePack).unwrap();
         assert_eq!(symbol.format(), SerializationFormat::MessagePack);
         assert_eq!(symbol.into_value().unwrap(), value);
@@ -1044,7 +1053,10 @@ mod tests {
 
     #[test]
     fn test_bincode_format() {
-        let value = Demo { id: 2, name: "bincode".to_string() };
+        let value = Demo {
+            id: 2,
+            name: "bincode".to_string(),
+        };
         let symbol = TypedSymbol::from_value(&value, SerializationFormat::Bincode).unwrap();
         assert_eq!(symbol.format(), SerializationFormat::Bincode);
         assert_eq!(symbol.into_value().unwrap(), value);
@@ -1052,7 +1064,10 @@ mod tests {
 
     #[test]
     fn test_json_format() {
-        let value = Demo { id: 3, name: "json".to_string() };
+        let value = Demo {
+            id: 3,
+            name: "json".to_string(),
+        };
         let symbol = TypedSymbol::from_value(&value, SerializationFormat::Json).unwrap();
         assert_eq!(symbol.format(), SerializationFormat::Json);
         assert_eq!(symbol.into_value().unwrap(), value);

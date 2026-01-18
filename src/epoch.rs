@@ -207,16 +207,22 @@ impl EpochConfig {
     /// Validates the configuration.
     pub fn validate(&self) -> Result<(), Box<Error>> {
         if self.min_duration > self.target_duration {
-            return Err(Box::new(Error::new(ErrorKind::InvalidEncodingParams)
-                .with_message("min_duration must not exceed target_duration")));
+            return Err(Box::new(
+                Error::new(ErrorKind::InvalidEncodingParams)
+                    .with_message("min_duration must not exceed target_duration"),
+            ));
         }
         if self.target_duration > self.max_duration {
-            return Err(Box::new(Error::new(ErrorKind::InvalidEncodingParams)
-                .with_message("target_duration must not exceed max_duration")));
+            return Err(Box::new(
+                Error::new(ErrorKind::InvalidEncodingParams)
+                    .with_message("target_duration must not exceed max_duration"),
+            ));
         }
         if self.require_quorum && self.quorum_size == 0 {
-            return Err(Box::new(Error::new(ErrorKind::InvalidEncodingParams)
-                .with_message("quorum_size must be > 0 when require_quorum is true")));
+            return Err(Box::new(
+                Error::new(ErrorKind::InvalidEncodingParams)
+                    .with_message("quorum_size must be > 0 when require_quorum is true"),
+            ));
         }
         Ok(())
     }
@@ -293,9 +299,8 @@ pub struct Epoch {
 impl Epoch {
     /// Creates a new epoch.
     pub fn new(id: EpochId, started_at: Time, config: EpochConfig) -> Self {
-        let expected_end = Time::from_nanos(
-            started_at.as_nanos() + config.target_duration.as_nanos()
-        );
+        let expected_end =
+            Time::from_nanos(started_at.as_nanos() + config.target_duration.as_nanos());
         Self {
             id,
             state: EpochState::Active,
@@ -323,18 +328,16 @@ impl Epoch {
     /// Returns true if the epoch has exceeded its maximum duration.
     #[must_use]
     pub fn is_overdue(&self, now: Time) -> bool {
-        let max_end = Time::from_nanos(
-            self.started_at.as_nanos() + self.config.max_duration.as_nanos()
-        );
+        let max_end =
+            Time::from_nanos(self.started_at.as_nanos() + self.config.max_duration.as_nanos());
         now > max_end
     }
 
     /// Returns true if the epoch can transition (met minimum duration).
     #[must_use]
     pub fn can_transition(&self, now: Time) -> bool {
-        let min_end = Time::from_nanos(
-            self.started_at.as_nanos() + self.config.min_duration.as_nanos()
-        );
+        let min_end =
+            Time::from_nanos(self.started_at.as_nanos() + self.config.min_duration.as_nanos());
         now >= min_end
     }
 
@@ -344,7 +347,9 @@ impl Epoch {
         if now >= self.expected_end {
             None
         } else {
-            Some(Time::from_nanos(self.expected_end.as_nanos() - now.as_nanos()))
+            Some(Time::from_nanos(
+                self.expected_end.as_nanos() - now.as_nanos(),
+            ))
         }
     }
 
@@ -356,8 +361,10 @@ impl Epoch {
     /// Begins the ending phase (grace period).
     pub fn begin_ending(&mut self, _now: Time) -> Result<(), Box<Error>> {
         if self.state != EpochState::Active {
-            return Err(Box::new(Error::new(ErrorKind::InvalidStateTransition)
-                .with_message(format!("Cannot end epoch in state {:?}", self.state))));
+            return Err(Box::new(
+                Error::new(ErrorKind::InvalidStateTransition)
+                    .with_message(format!("Cannot end epoch in state {:?}", self.state)),
+            ));
         }
         self.state = EpochState::Ending;
         Ok(())
@@ -366,8 +373,10 @@ impl Epoch {
     /// Completes the epoch.
     pub fn complete(&mut self, now: Time) -> Result<(), Box<Error>> {
         if !matches!(self.state, EpochState::Active | EpochState::Ending) {
-            return Err(Box::new(Error::new(ErrorKind::InvalidStateTransition)
-                .with_message(format!("Cannot complete epoch in state {:?}", self.state))));
+            return Err(Box::new(
+                Error::new(ErrorKind::InvalidStateTransition)
+                    .with_message(format!("Cannot complete epoch in state {:?}", self.state)),
+            ));
         }
         self.state = EpochState::Ended;
         self.ended_at = Some(now);
@@ -646,11 +655,17 @@ impl EpochBarrier {
     ///
     /// Returns `Ok(Some(result))` if this arrival triggered the barrier,
     /// `Ok(None)` if still waiting for more arrivals.
-    pub fn arrive(&self, participant_id: &str, now: Time) -> Result<Option<BarrierResult>, Box<Error>> {
+    pub fn arrive(
+        &self,
+        participant_id: &str,
+        now: Time,
+    ) -> Result<Option<BarrierResult>, Box<Error>> {
         // Check if already triggered
         if self.is_triggered() {
-            return Err(Box::new(Error::new(ErrorKind::InvalidStateTransition)
-                .with_message("Barrier already triggered")));
+            return Err(Box::new(
+                Error::new(ErrorKind::InvalidStateTransition)
+                    .with_message("Barrier already triggered"),
+            ));
         }
 
         // Check for timeout
@@ -672,8 +687,10 @@ impl EpochBarrier {
         {
             let mut participants = self.participants.write().expect("lock poisoned");
             if participants.contains(&participant_id.to_string()) {
-                return Err(Box::new(Error::new(ErrorKind::InvalidStateTransition)
-                    .with_message("Participant already arrived")));
+                return Err(Box::new(
+                    Error::new(ErrorKind::InvalidStateTransition)
+                        .with_message("Participant already arrived"),
+                ));
             }
             participants.push(participant_id.to_string());
         }
@@ -804,8 +821,10 @@ impl EpochClock {
         // Complete current epoch if exists
         if let Some(ref mut epoch) = *active {
             if !epoch.can_transition(now) && !epoch.is_overdue(now) {
-                return Err(Box::new(Error::new(ErrorKind::InvalidStateTransition)
-                    .with_message("Epoch has not met minimum duration")));
+                return Err(Box::new(
+                    Error::new(ErrorKind::InvalidStateTransition)
+                        .with_message("Epoch has not met minimum duration"),
+                ));
             }
             epoch.complete(now)?;
 
@@ -1167,15 +1186,15 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if !self.started {
-        if let Err(err) = check_epoch(
-            &self.epoch_ctx,
-            &self.policy,
-            self.time_source.as_ref(),
-            self.epoch_source.as_ref(),
-            false,
-        ) {
-            return Poll::Ready(Err(err));
-        }
+            if let Err(err) = check_epoch(
+                &self.epoch_ctx,
+                &self.policy,
+                self.time_source.as_ref(),
+                self.epoch_source.as_ref(),
+                false,
+            ) {
+                return Poll::Ready(Err(err));
+            }
 
             self.started = true;
             if !self.epoch_ctx.record_operation() {
@@ -1198,9 +1217,7 @@ where
             return Poll::Ready(Err(err));
         }
 
-        Pin::new(&mut self.inner)
-            .poll(cx)
-            .map(Ok)
+        Pin::new(&mut self.inner).poll(cx).map(Ok)
     }
 }
 
@@ -1634,18 +1651,21 @@ impl std::fmt::Display for EpochError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Expired { epoch } => write!(f, "epoch {} expired", epoch),
-            Self::BudgetExhausted { epoch, budget, used } => write!(
-                f,
-                "epoch {} budget exhausted: used {used}/{budget}",
-                epoch
-            ),
+            Self::BudgetExhausted {
+                epoch,
+                budget,
+                used,
+            } => write!(f, "epoch {} budget exhausted: used {used}/{budget}", epoch),
             Self::TransitionOccurred { from, to } => {
                 write!(f, "epoch transition from {} to {}", from, to)
             }
             Self::Mismatch { expected, actual } => {
                 write!(f, "epoch mismatch: expected {}, got {}", expected, actual)
             }
-            Self::ValidityViolation { symbol_epoch, window } => {
+            Self::ValidityViolation {
+                symbol_epoch,
+                window,
+            } => {
                 write!(
                     f,
                     "symbol epoch {} outside validity window [{}, {}]",

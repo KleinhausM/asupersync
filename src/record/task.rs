@@ -175,7 +175,18 @@ impl TaskRecord {
                 cleanup_budget: b,
             } => {
                 existing_reason.strengthen(&reason);
-                *b = b.combine(cleanup_budget);
+                let new_budget = b.combine(cleanup_budget);
+                *b = new_budget;
+
+                // Update shared state so user code sees tighter budget immediately
+                if let Some(inner) = &self.cx_inner {
+                    if let Ok(mut guard) = inner.write() {
+                        guard.budget = new_budget;
+                    }
+                }
+                // Also update polls_remaining to respect tighter quota
+                self.polls_remaining = self.polls_remaining.min(new_budget.poll_quota);
+
                 false
             }
             TaskState::Created | TaskState::Running => {

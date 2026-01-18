@@ -153,7 +153,11 @@ impl Semaphore {
     /// Returns the number of tasks currently waiting for permits.
     #[must_use]
     pub fn waiters(&self) -> usize {
-        self.state.lock().expect("semaphore lock poisoned").waiters.len()
+        self.state
+            .lock()
+            .expect("semaphore lock poisoned")
+            .waiters
+            .len()
     }
 
     /// Closes the semaphore.
@@ -396,7 +400,7 @@ impl OwnedSemaphorePermit {
 
             let success = {
                 let mut state = semaphore.state.lock().expect("semaphore lock poisoned");
-                
+
                 if state.closed {
                     if let Some(pos) = state.waiters.iter().position(|&x| x == waiter_id) {
                         state.waiters.remove(pos);

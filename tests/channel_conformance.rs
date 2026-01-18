@@ -108,6 +108,7 @@ impl<T: Send + Clone + 'static> BroadcastReceiver<T> for BroadcastReceiverWrappe
                 Ok(v) => Ok(v),
                 Err(broadcast::RecvError::Lagged(n)) => Err(BroadcastRecvError::Lagged(n)),
                 Err(broadcast::RecvError::Closed) => Err(BroadcastRecvError::Closed),
+                Err(broadcast::RecvError::Cancelled) => panic!("unexpected cancellation in test"),
             }
         })
     }

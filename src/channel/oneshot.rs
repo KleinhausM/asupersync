@@ -73,12 +73,15 @@ impl<T: std::fmt::Debug> std::error::Error for SendError<T> {}
 pub enum RecvError {
     /// The sender was dropped without sending a value.
     Closed,
+    /// The receive operation was cancelled.
+    Cancelled,
 }
 
 impl std::fmt::Display for RecvError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Closed => write!(f, "receiving on a closed oneshot channel"),
+            Self::Cancelled => write!(f, "receive operation cancelled"),
         }
     }
 }
@@ -352,7 +355,7 @@ impl<T> Future for RecvFuture<'_, T> {
         // 3. Check cancellation
         if self.cx.checkpoint().is_err() {
             self.cx.trace("oneshot::recv cancelled while waiting");
-            return Poll::Ready(Err(RecvError::Closed));
+            return Poll::Ready(Err(RecvError::Cancelled));
         }
 
         // 4. Register waker
@@ -671,7 +674,7 @@ mod tests {
 
         // Don't send anything, so recv will hit checkpoint
         let err = block_on(rx.recv(&cx));
-        assert!(matches!(err, Err(RecvError::Closed)));
+        assert!(matches!(err, Err(RecvError::Cancelled)));
 
         // Sender should still be usable
         drop(tx);

@@ -264,7 +264,7 @@ impl<T> Mutex<T> {
         // Standard try_lock usually allows barging, but strict FIFO would require empty queue.
         // Let's enforce strict FIFO for consistency with `lock`.
         if !state.waiters.is_empty() {
-             return Err(TryLockError::Locked);
+            return Err(TryLockError::Locked);
         }
 
         state.locked = true;

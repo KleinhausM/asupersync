@@ -315,6 +315,7 @@ impl Bulkhead {
         // Keep rejected entries so check_entry can return the proper error
         // queue.retain(|e| !matches!(e.result, Some(Ok(()))));
 
+        drop(queue);
         None
     }
 

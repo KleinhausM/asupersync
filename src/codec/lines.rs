@@ -92,8 +92,7 @@ impl Decoder for LinesCodec {
                 line.truncate(line.len().saturating_sub(1));
             }
 
-            let s =
-                String::from_utf8(line.to_vec()).map_err(|_| LinesCodecError::InvalidUtf8)?;
+            let s = String::from_utf8(line.to_vec()).map_err(|_| LinesCodecError::InvalidUtf8)?;
             Ok(Some(s))
         } else {
             if src.len() > self.max_length {

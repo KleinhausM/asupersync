@@ -334,7 +334,8 @@ impl<'a, RT: RuntimeInterface> TestRunner<'a, RT> {
         let start = Instant::now();
 
         // Catch panics
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test.run(self.runtime)));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test.run(self.runtime)));
 
         let duration = start.elapsed();
 
@@ -371,8 +372,7 @@ impl<'a, RT: RuntimeInterface> TestRunner<'a, RT> {
                 }
 
                 // Filter by test ID
-                if !self.config.test_ids.is_empty()
-                    && !self.config.test_ids.contains(&test.meta.id)
+                if !self.config.test_ids.is_empty() && !self.config.test_ids.contains(&test.meta.id)
                 {
                     return false;
                 }
@@ -492,10 +492,7 @@ pub fn run_comparison<RTA: RuntimeInterface, RTB: RuntimeInterface>(
             continue;
         }
         if !config.tags.is_empty() {
-            let has_tag = config
-                .tags
-                .iter()
-                .any(|tag| test_a.meta.tags.contains(tag));
+            let has_tag = config.tags.iter().any(|tag| test_a.meta.tags.contains(tag));
             if !has_tag {
                 continue;
             }

@@ -366,11 +366,14 @@ pub fn join_all_outcomes<T, E: Clone>(
     let mut successes = Vec::new();
     let mut first_error: Option<E> = None;
     let mut strongest_cancel: Option<CancelReason> = None;
+    let mut panic_payload: Option<PanicPayload> = None;
 
     for (i, outcome) in outcomes.into_iter().enumerate() {
         match outcome {
             Outcome::Panicked(p) => {
-                return (AggregateDecision::Panicked(p), successes);
+                if panic_payload.is_none() {
+                    panic_payload = Some(p);
+                }
             }
             Outcome::Cancelled(r) => match &mut strongest_cancel {
                 None => strongest_cancel = Some(r),
@@ -389,9 +392,14 @@ pub fn join_all_outcomes<T, E: Clone>(
         }
     }
 
-    let decision = strongest_cancel.map_or_else(
-        || first_error.map_or(AggregateDecision::AllOk, AggregateDecision::FirstError),
-        AggregateDecision::Cancelled,
+    let decision = panic_payload.map_or_else(
+        || {
+            strongest_cancel.map_or_else(
+                || first_error.map_or(AggregateDecision::AllOk, AggregateDecision::FirstError),
+                AggregateDecision::Cancelled,
+            )
+        },
+        AggregateDecision::Panicked,
     );
 
     (decision, successes)
@@ -476,7 +484,7 @@ pub fn join_all_to_result<T, E: Clone>(
                     break;
                 }
             }
-            
+
             let total_failures = result.total_count - result.successes.len();
             Err(JoinAllError::Error {
                 error: e,
@@ -620,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn join_all_panic_short_circuits() {
+    fn join_all_panic_collects_all_successes() {
         let outcomes: Vec<Outcome<i32, &str>> = vec![
             Outcome::Ok(1),
             Outcome::Panicked(PanicPayload::new("boom")),
@@ -629,8 +637,10 @@ mod tests {
         let (decision, successes) = join_all_outcomes(outcomes);
 
         assert!(matches!(decision, AggregateDecision::Panicked(_)));
-        // Only first value collected before panic
-        assert_eq!(successes.len(), 1);
+        // All successful values collected (join waits for all branches)
+        assert_eq!(successes.len(), 2);
+        assert_eq!(successes[0], (0, 1));
+        assert_eq!(successes[1], (2, 3));
     }
 
     #[test]

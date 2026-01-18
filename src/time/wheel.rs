@@ -452,8 +452,6 @@ impl TimerWheel {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,7 +535,7 @@ mod tests {
 
         // Advance time
         let wakers = wheel.collect_expired(one_hour);
-        
+
         // Should fire
         assert_eq!(wakers.len(), 1);
         for waker in wakers {

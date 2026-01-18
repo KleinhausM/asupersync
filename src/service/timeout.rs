@@ -183,7 +183,9 @@ impl<F> TimeoutFuture<F> {
     {
         // Check timeout first
         if self.sleep.poll_with_time(now).is_ready() {
-            return Poll::Ready(Err(TimeoutError::Elapsed(Elapsed::new(self.sleep.deadline()))));
+            return Poll::Ready(Err(TimeoutError::Elapsed(Elapsed::new(
+                self.sleep.deadline(),
+            ))));
         }
 
         // Try the inner future
@@ -300,8 +302,7 @@ mod tests {
 
     #[test]
     fn timeout_future_times_out() {
-        let mut future =
-            TimeoutFuture::new(pending::<Result<(), ()>>(), Time::from_secs(5));
+        let mut future = TimeoutFuture::new(pending::<Result<(), ()>>(), Time::from_secs(5));
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
@@ -313,8 +314,7 @@ mod tests {
 
     #[test]
     fn timeout_future_pending_before_deadline() {
-        let mut future =
-            TimeoutFuture::new(pending::<Result<(), ()>>(), Time::from_secs(10));
+        let mut future = TimeoutFuture::new(pending::<Result<(), ()>>(), Time::from_secs(10));
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 

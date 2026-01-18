@@ -231,11 +231,11 @@ where
                         }
                         Poll::Ready(Ok(())) => {
                             let req = request.take().expect("request already taken");
-                            
+
                             // Try to clone the request for potential retry
                             let backup = policy.clone_request(&req);
                             // println!("PollReady: req={:?}, backup={:?}", std::any::type_name::<Request>(), backup.is_some());
-                            
+
                             let future = service.call(req);
 
                             this.state = RetryState::Calling {
@@ -308,8 +308,9 @@ where
                         }
                         Poll::Ready(new_policy) => {
                             // Try to clone the request for retry
-                            let next_request = request.as_ref().and_then(|r| new_policy.clone_request(r));
-                            
+                            let next_request =
+                                request.as_ref().and_then(|r| new_policy.clone_request(r));
+
                             match next_request {
                                 Some(new_request) => {
                                     this.state = RetryState::PollReady {

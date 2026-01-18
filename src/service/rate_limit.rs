@@ -199,7 +199,11 @@ impl<S> RateLimit<S> {
     }
 
     /// Polls readiness with an explicit time value.
-    pub fn poll_ready_with_time(&mut self, now: Time, cx: &mut Context<'_>) -> Poll<Result<(), RateLimitError<std::convert::Infallible>>>
+    pub fn poll_ready_with_time(
+        &mut self,
+        now: Time,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), RateLimitError<std::convert::Infallible>>>
     where
         S: Service<()>,
     {

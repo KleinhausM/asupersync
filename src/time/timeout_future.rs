@@ -71,7 +71,7 @@ impl<F> TimeoutFuture<F> {
     /// assert_eq!(timeout.deadline(), Time::from_secs(5));
     /// ```
     #[must_use]
-    pub const fn new(future: F, deadline: Time) -> Self {
+    pub fn new(future: F, deadline: Time) -> Self {
         Self {
             future,
             sleep: Sleep::new(deadline),
@@ -246,7 +246,7 @@ pub fn timeout<F>(now: Time, duration: Duration, future: F) -> TimeoutFuture<F> 
 /// assert_eq!(future.deadline(), Time::from_secs(10));
 /// ```
 #[must_use]
-pub const fn timeout_at<F>(deadline: Time, future: F) -> TimeoutFuture<F> {
+pub fn timeout_at<F>(deadline: Time, future: F) -> TimeoutFuture<F> {
     TimeoutFuture::new(future, deadline)
 }
 

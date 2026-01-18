@@ -143,7 +143,10 @@ impl SymbolTraceCollector {
         }
 
         if span.kind() == SymbolSpanKind::Decode
-            && matches!(span.status(), SymbolSpanStatus::Ok | SymbolSpanStatus::Error)
+            && matches!(
+                span.status(),
+                SymbolSpanStatus::Ok | SymbolSpanStatus::Error
+            )
         {
             record.is_complete = true;
         }
@@ -189,7 +192,8 @@ impl SymbolTraceCollector {
                         symbols_encoded = symbols_encoded.saturating_add(count);
                     }
                     if encode_duration.is_none() {
-                        encode_duration = span.duration().map(|t| Duration::from_nanos(t.as_nanos()));
+                        encode_duration =
+                            span.duration().map(|t| Duration::from_nanos(t.as_nanos()));
                     }
                     if first_encode_time.is_none() {
                         first_encode_time = Some(span.start_time());
@@ -221,9 +225,7 @@ impl SymbolTraceCollector {
         }
 
         let end_to_end_latency = match (first_encode_time, decode_complete_time) {
-            (Some(start), Some(end)) => {
-                Some(Duration::from_nanos(end.duration_since(start)))
-            }
+            (Some(start), Some(end)) => Some(Duration::from_nanos(end.duration_since(start))),
             _ => None,
         };
 
@@ -295,10 +297,7 @@ impl SymbolTraceCollector {
             traces.remove(&id);
         }
 
-        let max_age_nanos = self
-            .max_age
-            .as_nanos()
-            .min(u128::from(u64::MAX)) as u64;
+        let max_age_nanos = self.max_age.as_nanos().min(u128::from(u64::MAX)) as u64;
         let cutoff = now.saturating_sub_nanos(max_age_nanos);
         traces.retain(|_, r| r.last_updated >= cutoff);
     }
@@ -324,11 +323,7 @@ mod tests {
             RegionTag::new("us-east-1"),
             &mut rng,
         );
-        let span = SymbolSpan::new_encode(
-            ctx,
-            ObjectId::new_for_test(1),
-            Time::from_millis(0),
-        );
+        let span = SymbolSpan::new_encode(ctx, ObjectId::new_for_test(1), Time::from_millis(0));
         collector.record_span(&span, Time::from_millis(0));
 
         let record = collector.get_trace(trace_id).expect("trace should exist");
@@ -347,12 +342,8 @@ mod tests {
             RegionTag::new("sender"),
             &mut rng,
         );
-        let mut decode_span = SymbolSpan::new_decode(
-            ctx,
-            ObjectId::new_for_test(2),
-            4,
-            Time::from_millis(100),
-        );
+        let mut decode_span =
+            SymbolSpan::new_decode(ctx, ObjectId::new_for_test(2), 4, Time::from_millis(100));
         decode_span.complete_ok(Time::from_millis(120));
         collector.record_span(&decode_span, Time::from_millis(120));
 
@@ -389,16 +380,14 @@ mod tests {
             collector.record_span(&tx_span, Time::from_millis(150 + u64::from(i) * 10));
         }
 
-        let mut decode_span = SymbolSpan::new_decode(
-            ctx.child(&mut rng),
-            object_id,
-            10,
-            Time::from_millis(300),
-        );
+        let mut decode_span =
+            SymbolSpan::new_decode(ctx.child(&mut rng), object_id, 10, Time::from_millis(300));
         decode_span.complete_ok(Time::from_millis(400));
         collector.record_span(&decode_span, Time::from_millis(400));
 
-        let summary = collector.get_summary(trace_id).expect("summary should exist");
+        let summary = collector
+            .get_summary(trace_id)
+            .expect("summary should exist");
         assert_eq!(summary.symbols_encoded, 10);
         assert_eq!(summary.symbols_transmitted, 10);
         assert!(summary.success);

@@ -10,10 +10,7 @@ use std::time::Duration;
 /// Render a console-friendly summary string.
 pub fn render_console_summary(summary: &BenchRunSummary) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "Benchmark summary for {}\n",
-        summary.runtime_name
-    ));
+    out.push_str(&format!("Benchmark summary for {}\n", summary.runtime_name));
     out.push_str(&format!(
         "Total: {}  Completed: {}  Failed: {}  Duration: {}ms\n",
         summary.total, summary.completed, summary.failed, summary.duration_ms

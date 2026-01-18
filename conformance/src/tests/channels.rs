@@ -1,6 +1,7 @@
 use crate::{
-    conformance_test, BroadcastReceiver, BroadcastSender, ConformanceTest, MpscReceiver, MpscSender,
-    OneshotSender, RuntimeInterface, TestCategory, TestResult, WatchReceiver, WatchSender,
+    conformance_test, BroadcastReceiver, BroadcastSender, ConformanceTest, MpscReceiver,
+    MpscSender, OneshotSender, RuntimeInterface, TestCategory, TestResult, WatchReceiver,
+    WatchSender,
 };
 
 pub fn collect_tests<RT: RuntimeInterface>() -> Vec<ConformanceTest<RT>> {
@@ -15,12 +16,12 @@ pub fn collect_tests<RT: RuntimeInterface>() -> Vec<ConformanceTest<RT>> {
             test: |rt| {
                 rt.block_on(async {
                     let (tx, mut rx) = rt.mpsc_channel::<i32>(10);
-                    
+
                     for i in 0..10 {
                         tx.send(i).await.expect("send failed");
                     }
                     drop(tx);
-                    
+
                     for i in 0..10 {
                         match rx.recv().await {
                             Some(val) => {
@@ -31,11 +32,11 @@ pub fn collect_tests<RT: RuntimeInterface>() -> Vec<ConformanceTest<RT>> {
                             None => return TestResult::failed("Channel closed prematurely"),
                         }
                     }
-                    
+
                     if rx.recv().await.is_some() {
                         return TestResult::failed("Channel should be empty and closed");
                     }
-                    
+
                     TestResult::passed()
                 })
             }
@@ -51,10 +52,10 @@ pub fn collect_tests<RT: RuntimeInterface>() -> Vec<ConformanceTest<RT>> {
                 rt.block_on(async {
                     let (tx, mut rx) = rt.mpsc_channel::<usize>(100);
                     let mut handles = Vec::new();
-                    
+
                     for i in 0..5 {
                         let tx = tx.clone();
-                        
+
                         handles.push(rt.spawn(async move {
                             for j in 0..10 {
                                 tx.send(i * 10 + j).await.expect("send failed");
@@ -62,27 +63,27 @@ pub fn collect_tests<RT: RuntimeInterface>() -> Vec<ConformanceTest<RT>> {
                         }));
                     }
                     drop(tx);
-                    
+
                     for h in handles {
                         h.await;
                     }
-                    
+
                     let mut received = Vec::new();
                     while let Some(val) = rx.recv().await {
                         received.push(val);
                     }
-                    
+
                     if received.len() != 50 {
                         return TestResult::failed(format!("Expected 50 messages, got {}", received.len()));
                     }
-                    
+
                     received.sort_unstable();
                     let expected: Vec<_> = (0..50).collect();
-                    
+
                     if received != expected {
                          return TestResult::failed("Received messages mismatch");
                     }
-                    
+
                     TestResult::passed()
                 })
             }
@@ -135,23 +136,23 @@ pub fn collect_tests<RT: RuntimeInterface>() -> Vec<ConformanceTest<RT>> {
                 rt.block_on(async {
                     let (tx, mut rx1) = rt.broadcast_channel::<i32>(10);
                     let mut rx2 = tx.subscribe();
-                    
+
                     tx.send(10).expect("send failed");
                     tx.send(20).expect("send failed");
-                    
+
                     let v1_1 = rx1.recv().await.expect("rx1 recv 1");
                     let v1_2 = rx1.recv().await.expect("rx1 recv 2");
-                    
+
                     let v2_1 = rx2.recv().await.expect("rx2 recv 1");
                     let v2_2 = rx2.recv().await.expect("rx2 recv 2");
-                    
+
                     if v1_1 != 10 || v1_2 != 20 {
                         return TestResult::failed("rx1 received wrong values");
                     }
                     if v2_1 != 10 || v2_2 != 20 {
                         return TestResult::failed("rx2 received wrong values");
                     }
-                    
+
                     TestResult::passed()
                 })
             }
@@ -166,23 +167,23 @@ pub fn collect_tests<RT: RuntimeInterface>() -> Vec<ConformanceTest<RT>> {
             test: |rt| {
                 rt.block_on(async {
                     let (tx, mut rx) = rt.watch_channel::<i32>(0);
-                    
+
                     if rx.borrow_and_clone() != 0 {
                         return TestResult::failed("Initial value mismatch");
                     }
-                    
+
                     tx.send(1).expect("send failed");
                     rx.changed().await.expect("changed failed");
                     if rx.borrow_and_clone() != 1 {
                         return TestResult::failed("Update 1 mismatch");
                     }
-                    
+
                     tx.send(2).expect("send failed");
                     rx.changed().await.expect("changed failed");
                     if rx.borrow_and_clone() != 2 {
                         return TestResult::failed("Update 2 mismatch");
                     }
-                    
+
                     TestResult::passed()
                 })
             }

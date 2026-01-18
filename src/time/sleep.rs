@@ -7,11 +7,17 @@ use crate::types::Time;
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::OnceLock;
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 static START_TIME: OnceLock<Instant> = OnceLock::new();
+
+#[derive(Debug)]
+struct SleepState {
+    waker: Option<Waker>,
+    spawned: bool,
+}
 
 /// A future that completes after a specified deadline.
 ///
@@ -56,6 +62,8 @@ pub struct Sleep {
     /// Whether this sleep has been polled at least once.
     /// Used for tracing/debugging.
     polled: Cell<bool>,
+    /// Shared state for background waiter thread.
+    state: Arc<Mutex<SleepState>>,
 }
 
 impl Sleep {
@@ -75,11 +83,15 @@ impl Sleep {
     /// assert_eq!(sleep.deadline(), Time::from_secs(5));
     /// ```
     #[must_use]
-    pub const fn new(deadline: Time) -> Self {
+    pub fn new(deadline: Time) -> Self {
         Self {
             deadline,
             time_getter: None,
             polled: Cell::new(false),
+            state: Arc::new(Mutex::new(SleepState {
+                waker: None,
+                spawned: false,
+            })),
         }
     }
 
@@ -116,11 +128,15 @@ impl Sleep {
     /// * `deadline` - The deadline when this sleep completes
     /// * `time_getter` - Function that returns the current time
     #[must_use]
-    pub const fn with_time_getter(deadline: Time, time_getter: fn() -> Time) -> Self {
+    pub fn with_time_getter(deadline: Time, time_getter: fn() -> Time) -> Self {
         Self {
             deadline,
             time_getter: Some(time_getter),
             polled: Cell::new(false),
+            state: Arc::new(Mutex::new(SleepState {
+                waker: None,
+                spawned: false,
+            })),
         }
     }
 
@@ -163,12 +179,16 @@ impl Sleep {
     pub fn reset(&mut self, deadline: Time) {
         self.deadline = deadline;
         self.polled.set(false);
+        let mut state = self.state.lock().expect("sleep state lock poisoned");
+        state.spawned = false;
     }
 
     /// Resets this sleep to complete after the given duration from `now`.
     pub fn reset_after(&mut self, now: Time, duration: Duration) {
         self.deadline = now.saturating_add_nanos(duration.as_nanos() as u64);
         self.polled.set(false);
+        let mut state = self.state.lock().expect("sleep state lock poisoned");
+        state.spawned = false;
     }
 
     /// Returns true if this sleep has been polled at least once.
@@ -223,12 +243,25 @@ impl Future for Sleep {
                 // spawn a background waiter to wake us up.
                 // This ensures we don't hang in a runtime without a timer driver.
                 if self.time_getter.is_none() {
-                    let duration = self.remaining(now);
-                    let waker = cx.waker().clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(duration);
-                        waker.wake();
-                    });
+                    let mut state = self.state.lock().expect("sleep state lock poisoned");
+                    state.waker = Some(cx.waker().clone());
+
+                    if !state.spawned {
+                        state.spawned = true;
+                        let duration = self.remaining(now);
+                        let state_clone = Arc::clone(&self.state);
+                        drop(state);
+
+                        std::thread::spawn(move || {
+                            std::thread::sleep(duration);
+                            let mut state = state_clone.lock().expect("sleep state lock poisoned");
+                            if let Some(waker) = state.waker.take() {
+                                waker.wake();
+                            }
+                            // Reset spawned flag so if we are still pending (rare), we spawn again
+                            state.spawned = false;
+                        });
+                    }
                 }
                 Poll::Pending
             }
@@ -242,6 +275,10 @@ impl Clone for Sleep {
             deadline: self.deadline,
             time_getter: self.time_getter,
             polled: Cell::new(false), // Fresh clone hasn't been polled
+            state: Arc::new(Mutex::new(SleepState {
+                waker: None,
+                spawned: false,
+            })),
         }
     }
 }
@@ -288,7 +325,7 @@ pub fn sleep(now: Time, duration: Duration) -> Sleep {
 /// assert_eq!(sleep_future.deadline(), Time::from_secs(5));
 /// ```
 #[must_use]
-pub const fn sleep_until(deadline: Time) -> Sleep {
+pub fn sleep_until(deadline: Time) -> Sleep {
     Sleep::new(deadline)
 }
 

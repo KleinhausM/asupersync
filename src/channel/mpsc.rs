@@ -1026,11 +1026,11 @@ mod tests {
             // If upgrade succeeds, we resurrected the channel
             assert!(!rx.is_closed(), "Channel should be open if sender exists");
             tx2.send(&cx, 99).unwrap();
-            
+
             // Receiver sees message after Disconnected?
             match rx.recv(&cx) {
                 Ok(99) => panic!("Channel resurrected! Recv returned Ok after Disconnected"),
-                Err(RecvError::Disconnected) => {}, // This is what we want (but implementation might behave otherwise)
+                Err(RecvError::Disconnected) => {} // This is what we want (but implementation might behave otherwise)
                 _ => panic!("Unexpected result"),
             }
         } else {

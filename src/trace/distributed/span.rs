@@ -78,7 +78,11 @@ impl SymbolSpan {
 
     /// Creates a new span for transmission.
     #[must_use]
-    pub fn new_transmit(context: SymbolTraceContext, symbol_id: SymbolId, start_time: Time) -> Self {
+    pub fn new_transmit(
+        context: SymbolTraceContext,
+        symbol_id: SymbolId,
+        start_time: Time,
+    ) -> Self {
         Self {
             context,
             name: "transmit".into(),
@@ -168,7 +172,8 @@ impl SymbolSpan {
     /// Returns the duration of the span.
     #[must_use]
     pub fn duration(&self) -> Option<Time> {
-        self.end_time.map(|end| Time::from_nanos(end.duration_since(self.start_time)))
+        self.end_time
+            .map(|end| Time::from_nanos(end.duration_since(self.start_time)))
     }
 
     /// Returns the object ID.
@@ -253,11 +258,8 @@ mod tests {
             RegionTag::new("test"),
             &mut rng,
         );
-        let mut span = SymbolSpan::new_encode(
-            ctx,
-            ObjectId::new_for_test(1),
-            Time::from_millis(100),
-        );
+        let mut span =
+            SymbolSpan::new_encode(ctx, ObjectId::new_for_test(1), Time::from_millis(100));
         assert!(span.duration().is_none());
         span.complete_ok(Time::from_millis(150));
         assert_eq!(span.duration(), Some(Time::from_millis(50)));
@@ -272,12 +274,8 @@ mod tests {
             RegionTag::new("test"),
             &mut rng,
         );
-        let mut span = SymbolSpan::new_decode(
-            ctx,
-            ObjectId::new_for_test(2),
-            4,
-            Time::from_millis(10),
-        );
+        let mut span =
+            SymbolSpan::new_decode(ctx, ObjectId::new_for_test(2), 4, Time::from_millis(10));
         span.complete_error(Time::from_millis(20), "decode failed");
         assert_eq!(span.status(), SymbolSpanStatus::Error);
         assert_eq!(span.error_message(), Some("decode failed"));

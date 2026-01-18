@@ -58,10 +58,7 @@ pub fn rt_001_basic_spawn_join<RT: RuntimeInterface>() -> ConformanceTest<RT> {
                 let handle = rt.spawn(async { 42i32 });
                 let result = handle.await;
 
-                checkpoint(
-                    "task_completed",
-                    serde_json::json!({"result": result}),
-                );
+                checkpoint("task_completed", serde_json::json!({"result": result}));
 
                 if result != 42 {
                     return TestResult::failed(format!(
@@ -98,10 +95,7 @@ pub fn rt_002_multiple_concurrent<RT: RuntimeInterface>() -> ConformanceTest<RT>
                     .map(|i| rt.spawn(async move { i * 2 }))
                     .collect();
 
-                checkpoint(
-                    "all_spawned",
-                    serde_json::json!({"count": handles.len()}),
-                );
+                checkpoint("all_spawned", serde_json::json!({"count": handles.len()}));
 
                 // Await all tasks
                 let mut results = Vec::with_capacity(NUM_TASKS);
@@ -109,10 +103,7 @@ pub fn rt_002_multiple_concurrent<RT: RuntimeInterface>() -> ConformanceTest<RT>
                     results.push(handle.await);
                 }
 
-                checkpoint(
-                    "all_joined",
-                    serde_json::json!({"count": results.len()}),
-                );
+                checkpoint("all_joined", serde_json::json!({"count": results.len()}));
 
                 // Verify results
                 let expected: Vec<usize> = (0..NUM_TASKS).map(|i| i * 2).collect();
@@ -175,9 +166,7 @@ pub fn rt_003_task_abort<RT: RuntimeInterface>() -> ConformanceTest<RT> {
 
                 // Use short timeout to effectively cancel
                 let short_sleep = rt.sleep(Duration::from_millis(10));
-                let timeout_result = rt
-                    .timeout(Duration::from_millis(50), short_sleep)
-                    .await;
+                let timeout_result = rt.timeout(Duration::from_millis(50), short_sleep).await;
 
                 checkpoint(
                     "timeout_completed",
@@ -246,9 +235,7 @@ pub fn rt_004_handle_drop_no_cancel<RT: RuntimeInterface>() -> ConformanceTest<R
 
                 // Wait for task to complete via channel
                 let timeout_result = rt
-                    .timeout(Duration::from_millis(500), async {
-                        done_rx.recv().await
-                    })
+                    .timeout(Duration::from_millis(500), async { done_rx.recv().await })
                     .await;
 
                 match timeout_result {
@@ -262,9 +249,7 @@ pub fn rt_004_handle_drop_no_cancel<RT: RuntimeInterface>() -> ConformanceTest<R
                             )
                         }
                     }
-                    Ok(None) => {
-                        TestResult::failed("Channel closed unexpectedly".to_string())
-                    }
+                    Ok(None) => TestResult::failed("Channel closed unexpectedly".to_string()),
                     Err(_) => {
                         // Task may not complete in all runtimes when handle is dropped
                         // This is acceptable behavior in some structured concurrency models
@@ -295,9 +280,7 @@ pub fn rt_005_timeout_success<RT: RuntimeInterface>() -> ConformanceTest<RT> {
         },
         |rt| {
             rt.block_on(async {
-                let result = rt
-                    .timeout(Duration::from_secs(1), async { 42 })
-                    .await;
+                let result = rt.timeout(Duration::from_secs(1), async { 42 }).await;
 
                 checkpoint(
                     "timeout_completed",
@@ -307,17 +290,12 @@ pub fn rt_005_timeout_success<RT: RuntimeInterface>() -> ConformanceTest<RT> {
                 match result {
                     Ok(value) => {
                         if value != 42 {
-                            TestResult::failed(format!(
-                                "Expected 42, got {}",
-                                value
-                            ))
+                            TestResult::failed(format!("Expected 42, got {}", value))
                         } else {
                             TestResult::passed()
                         }
                     }
-                    Err(_) => {
-                        TestResult::failed("Fast future should not timeout".to_string())
-                    }
+                    Err(_) => TestResult::failed("Fast future should not timeout".to_string()),
                 }
             })
         },
@@ -373,10 +351,7 @@ pub fn rt_006_timeout_expiration<RT: RuntimeInterface>() -> ConformanceTest<RT> 
                         }
                     }
                     Ok(value) => {
-                        TestResult::failed(format!(
-                            "Slow future should timeout, but got {}",
-                            value
-                        ))
+                        TestResult::failed(format!("Slow future should timeout, but got {}", value))
                     }
                 }
             })
@@ -427,9 +402,7 @@ pub fn rt_007_race_first_wins<RT: RuntimeInterface>() -> ConformanceTest<RT> {
 
                 // Get first result
                 let timeout_result = rt
-                    .timeout(Duration::from_millis(500), async {
-                        result_rx.recv().await
-                    })
+                    .timeout(Duration::from_millis(500), async { result_rx.recv().await })
                     .await;
 
                 let elapsed = start.elapsed();
@@ -445,18 +418,11 @@ pub fn rt_007_race_first_wins<RT: RuntimeInterface>() -> ConformanceTest<RT> {
                 match timeout_result {
                     Ok(Some(winner)) => {
                         // Fast should typically win
-                        checkpoint(
-                            "winner",
-                            serde_json::json!({"winner": winner}),
-                        );
+                        checkpoint("winner", serde_json::json!({"winner": winner}));
                         TestResult::passed()
                     }
-                    Ok(None) => {
-                        TestResult::failed("Channel closed unexpectedly".to_string())
-                    }
-                    Err(_) => {
-                        TestResult::failed("Race timed out".to_string())
-                    }
+                    Ok(None) => TestResult::failed("Channel closed unexpectedly".to_string()),
+                    Err(_) => TestResult::failed("Race timed out".to_string()),
                 }
             })
         },
@@ -533,10 +499,7 @@ pub fn rt_008_nested_spawns<RT: RuntimeInterface>() -> ConformanceTest<RT> {
 
                 let sum: i32 = collected.iter().sum();
                 if sum != 6 {
-                    return TestResult::failed(format!(
-                        "Expected sum 6, got {}",
-                        sum
-                    ));
+                    return TestResult::failed(format!("Expected sum 6, got {}", sum));
                 }
 
                 TestResult::passed()
@@ -585,9 +548,7 @@ pub fn rt_009_panic_handling<RT: RuntimeInterface>() -> ConformanceTest<RT> {
 
                 // Good task should still complete
                 let good_result = rt
-                    .timeout(Duration::from_millis(500), async {
-                        good_rx.recv().await
-                    })
+                    .timeout(Duration::from_millis(500), async { good_rx.recv().await })
                     .await;
 
                 checkpoint(
@@ -597,9 +558,7 @@ pub fn rt_009_panic_handling<RT: RuntimeInterface>() -> ConformanceTest<RT> {
 
                 match good_result {
                     Ok(Some(42)) => TestResult::passed(),
-                    Ok(Some(other)) => {
-                        TestResult::failed(format!("Expected 42, got {}", other))
-                    }
+                    Ok(Some(other)) => TestResult::failed(format!("Expected 42, got {}", other)),
                     Ok(None) => {
                         // Channel closed - might happen in some runtimes
                         checkpoint(
@@ -686,9 +645,7 @@ pub fn rt_010_stress_test<RT: RuntimeInterface>() -> ConformanceTest<RT> {
 
                 // Wait for completion with timeout
                 let timeout_result = rt
-                    .timeout(Duration::from_secs(30), async {
-                        done_rx.recv().await
-                    })
+                    .timeout(Duration::from_secs(30), async { done_rx.recv().await })
                     .await;
 
                 let elapsed = start.elapsed();
@@ -715,18 +672,14 @@ pub fn rt_010_stress_test<RT: RuntimeInterface>() -> ConformanceTest<RT> {
                             TestResult::passed()
                         }
                     }
-                    Ok(None) => {
-                        TestResult::failed(format!(
-                            "Monitor channel closed. Counter: {}/{}",
-                            final_count, NUM_TASKS
-                        ))
-                    }
-                    Err(_) => {
-                        TestResult::failed(format!(
-                            "Stress test timed out. Completed: {}/{}",
-                            final_completed, NUM_TASKS
-                        ))
-                    }
+                    Ok(None) => TestResult::failed(format!(
+                        "Monitor channel closed. Counter: {}/{}",
+                        final_count, NUM_TASKS
+                    )),
+                    Err(_) => TestResult::failed(format!(
+                        "Stress test timed out. Completed: {}/{}",
+                        final_completed, NUM_TASKS
+                    )),
                 }
             })
         },
@@ -739,8 +692,8 @@ mod tests {
     #[test]
     fn test_id_convention() {
         let expected_ids = [
-            "rt-001", "rt-002", "rt-003", "rt-004", "rt-005",
-            "rt-006", "rt-007", "rt-008", "rt-009", "rt-010",
+            "rt-001", "rt-002", "rt-003", "rt-004", "rt-005", "rt-006", "rt-007", "rt-008",
+            "rt-009", "rt-010",
         ];
 
         for id in expected_ids {

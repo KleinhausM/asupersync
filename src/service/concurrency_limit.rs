@@ -174,14 +174,19 @@ where
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // If we already have a permit, we're ready
         if self.permit.is_some() {
-            return self.inner.poll_ready(cx).map_err(ConcurrencyLimitError::Inner);
+            return self
+                .inner
+                .poll_ready(cx)
+                .map_err(ConcurrencyLimitError::Inner);
         }
 
         // Try to acquire a permit
         match OwnedSemaphorePermit::try_acquire(self.semaphore.clone(), 1) {
             Ok(permit) => {
                 self.permit = Some(permit);
-                self.inner.poll_ready(cx).map_err(ConcurrencyLimitError::Inner)
+                self.inner
+                    .poll_ready(cx)
+                    .map_err(ConcurrencyLimitError::Inner)
             }
             Err(TryAcquireError) => {
                 // No permits available - register waker and return pending

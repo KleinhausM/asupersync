@@ -242,10 +242,7 @@ impl<'a, R: RuntimeInterface> BenchRunner<'a, R> {
             }
             Err(err) => {
                 error = Some(err.to_string());
-                collector.error(format!(
-                    "Failed to compute stats for {}: {}",
-                    bench.id, err
-                ));
+                collector.error(format!("Failed to compute stats for {}: {}", bench.id, err));
                 None
             }
         };

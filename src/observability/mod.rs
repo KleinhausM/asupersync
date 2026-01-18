@@ -227,7 +227,7 @@ impl ObservabilityConfig {
     ///
     /// Uses deterministic sampling based on a hash of the provided key.
     #[must_use]
-    #[allow(clippy::cast_sign_loss)] // sample_rate is validated to be 0.0..=1.0
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // sample_rate is validated to be 0.0..=1.0
     pub fn should_sample(&self, key: u64) -> bool {
         if self.sample_rate >= 1.0 {
             return true;

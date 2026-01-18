@@ -57,7 +57,10 @@ impl TraceId {
     #[doc(hidden)]
     #[must_use]
     pub const fn new_for_test(value: u64) -> Self {
-        Self { high: 0, low: value }
+        Self {
+            high: 0,
+            low: value,
+        }
     }
 
     /// The nil (zero) trace ID.

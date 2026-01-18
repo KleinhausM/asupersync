@@ -35,9 +35,9 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::Duration;
 
+pub mod bench;
 pub mod logging;
 pub mod runner;
-pub mod bench;
 pub mod tests;
 
 pub use bench::{
@@ -373,7 +373,7 @@ impl std::error::Error for BroadcastRecvError {}
 pub trait BroadcastSender<T: Send + Clone>: Clone + Send + Sync {
     /// Send a value to all receivers.
     fn send(&self, value: T) -> Result<usize, T>;
-    
+
     /// Create a new receiver.
     fn subscribe(&self) -> Box<dyn BroadcastReceiver<T>>;
 }
@@ -406,7 +406,7 @@ pub trait WatchSender<T: Send + Sync>: Send + Sync {
 pub trait WatchReceiver<T: Send + Sync>: Clone + Send + Sync {
     /// Wait for a change.
     fn changed(&mut self) -> Pin<Box<dyn Future<Output = Result<(), WatchRecvError>> + Send + '_>>;
-    
+
     /// Get the current value.
     fn borrow_and_clone(&self) -> T;
 }

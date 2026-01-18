@@ -254,8 +254,7 @@ impl SymbolTraceContext {
         if data.len() < 43 + region_len + 2 {
             return None;
         }
-        let origin_region =
-            RegionTag(String::from_utf8(data[43..43 + region_len].to_vec()).ok()?);
+        let origin_region = RegionTag(String::from_utf8(data[43..43 + region_len].to_vec()).ok()?);
 
         let baggage_offset = 43 + region_len;
         let baggage_count =

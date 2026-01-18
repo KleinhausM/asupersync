@@ -293,9 +293,10 @@ where
     for (i, outcome) in outcomes.into_iter().enumerate() {
         match outcome {
             Outcome::Panicked(p) => {
-                // Panic is the strongest - stop collecting but continue to do partial reduction
-                panic_payload = Some(p);
-                break;
+                // Panic is the strongest - record it but keep collecting successes
+                if panic_payload.is_none() {
+                    panic_payload = Some(p);
+                }
             }
             Outcome::Cancelled(r) => match &mut strongest_cancel {
                 None => strongest_cancel = Some(r),
@@ -620,11 +621,12 @@ mod tests {
             Outcome::Ok(3),
         ];
 
-        let (decision, reduced, _) = map_reduce_outcomes(outcomes, |a, b| a + b);
+        let (decision, reduced, successes) = map_reduce_outcomes(outcomes, |a, b| a + b);
 
         assert!(matches!(decision, AggregateDecision::Panicked(_)));
-        // Only the first value collected before panic
-        assert_eq!(reduced, Some(1));
+        // All successful values collected and reduced (join semantics: all branches complete)
+        assert_eq!(successes.len(), 2);
+        assert_eq!(reduced, Some(4)); // 1 + 3 = 4
     }
 
     #[test]

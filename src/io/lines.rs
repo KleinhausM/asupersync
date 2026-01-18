@@ -34,10 +34,7 @@ impl<R: AsyncBufRead + Unpin> Stream for Lines<R> {
 
         loop {
             // 1. Check if we already have a newline in `this.buf`
-            if let Some(pos) = this.buf[this.bytes_read..]
-                .iter()
-                .position(|&b| b == b'\n')
-            {
+            if let Some(pos) = this.buf[this.bytes_read..].iter().position(|&b| b == b'\n') {
                 let newline_pos = this.bytes_read + pos;
                 let rest = this.buf.split_off(newline_pos + 1);
                 // this.buf now contains [line + \n]

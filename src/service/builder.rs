@@ -140,7 +140,11 @@ impl<L> ServiceBuilder<L> {
     ///     .service(my_service);
     /// ```
     #[must_use]
-    pub fn rate_limit(self, rate: u64, period: Duration) -> ServiceBuilder<Stack<L, RateLimitLayer>> {
+    pub fn rate_limit(
+        self,
+        rate: u64,
+        period: Duration,
+    ) -> ServiceBuilder<Stack<L, RateLimitLayer>> {
         self.layer(RateLimitLayer::new(rate, period))
     }
 

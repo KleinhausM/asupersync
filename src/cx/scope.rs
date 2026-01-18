@@ -615,7 +615,9 @@ mod tests {
 
         // In Phase 0, spawn_local requires Send bounds
         // In Phase 1+, this will work with !Send futures
-        let (handle, _stored) = scope.spawn_local(&mut state, &cx, |_| async move { 42_i32 }).unwrap();
+        let (handle, _stored) = scope
+            .spawn_local(&mut state, &cx, |_| async move { 42_i32 })
+            .unwrap();
 
         // Task should exist
         let task = state.tasks.get(handle.task_id().arena_index());
@@ -731,13 +733,15 @@ mod tests {
         let scope = test_scope(region, Budget::INFINITE);
 
         // Spawn a task that checks for cancellation
-        let (handle, mut stored_task) = scope.spawn(&mut state, &cx, |cx| async move {
-            // We expect to be cancelled immediately because abort() is called before we run
-            if cx.checkpoint().is_err() {
-                return "cancelled";
-            }
-            "finished"
-        }).unwrap();
+        let (handle, mut stored_task) = scope
+            .spawn(&mut state, &cx, |cx| async move {
+                // We expect to be cancelled immediately because abort() is called before we run
+                if cx.checkpoint().is_err() {
+                    return "cancelled";
+                }
+                "finished"
+            })
+            .unwrap();
 
         // Abort the task via handle
         handle.abort();
@@ -776,9 +780,11 @@ mod tests {
         let region = state.create_root_region(Budget::INFINITE);
         let scope = test_scope(region, Budget::INFINITE);
 
-        let (handle, mut stored_task) = scope.spawn(&mut state, &cx, |_| async {
-            panic!("oops");
-        }).unwrap();
+        let (handle, mut stored_task) = scope
+            .spawn(&mut state, &cx, |_| async {
+                panic!("oops");
+            })
+            .unwrap();
 
         // Drive the task
         let waker = Waker::from(Arc::new(NoopWaker));
@@ -854,31 +860,36 @@ mod tests {
 
         // Task 1: completes immediately
         let (h1, mut t1) = scope.spawn(&mut state, &cx, |_| async { 1 }).unwrap();
-        
+
         // Task 2: yields once, checking for cancellation
-        let (h2, mut t2) = scope.spawn(&mut state, &cx, |cx| async move {
-            // Yield once to simulate running
-            struct YieldOnce(bool);
-            impl std::future::Future for YieldOnce {
-                type Output = ();
-                fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
-                    if self.0 {
-                        std::task::Poll::Ready(())
-                    } else {
-                        self.0 = true;
-                        cx.waker().wake_by_ref();
-                        std::task::Poll::Pending
+        let (h2, mut t2) = scope
+            .spawn(&mut state, &cx, |cx| async move {
+                // Yield once to simulate running
+                struct YieldOnce(bool);
+                impl std::future::Future for YieldOnce {
+                    type Output = ();
+                    fn poll(
+                        mut self: std::pin::Pin<&mut Self>,
+                        cx: &mut std::task::Context<'_>,
+                    ) -> std::task::Poll<()> {
+                        if self.0 {
+                            std::task::Poll::Ready(())
+                        } else {
+                            self.0 = true;
+                            cx.waker().wake_by_ref();
+                            std::task::Poll::Pending
+                        }
                     }
                 }
-            }
-            YieldOnce(false).await;
-            
-            // Check cancellation
-            if cx.checkpoint().is_err() {
-                return 0; // Cancelled
-            }
-            2
-        }).unwrap();
+                YieldOnce(false).await;
+
+                // Check cancellation
+                if cx.checkpoint().is_err() {
+                    return 0; // Cancelled
+                }
+                2
+            })
+            .unwrap();
 
         let waker = Waker::from(Arc::new(NoopWaker));
         let mut ctx = Context::from_waker(&waker);
@@ -907,10 +918,10 @@ mod tests {
         // Poll race_fut again. Still waiting for h2 drain.
         assert!(race_fut.as_mut().poll(&mut ctx).is_pending());
 
-        // Poll t2 again. YieldOnce finishes. 
+        // Poll t2 again. YieldOnce finishes.
         // Then it hits checkpoint(). cancel_requested is true.
         // It returns 0 (simulated cancellation return).
-        // Actually, normally tasks return Result or are wrapped. 
+        // Actually, normally tasks return Result or are wrapped.
         // Here spawn returns Result<i32>.
         // My closure returns i32.
         // So h2.join() will return Ok(0).

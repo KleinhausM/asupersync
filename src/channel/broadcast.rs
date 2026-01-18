@@ -59,6 +59,8 @@ pub enum RecvError {
     Lagged(u64),
     /// All senders have been dropped.
     Closed,
+    /// The receive operation was cancelled.
+    Cancelled,
 }
 
 impl std::fmt::Display for RecvError {
@@ -66,6 +68,7 @@ impl std::fmt::Display for RecvError {
         match self {
             Self::Lagged(n) => write!(f, "receiver lagged by {n} messages"),
             Self::Closed => write!(f, "broadcast channel closed"),
+            Self::Cancelled => write!(f, "receive operation cancelled"),
         }
     }
 }
@@ -320,7 +323,7 @@ impl<T: Clone> Receiver<T> {
             if let Err(_e) = cx.checkpoint() {
                 cx.trace("broadcast::recv cancelled while waiting");
                 // Don't consume anything
-                return Err(RecvError::Closed); // Or some Cancelled error if we had one in RecvError
+                return Err(RecvError::Cancelled);
             }
 
             let (guard, _) = self

@@ -93,14 +93,6 @@ macro_rules! benchmark {
         iterations: $iters:expr,
         bench: |$rt:ident| $body:expr
     ) => {
-        $crate::bench::Benchmark::new(
-            $id,
-            $name,
-            $desc,
-            $cat,
-            $warmup,
-            $iters,
-            |$rt| $body,
-        )
+        $crate::bench::Benchmark::new($id, $name, $desc, $cat, $warmup, $iters, |$rt| $body)
     };
 }

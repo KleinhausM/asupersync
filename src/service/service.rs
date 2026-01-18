@@ -132,22 +132,18 @@ where
 
         loop {
             match &mut this.state {
-                OneshotState::Ready { service, request } => {
-                    match service.poll_ready(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(Err(err)) => {
-                            this.state = OneshotState::Done;
-                            return Poll::Ready(Err(err));
-                        }
-                        Poll::Ready(Ok(())) => {
-                            let req = request
-                                .take()
-                                .expect("Oneshot polled after request taken");
-                            let fut = service.call(req);
-                            this.state = OneshotState::Calling { future: fut };
-                        }
+                OneshotState::Ready { service, request } => match service.poll_ready(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(err)) => {
+                        this.state = OneshotState::Done;
+                        return Poll::Ready(Err(err));
                     }
-                }
+                    Poll::Ready(Ok(())) => {
+                        let req = request.take().expect("Oneshot polled after request taken");
+                        let fut = service.call(req);
+                        this.state = OneshotState::Calling { future: fut };
+                    }
+                },
                 OneshotState::Calling { future } => {
                     let result = Pin::new(future).poll(cx);
                     if result.is_ready() {

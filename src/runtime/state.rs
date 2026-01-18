@@ -1167,7 +1167,10 @@ mod tests {
 
         // Verify state transition
         let region_record = state.regions.get(region.arena_index()).expect("region");
-        assert_eq!(region_record.state(), crate::record::region::RegionState::Closing);
+        assert_eq!(
+            region_record.state(),
+            crate::record::region::RegionState::Closing
+        );
 
         // Verify spawning is rejected with error (not panic)
         let result = state.create_task(region, Budget::INFINITE, async { 42 });
