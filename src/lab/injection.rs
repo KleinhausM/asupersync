@@ -26,8 +26,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::lab::instrumented_future::{
-    CancellationInjector, InjectionMode, InjectionOutcome, InjectionResult,
-    InjectionStrategy, InstrumentedFuture, InstrumentedPollResult,
+    CancellationInjector, InjectionMode, InjectionOutcome, InjectionResult, InjectionStrategy,
+    InstrumentedFuture, InstrumentedPollResult,
 };
 use crate::lab::oracle::{OracleSuite, OracleViolation};
 use crate::lab::runtime::LabRuntime;
@@ -449,12 +449,13 @@ impl LabInjectionRunner {
     ///     InstrumentedFuture::new(future, injector)
     /// });
     /// ```
-    pub fn run_with_lab<F, Fut, T>(
-        &mut self,
-        test_fn: F,
-    ) -> LabInjectionReport
+    pub fn run_with_lab<F, Fut, T>(&mut self, test_fn: F) -> LabInjectionReport
     where
-        F: Fn(Arc<CancellationInjector>, &mut LabRuntime, &mut OracleSuite) -> InstrumentedFuture<Fut>,
+        F: Fn(
+            Arc<CancellationInjector>,
+            &mut LabRuntime,
+            &mut OracleSuite,
+        ) -> InstrumentedFuture<Fut>,
         Fut: Future<Output = T>,
         T: std::fmt::Debug,
     {
@@ -475,7 +476,10 @@ impl LabInjectionRunner {
         let total_await_points = recorded_points.len();
 
         // Phase 2: Select injection points based on strategy
-        let injection_points = self.config.strategy.select_points(&recorded_points, self.config.seed);
+        let injection_points = self
+            .config
+            .strategy
+            .select_points(&recorded_points, self.config.seed);
 
         // Phase 3: Injection runs with oracle verification
         let mut results = Vec::with_capacity(injection_points.len());
@@ -524,7 +528,12 @@ impl LabInjectionRunner {
 
         // Phase 4: Generate report
         let strategy_name = format!("{:?}", self.config.strategy);
-        LabInjectionReport::from_results(results, total_await_points, &strategy_name, self.config.seed)
+        LabInjectionReport::from_results(
+            results,
+            total_await_points,
+            &strategy_name,
+            self.config.seed,
+        )
     }
 
     /// Simplified runner for basic test cases.
@@ -533,19 +542,14 @@ impl LabInjectionRunner {
     /// - Creates an instrumented future from the provided factory
     /// - Polls it to completion
     /// - Verifies oracles (if enabled)
-    pub fn run_simple<F, Fut, T>(
-        &mut self,
-        test_fn: F,
-    ) -> LabInjectionReport
+    pub fn run_simple<F, Fut, T>(&mut self, test_fn: F) -> LabInjectionReport
     where
         F: Fn(Arc<CancellationInjector>) -> InstrumentedFuture<Fut>,
         Fut: Future<Output = T>,
         T: std::fmt::Debug,
     {
         // Wrap with Lab runtime and oracles
-        self.run_with_lab(|injector, _runtime, _oracles| {
-            test_fn(injector)
-        })
+        self.run_with_lab(|injector, _runtime, _oracles| test_fn(injector))
     }
 
     /// Polls an instrumented future to completion with panic catching.
@@ -665,7 +669,11 @@ impl LabBuilder {
     /// Builds the runner and runs the test with full Lab access.
     pub fn run_with_lab<F, Fut, T>(self, test_fn: F) -> LabInjectionReport
     where
-        F: Fn(Arc<CancellationInjector>, &mut LabRuntime, &mut OracleSuite) -> InstrumentedFuture<Fut>,
+        F: Fn(
+            Arc<CancellationInjector>,
+            &mut LabRuntime,
+            &mut OracleSuite,
+        ) -> InstrumentedFuture<Fut>,
         Fut: Future<Output = T>,
         T: std::fmt::Debug,
     {
@@ -735,8 +743,7 @@ mod tests {
 
     #[test]
     fn lab_injection_runner_recording_phase() {
-        let config = LabInjectionConfig::new(42)
-            .with_strategy(InjectionStrategy::Never);
+        let config = LabInjectionConfig::new(42).with_strategy(InjectionStrategy::Never);
         let mut runner = LabInjectionRunner::new(config);
 
         let report = runner.run_simple(|injector| {
@@ -752,8 +759,7 @@ mod tests {
 
     #[test]
     fn lab_injection_runner_all_points() {
-        let config = LabInjectionConfig::new(42)
-            .with_strategy(InjectionStrategy::AllPoints);
+        let config = LabInjectionConfig::new(42).with_strategy(InjectionStrategy::AllPoints);
         let mut runner = LabInjectionRunner::new(config);
 
         let report = runner.run_simple(|injector| {

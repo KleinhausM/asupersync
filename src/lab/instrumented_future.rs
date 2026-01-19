@@ -178,7 +178,8 @@ impl InjectionStrategy {
                 // Fisher-Yates shuffle with deterministic RNG
                 for i in (1..indices.len()).rev() {
                     // LCG: state = (a * state + c) mod m
-                    rng_state = rng_state.wrapping_mul(6_364_136_223_846_793_005)
+                    rng_state = rng_state
+                        .wrapping_mul(6_364_136_223_846_793_005)
                         .wrapping_add(1_442_695_040_888_963_407);
                     let j = (rng_state as usize) % (i + 1);
                     indices.swap(i, j);
@@ -207,7 +208,8 @@ impl InjectionStrategy {
                 let mut selected = Vec::new();
                 let mut rng_state = seed;
                 for &seq in recorded {
-                    rng_state = rng_state.wrapping_mul(6_364_136_223_846_793_005)
+                    rng_state = rng_state
+                        .wrapping_mul(6_364_136_223_846_793_005)
                         .wrapping_add(1_442_695_040_888_963_407);
                     // Use upper bits for better distribution
                     let rand_val = (rng_state >> 32) as f64 / (u32::MAX as f64);
@@ -392,11 +394,17 @@ impl InjectionReport {
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut json = String::from("{\n");
-        json.push_str(&format!("  \"total_await_points\": {},\n", self.total_await_points));
+        json.push_str(&format!(
+            "  \"total_await_points\": {},\n",
+            self.total_await_points
+        ));
         json.push_str(&format!("  \"tests_run\": {},\n", self.tests_run));
         json.push_str(&format!("  \"successes\": {},\n", self.successes));
         json.push_str(&format!("  \"failures\": {},\n", self.failures));
-        json.push_str(&format!("  \"strategy\": \"{}\",\n", escape_json(&self.strategy)));
+        json.push_str(&format!(
+            "  \"strategy\": \"{}\",\n",
+            escape_json(&self.strategy)
+        ));
         json.push_str(&format!("  \"seed\": {},\n", self.seed));
         json.push_str(&format!("  \"passed\": {},\n", self.is_success()));
         json.push_str("  \"results\": [\n");
@@ -482,7 +490,11 @@ impl std::fmt::Display for InjectionReport {
         writeln!(f)?;
         writeln!(f, "Summary:")?;
         writeln!(f, "  Await points discovered: {}", self.total_await_points)?;
-        writeln!(f, "  Points tested: {} (strategy: {})", self.tests_run, self.strategy)?;
+        writeln!(
+            f,
+            "  Points tested: {} (strategy: {})",
+            self.tests_run, self.strategy
+        )?;
         writeln!(f, "  Passed: {}", self.successes)?;
         writeln!(f, "  Failed: {}", self.failures)?;
         writeln!(f, "  Seed: {}", self.seed)?;
@@ -496,7 +508,11 @@ impl std::fmt::Display for InjectionReport {
             for (i, result) in failures.iter().enumerate() {
                 writeln!(f, "  [{}] Await point {}", i + 1, result.injection_point)?;
                 writeln!(f, "      Seed: {}", self.seed)?;
-                writeln!(f, "      Await points before injection: {}", result.await_points_before)?;
+                writeln!(
+                    f,
+                    "      Await points before injection: {}",
+                    result.await_points_before
+                )?;
                 writeln!(f, "      Outcome: {}", result.outcome_summary())?;
                 writeln!(f)?;
                 writeln!(f, "      To reproduce:")?;
@@ -641,7 +657,12 @@ impl InjectionRunner {
 
         // Phase 4: Generate report
         let strategy_name = format!("{strategy:?}");
-        InjectionReport::from_results_with_seed(results, total_await_points, &strategy_name, self.seed)
+        InjectionReport::from_results_with_seed(
+            results,
+            total_await_points,
+            &strategy_name,
+            self.seed,
+        )
     }
 
     /// Runs injection tests using a simpler interface for basic futures.
@@ -1417,6 +1438,102 @@ mod tests {
         assert_eq!(report.successes, 2);
         assert_eq!(report.failures, 1);
         assert!(!report.all_passed());
+        assert_eq!(report.seed, 0); // Default seed
+    }
+
+    #[test]
+    fn injection_report_from_results_with_seed() {
+        let results = vec![InjectionResult::success(1, 0)];
+        let report = InjectionReport::from_results_with_seed(results, 3, "FirstN(1)", 12345);
+
+        assert_eq!(report.seed, 12345);
+        assert_eq!(report.strategy, "FirstN(1)");
+    }
+
+    #[test]
+    fn injection_report_to_json() {
+        let results = vec![
+            InjectionResult::success(1, 0),
+            InjectionResult::panic(2, "test error".to_string(), 1),
+        ];
+        let report = InjectionReport::from_results_with_seed(results, 5, "AllPoints", 42);
+
+        let json = report.to_json();
+        assert!(json.contains("\"total_await_points\": 5"));
+        assert!(json.contains("\"seed\": 42"));
+        assert!(json.contains("\"passed\": false"));
+        assert!(json.contains("\"injection_point\": 1"));
+        assert!(json.contains("\"injection_point\": 2"));
+    }
+
+    #[test]
+    fn injection_report_to_junit_xml() {
+        let results = vec![
+            InjectionResult::success(1, 0),
+            InjectionResult::panic(2, "test error".to_string(), 1),
+        ];
+        let report = InjectionReport::from_results(results, 5, "AllPoints");
+
+        let xml = report.to_junit_xml();
+        assert!(xml.contains("<?xml version=\"1.0\""));
+        assert!(xml.contains("<testsuite name=\"CancellationInjection\""));
+        assert!(xml.contains("tests=\"2\" failures=\"1\""));
+        assert!(xml.contains("<testcase name=\"await_point_1\""));
+        assert!(xml.contains("<failure message=\"Panic: test error\""));
+    }
+
+    #[test]
+    fn injection_report_display() {
+        let results = vec![
+            InjectionResult::success(1, 0),
+            InjectionResult::panic(2, "test error".to_string(), 1),
+        ];
+        let report = InjectionReport::from_results_with_seed(results, 5, "AllPoints", 42);
+
+        let display = format!("{}", report);
+        assert!(display.contains("Cancellation Injection Test Report"));
+        assert!(display.contains("Await points discovered: 5"));
+        assert!(display.contains("Passed: 1"));
+        assert!(display.contains("Failed: 1"));
+        assert!(display.contains("Seed: 42"));
+        assert!(display.contains("To reproduce:"));
+    }
+
+    #[test]
+    fn injection_report_reproduction_code() {
+        let results = vec![];
+        let report = InjectionReport::from_results_with_seed(results, 0, "Test", 99999);
+
+        let code = report.reproduction_code(5);
+        assert!(code.contains("with_seed(99999)"));
+        assert!(code.contains("with_injection_point(5)"));
+    }
+
+    #[test]
+    fn injection_result_outcome_summary() {
+        assert_eq!(InjectionResult::success(1, 0).outcome_summary(), "Success");
+        assert_eq!(
+            InjectionResult::panic(1, "boom".to_string(), 0).outcome_summary(),
+            "Panic: boom"
+        );
+        assert_eq!(
+            InjectionResult {
+                injection_point: 1,
+                outcome: InjectionOutcome::Timeout,
+                await_points_before: 0,
+            }
+            .outcome_summary(),
+            "Timeout"
+        );
+    }
+
+    #[test]
+    fn await_point_with_source_location() {
+        let point = AwaitPoint::anonymous(5).with_source("src/test.rs:42");
+        assert_eq!(point.source_location(), Some("src/test.rs:42"));
+
+        let point_no_source = AwaitPoint::anonymous(5);
+        assert_eq!(point_no_source.source_location(), None);
     }
 
     #[test]
