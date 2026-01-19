@@ -35,6 +35,7 @@
 //! - [`io`]: Async I/O traits and adapters
 //! - [`net`]: Async networking primitives (Phase 0: synchronous wrappers)
 //! - [`bytes`]: Zero-copy buffer types (Bytes, BytesMut, Buf, BufMut)
+//! - [`tracing_compat`]: Optional tracing integration (requires `tracing-integration` feature)
 
 // Default to deny for unsafe code - specific modules (like epoll reactor) can use #[allow(unsafe_code)]
 // when they need to interface with FFI or low-level system APIs
@@ -77,6 +78,7 @@ pub mod stream;
 pub mod sync;
 pub mod time;
 pub mod trace;
+pub mod tracing_compat;
 pub mod transport;
 pub mod types;
 pub mod util;
@@ -109,3 +111,20 @@ pub use types::{
     join_outcomes, Budget, CancelKind, CancelReason, ObligationId, Outcome, OutcomeError,
     PanicPayload, Policy, RegionId, Severity, TaskId, Time,
 };
+
+// Re-export proc macros when the proc-macros feature is enabled
+// Note: join! and race! are not re-exported because they conflict with the
+// existing macro_rules! definitions in combinator/. The proc macro versions
+// will replace those in future tasks (asupersync-mwff, asupersync-hcpl).
+#[cfg(feature = "proc-macros")]
+pub use asupersync_macros::{scope, spawn};
+
+// Proc macro versions available with explicit path when needed
+#[cfg(feature = "proc-macros")]
+pub mod proc_macros {
+    //! Proc macro versions of structured concurrency macros.
+    //!
+    //! These are provided for explicit access when the macro_rules! versions
+    //! are also in scope.
+    pub use asupersync_macros::{join, race, scope, spawn};
+}
