@@ -188,6 +188,209 @@ impl LabInjectionReport {
 
         (injection_failures, oracle_failures)
     }
+
+    /// Converts the report to JSON format for CI integration.
+    ///
+    /// The JSON includes all summary statistics and detailed failure information,
+    /// suitable for parsing by CI systems and test aggregators.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+
+        let failures: Vec<serde_json::Value> = self
+            .failures()
+            .iter()
+            .enumerate()
+            .map(|(i, result)| {
+                json!({
+                    "index": i + 1,
+                    "injection_point": result.injection.injection_point,
+                    "outcome": format!("{:?}", result.injection.outcome),
+                    "await_points_before": result.injection.await_points_before,
+                    "oracle_violations": result.oracle_violations.iter()
+                        .map(|v| format!("{v}"))
+                        .collect::<Vec<_>>(),
+                    "reproduction_code": result.reproduction_code(self.seed),
+                })
+            })
+            .collect();
+
+        json!({
+            "summary": {
+                "total_await_points": self.total_await_points,
+                "tests_run": self.tests_run,
+                "passed": self.successes,
+                "failed": self.failures,
+                "strategy": self.strategy,
+                "seed": self.seed,
+                "verdict": if self.all_passed() { "PASS" } else { "FAIL" },
+            },
+            "failures": failures,
+        })
+    }
+
+    /// Converts the report to JUnit XML format for test framework integration.
+    ///
+    /// The XML follows the JUnit format used by most CI systems and test aggregators.
+    #[must_use]
+    pub fn to_junit_xml(&self) -> String {
+        let mut xml = String::new();
+        xml.push_str(r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+        xml.push('\n');
+        xml.push_str(&format!(
+            r#"<testsuite name="CancellationInjectionTests" tests="{}" failures="{}" errors="0" skipped="{}">"#,
+            self.tests_run,
+            self.failures,
+            self.total_await_points.saturating_sub(self.tests_run)
+        ));
+        xml.push('\n');
+
+        for result in &self.results {
+            let test_name = format!("await_point_{}", result.injection.injection_point);
+            xml.push_str(&format!(
+                r#"  <testcase name="{}" classname="CancellationInjection" time="0">"#,
+                test_name
+            ));
+            xml.push('\n');
+
+            if !result.is_success() {
+                let failure_message = if !result.injection.is_success() {
+                    format!("Injection failed: {:?}", result.injection.outcome)
+                } else {
+                    result
+                        .oracle_violations
+                        .iter()
+                        .map(|v| format!("{v}"))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                };
+
+                xml.push_str(&format!(
+                    r#"    <failure message="{}" type="CancellationFailure">"#,
+                    escape_xml(&failure_message)
+                ));
+                xml.push('\n');
+                xml.push_str(&format!(
+                    "Seed: {}\nInjection point: {}\n\nReproduction:\n{}",
+                    self.seed,
+                    result.injection.injection_point,
+                    result.reproduction_code(self.seed)
+                ));
+                xml.push_str("    </failure>\n");
+            }
+
+            xml.push_str("  </testcase>\n");
+        }
+
+        xml.push_str("</testsuite>\n");
+        xml
+    }
+
+    /// Returns a display formatter for human-readable output.
+    #[must_use]
+    pub fn display(&self) -> LabInjectionReportDisplay<'_> {
+        LabInjectionReportDisplay { report: self }
+    }
+}
+
+impl LabInjectionResult {
+    /// Generates Rust code to reproduce this specific failure.
+    ///
+    /// The returned code snippet can be copy-pasted into a test to
+    /// reproduce the exact failure condition.
+    #[must_use]
+    pub fn reproduction_code(&self, seed: u64) -> String {
+        format!(
+            r#"let config = LabInjectionConfig::new({})
+    .with_strategy(InjectionStrategy::AtSequence({}));
+let mut runner = LabInjectionRunner::new(config);
+let report = runner.run_simple(|injector| {{
+    InstrumentedFuture::new(your_future(), injector)
+}});
+assert!(report.all_passed());"#,
+            seed, self.injection.injection_point
+        )
+    }
+}
+
+/// Display wrapper for human-readable report output.
+pub struct LabInjectionReportDisplay<'a> {
+    report: &'a LabInjectionReport,
+}
+
+impl<'a> std::fmt::Display for LabInjectionReportDisplay<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let r = self.report;
+
+        writeln!(f, "Cancellation Injection Test Report")?;
+        writeln!(f, "==================================")?;
+        writeln!(f)?;
+        writeln!(f, "Summary:")?;
+        writeln!(f, "  Await points discovered: {}", r.total_await_points)?;
+        writeln!(
+            f,
+            "  Points tested: {} (strategy: {})",
+            r.tests_run, r.strategy
+        )?;
+        writeln!(f, "  Passed: {}", r.successes)?;
+        writeln!(f, "  Failed: {}", r.failures)?;
+        writeln!(f, "  Seed: {}", r.seed)?;
+        writeln!(
+            f,
+            "  Verdict: {}",
+            if r.all_passed() { "PASS" } else { "FAIL" }
+        )?;
+
+        if r.failures > 0 {
+            writeln!(f)?;
+            writeln!(f, "Failures:")?;
+
+            for (i, result) in r.failures().iter().enumerate() {
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "  [{}] Await point {}",
+                    i + 1,
+                    result.injection.injection_point
+                )?;
+                writeln!(f, "      Seed: {}", r.seed)?;
+
+                if !result.injection.is_success() {
+                    writeln!(f, "      Injection outcome: {:?}", result.injection.outcome)?;
+                }
+
+                if !result.oracle_violations.is_empty() {
+                    writeln!(f, "      Failed oracles:")?;
+                    for violation in &result.oracle_violations {
+                        writeln!(f, "        - {violation}")?;
+                    }
+                }
+
+                writeln!(f)?;
+                writeln!(f, "      To reproduce:")?;
+                for line in result.reproduction_code(r.seed).lines() {
+                    writeln!(f, "        {line}")?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for LabInjectionReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.display().fmt(f)
+    }
+}
+
+/// Escapes special XML characters.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// Runner that integrates cancellation injection with Lab runtime and Oracles.
@@ -480,6 +683,8 @@ pub fn lab(seed: u64) -> LabBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{RegionId, Time};
+    use crate::util::ArenaIndex;
 
     /// A future that yields a specific number of times before completing.
     struct YieldingFuture {
@@ -636,8 +841,9 @@ mod tests {
                 injection: InjectionResult::success(3, 2),
                 oracle_violations: vec![OracleViolation::TaskLeak(
                     crate::lab::oracle::task_leak::TaskLeakViolation {
+                        region: RegionId::from_arena(ArenaIndex::new(0, 0)),
                         leaked_tasks: vec![],
-                        detection_time: Time::ZERO,
+                        region_close_time: Time::ZERO,
                     },
                 )],
             },
@@ -659,36 +865,104 @@ mod tests {
             .stop_on_failure(true);
         let mut runner = LabInjectionRunner::new(config);
 
-        // Create a test that panics at point 2
-        let report = runner.run_with_lab(|injector, _runtime, _oracles| {
-            struct PanicAt2Future {
-                inner: YieldingFuture,
-                polls: u32,
-            }
-
-            impl Future for PanicAt2Future {
-                type Output = i32;
-                fn poll(
-                    mut self: std::pin::Pin<&mut Self>,
-                    cx: &mut std::task::Context<'_>,
-                ) -> std::task::Poll<Self::Output> {
-                    self.polls += 1;
-                    // Panic is handled by the runner, this tests stop_on_failure
-                    unsafe {
-                        std::pin::Pin::new_unchecked(&mut self.get_unchecked_mut().inner)
-                    }
-                    .poll(cx)
-                }
-            }
-
-            let future = PanicAt2Future {
-                inner: YieldingFuture::new(3, 42),
-                polls: 0,
-            };
+        // Simple test with yielding future - tests that stop_on_failure config works
+        let report = runner.run_simple(|injector| {
+            let future = YieldingFuture::new(3, 42);
             InstrumentedFuture::new(future, injector)
         });
 
-        // Should have run all 4 points (no panics in our simple test)
+        // Should have run all 4 points (no failures in our simple test)
         assert_eq!(report.total_await_points, 4);
+        assert!(report.all_passed());
+    }
+
+    #[test]
+    fn lab_injection_report_to_json() {
+        let results = vec![
+            LabInjectionResult {
+                injection: InjectionResult::success(1, 0),
+                oracle_violations: vec![],
+            },
+            LabInjectionResult {
+                injection: InjectionResult::panic(2, "test panic".to_string(), 1),
+                oracle_violations: vec![],
+            },
+        ];
+
+        let report = LabInjectionReport::from_results(results, 5, "AllPoints", 12345);
+        let json = report.to_json();
+
+        assert_eq!(json["summary"]["total_await_points"], 5);
+        assert_eq!(json["summary"]["tests_run"], 2);
+        assert_eq!(json["summary"]["passed"], 1);
+        assert_eq!(json["summary"]["failed"], 1);
+        assert_eq!(json["summary"]["seed"], 12345);
+        assert_eq!(json["summary"]["verdict"], "FAIL");
+        assert_eq!(json["failures"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn lab_injection_report_to_junit_xml() {
+        let results = vec![
+            LabInjectionResult {
+                injection: InjectionResult::success(1, 0),
+                oracle_violations: vec![],
+            },
+            LabInjectionResult {
+                injection: InjectionResult::panic(2, "test panic".to_string(), 1),
+                oracle_violations: vec![],
+            },
+        ];
+
+        let report = LabInjectionReport::from_results(results, 5, "AllPoints", 12345);
+        let xml = report.to_junit_xml();
+
+        assert!(xml.contains("testsuite"));
+        assert!(xml.contains("tests=\"2\""));
+        assert!(xml.contains("failures=\"1\""));
+        assert!(xml.contains("await_point_1"));
+        assert!(xml.contains("await_point_2"));
+        assert!(xml.contains("<failure"));
+        assert!(xml.contains("Seed: 12345"));
+    }
+
+    #[test]
+    fn lab_injection_report_display() {
+        let results = vec![
+            LabInjectionResult {
+                injection: InjectionResult::success(1, 0),
+                oracle_violations: vec![],
+            },
+            LabInjectionResult {
+                injection: InjectionResult::panic(2, "test panic".to_string(), 1),
+                oracle_violations: vec![],
+            },
+        ];
+
+        let report = LabInjectionReport::from_results(results, 5, "AllPoints", 12345);
+        let display = format!("{}", report);
+
+        assert!(display.contains("Cancellation Injection Test Report"));
+        assert!(display.contains("Await points discovered: 5"));
+        assert!(display.contains("Points tested: 2"));
+        assert!(display.contains("Passed: 1"));
+        assert!(display.contains("Failed: 1"));
+        assert!(display.contains("Verdict: FAIL"));
+        assert!(display.contains("Await point 2"));
+        assert!(display.contains("Seed: 12345"));
+        assert!(display.contains("To reproduce:"));
+    }
+
+    #[test]
+    fn lab_injection_result_reproduction_code() {
+        let result = LabInjectionResult {
+            injection: InjectionResult::success(42, 5),
+            oracle_violations: vec![],
+        };
+
+        let code = result.reproduction_code(12345);
+        assert!(code.contains("LabInjectionConfig::new(12345)"));
+        assert!(code.contains("InjectionStrategy::AtSequence(42)"));
+        assert!(code.contains("InstrumentedFuture::new"));
     }
 }

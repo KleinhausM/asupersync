@@ -51,28 +51,48 @@ use std::task::{Context, Poll};
 use crate::types::TaskId;
 
 /// Identifies a specific await point within a task.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AwaitPoint {
     /// The task this await point belongs to.
     pub task_id: Option<TaskId>,
     /// The sequential number of this await point (1-based).
     pub sequence: u64,
+    /// Optional source location (file:line) for this await point.
+    pub source_location: Option<String>,
 }
 
 impl AwaitPoint {
     /// Creates a new await point identifier.
     #[must_use]
-    pub const fn new(task_id: Option<TaskId>, sequence: u64) -> Self {
-        Self { task_id, sequence }
+    pub fn new(task_id: Option<TaskId>, sequence: u64) -> Self {
+        Self {
+            task_id,
+            sequence,
+            source_location: None,
+        }
     }
 
     /// Creates an await point without task association (for testing).
     #[must_use]
-    pub const fn anonymous(sequence: u64) -> Self {
+    pub fn anonymous(sequence: u64) -> Self {
         Self {
             task_id: None,
             sequence,
+            source_location: None,
         }
+    }
+
+    /// Creates an await point with a source location.
+    #[must_use]
+    pub fn with_source(mut self, location: impl Into<String>) -> Self {
+        self.source_location = Some(location.into());
+        self
+    }
+
+    /// Returns the source location if available.
+    #[must_use]
+    pub fn source_location(&self) -> Option<&str> {
+        self.source_location.as_deref()
     }
 }
 
@@ -271,6 +291,18 @@ impl InjectionResult {
     pub fn is_success(&self) -> bool {
         matches!(self.outcome, InjectionOutcome::Success)
     }
+
+    /// Returns a human-readable summary of the outcome.
+    #[must_use]
+    pub fn outcome_summary(&self) -> String {
+        match &self.outcome {
+            InjectionOutcome::Success => "Success".to_string(),
+            InjectionOutcome::Panic(msg) => format!("Panic: {msg}"),
+            InjectionOutcome::AssertionFailed(msg) => format!("Assertion failed: {msg}"),
+            InjectionOutcome::Timeout => "Timeout".to_string(),
+            InjectionOutcome::ResourceLeak(msg) => format!("Resource leak: {msg}"),
+        }
+    }
 }
 
 /// Report summarizing all injection test runs.
@@ -288,6 +320,8 @@ pub struct InjectionReport {
     pub results: Vec<InjectionResult>,
     /// The strategy used for this test run.
     pub strategy: String,
+    /// The seed used for deterministic execution.
+    pub seed: u64,
 }
 
 impl InjectionReport {
@@ -298,6 +332,17 @@ impl InjectionReport {
         total_await_points: usize,
         strategy: &str,
     ) -> Self {
+        Self::from_results_with_seed(results, total_await_points, strategy, 0)
+    }
+
+    /// Creates a new report from a list of results with a specific seed.
+    #[must_use]
+    pub fn from_results_with_seed(
+        results: Vec<InjectionResult>,
+        total_await_points: usize,
+        strategy: &str,
+        seed: u64,
+    ) -> Self {
         let successes = results.iter().filter(|r| r.is_success()).count();
         let failures = results.len() - successes;
         Self {
@@ -307,6 +352,7 @@ impl InjectionReport {
             failures,
             results,
             strategy: strategy.to_string(),
+            seed,
         }
     }
 
@@ -321,6 +367,168 @@ impl InjectionReport {
     pub fn failures(&self) -> Vec<&InjectionResult> {
         self.results.iter().filter(|r| !r.is_success()).collect()
     }
+
+    /// Returns whether this report indicates success.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.failures == 0
+    }
+
+    /// Converts the report to JSON format for CI integration.
+    ///
+    /// # Example JSON output:
+    /// ```json
+    /// {
+    ///   "total_await_points": 47,
+    ///   "tests_run": 47,
+    ///   "successes": 45,
+    ///   "failures": 2,
+    ///   "strategy": "AllPoints",
+    ///   "seed": 12345,
+    ///   "passed": false,
+    ///   "results": [...]
+    /// }
+    /// ```
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut json = String::from("{\n");
+        json.push_str(&format!("  \"total_await_points\": {},\n", self.total_await_points));
+        json.push_str(&format!("  \"tests_run\": {},\n", self.tests_run));
+        json.push_str(&format!("  \"successes\": {},\n", self.successes));
+        json.push_str(&format!("  \"failures\": {},\n", self.failures));
+        json.push_str(&format!("  \"strategy\": \"{}\",\n", escape_json(&self.strategy)));
+        json.push_str(&format!("  \"seed\": {},\n", self.seed));
+        json.push_str(&format!("  \"passed\": {},\n", self.is_success()));
+        json.push_str("  \"results\": [\n");
+
+        for (i, result) in self.results.iter().enumerate() {
+            let comma = if i < self.results.len() - 1 { "," } else { "" };
+            json.push_str(&format!(
+                "    {{\n      \"injection_point\": {},\n      \"await_points_before\": {},\n      \"success\": {},\n      \"outcome\": \"{}\"\n    }}{}\n",
+                result.injection_point,
+                result.await_points_before,
+                result.is_success(),
+                escape_json(&result.outcome_summary()),
+                comma
+            ));
+        }
+
+        json.push_str("  ]\n");
+        json.push_str("}");
+        json
+    }
+
+    /// Converts the report to JUnit XML format for test framework integration.
+    ///
+    /// # Example XML output:
+    /// ```xml
+    /// <?xml version="1.0" encoding="UTF-8"?>
+    /// <testsuite name="CancellationInjection" tests="47" failures="2" time="0">
+    ///   <testcase name="await_point_1" classname="injection"/>
+    ///   <testcase name="await_point_2" classname="injection">
+    ///     <failure message="Panic: test panic"/>
+    ///   </testcase>
+    /// </testsuite>
+    /// ```
+    #[must_use]
+    pub fn to_junit_xml(&self) -> String {
+        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str(&format!(
+            "<testsuite name=\"CancellationInjection\" tests=\"{}\" failures=\"{}\" time=\"0\">\n",
+            self.tests_run, self.failures
+        ));
+
+        for result in &self.results {
+            let name = format!("await_point_{}", result.injection_point);
+            if result.is_success() {
+                xml.push_str(&format!(
+                    "  <testcase name=\"{}\" classname=\"injection\"/>\n",
+                    escape_xml(&name)
+                ));
+            } else {
+                xml.push_str(&format!(
+                    "  <testcase name=\"{}\" classname=\"injection\">\n",
+                    escape_xml(&name)
+                ));
+                xml.push_str(&format!(
+                    "    <failure message=\"{}\"/>\n",
+                    escape_xml(&result.outcome_summary())
+                ));
+                xml.push_str("  </testcase>\n");
+            }
+        }
+
+        xml.push_str("</testsuite>\n");
+        xml
+    }
+
+    /// Generates reproduction code for a specific failure.
+    #[must_use]
+    pub fn reproduction_code(&self, injection_point: u64) -> String {
+        format!(
+            r#"Lab::new()
+    .with_seed({})
+    .with_injection_point({})
+    .run(test_fn);"#,
+            self.seed, injection_point
+        )
+    }
+}
+
+impl std::fmt::Display for InjectionReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Cancellation Injection Test Report")?;
+        writeln!(f, "===================================")?;
+        writeln!(f)?;
+        writeln!(f, "Summary:")?;
+        writeln!(f, "  Await points discovered: {}", self.total_await_points)?;
+        writeln!(f, "  Points tested: {} (strategy: {})", self.tests_run, self.strategy)?;
+        writeln!(f, "  Passed: {}", self.successes)?;
+        writeln!(f, "  Failed: {}", self.failures)?;
+        writeln!(f, "  Seed: {}", self.seed)?;
+        writeln!(f)?;
+
+        if self.failures > 0 {
+            writeln!(f, "Failures:")?;
+            writeln!(f)?;
+
+            let failures = self.failures();
+            for (i, result) in failures.iter().enumerate() {
+                writeln!(f, "  [{}] Await point {}", i + 1, result.injection_point)?;
+                writeln!(f, "      Seed: {}", self.seed)?;
+                writeln!(f, "      Await points before injection: {}", result.await_points_before)?;
+                writeln!(f, "      Outcome: {}", result.outcome_summary())?;
+                writeln!(f)?;
+                writeln!(f, "      To reproduce:")?;
+                for line in self.reproduction_code(result.injection_point).lines() {
+                    writeln!(f, "        {line}")?;
+                }
+                writeln!(f)?;
+            }
+        } else {
+            writeln!(f, "All tests passed!")?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Escapes a string for JSON output.
+fn escape_json(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// Escapes a string for XML output.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// Runner that orchestrates recording and injection test cycles.
@@ -433,7 +641,7 @@ impl InjectionRunner {
 
         // Phase 4: Generate report
         let strategy_name = format!("{strategy:?}");
-        InjectionReport::from_results(results, total_await_points, &strategy_name)
+        InjectionReport::from_results_with_seed(results, total_await_points, &strategy_name, self.seed)
     }
 
     /// Runs injection tests using a simpler interface for basic futures.
@@ -561,11 +769,12 @@ impl CancellationInjector {
     /// Creates an injector that injects at a specific await point.
     #[must_use]
     pub fn inject_at_point(point: AwaitPoint) -> Arc<Self> {
+        let task_id = point.task_id;
         Arc::new(Self {
             strategy: InjectionStrategy::AtPoint(point),
             recorded: parking_lot::Mutex::new(Vec::new()),
             injection_count: AtomicU64::new(0),
-            task_id: point.task_id,
+            task_id,
         })
     }
 
