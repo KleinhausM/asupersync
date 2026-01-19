@@ -586,8 +586,7 @@ mod tests {
             let mut driver = IoDriver::new(reactor.clone());
 
             // Create a unix socket pair
-            let (sock_read, mut sock_write) =
-                UnixStream::pair().expect("create socket pair");
+            let (sock_read, mut sock_write) = UnixStream::pair().expect("create socket pair");
 
             // Register with IoDriver (full flow)
             let (waker, waker_state) = create_test_waker();

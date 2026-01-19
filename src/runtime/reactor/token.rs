@@ -339,13 +339,16 @@ impl TokenSlab {
 
     /// Iterates over all occupied entries.
     pub fn iter(&self) -> impl Iterator<Item = (SlabToken, &Waker)> {
-        self.entries.iter().enumerate().filter_map(|(index, entry)| {
-            if let Entry::Occupied { waker, generation } = entry {
-                Some((SlabToken::new(index as u32, *generation), waker))
-            } else {
-                None
-            }
-        })
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                if let Entry::Occupied { waker, generation } = entry {
+                    Some((SlabToken::new(index as u32, *generation), waker))
+                } else {
+                    None
+                }
+            })
     }
 }
 

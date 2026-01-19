@@ -89,11 +89,7 @@ impl Registration {
     /// Creates a new registration.
     ///
     /// This is called internally by the reactor when registering a source.
-    pub(crate) fn new(
-        token: Token,
-        reactor: Weak<dyn ReactorHandle>,
-        interest: Interest,
-    ) -> Self {
+    pub(crate) fn new(token: Token, reactor: Weak<dyn ReactorHandle>, interest: Interest) -> Self {
         Self {
             token,
             reactor,

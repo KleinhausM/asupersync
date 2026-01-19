@@ -1298,8 +1298,8 @@ mod tests {
     #[test]
     fn io_driver_mut_allows_modification() {
         use crate::runtime::reactor::LabReactor;
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
         use std::task::{Wake, Waker};
 
         struct TestWaker(AtomicBool);
@@ -1326,8 +1326,8 @@ mod tests {
     #[test]
     fn is_quiescent_considers_io_driver() {
         use crate::runtime::reactor::LabReactor;
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
         use std::task::{Wake, Waker};
 
         struct TestWaker(AtomicBool);
@@ -1372,11 +1372,11 @@ mod tests {
     mod epoll_integration {
         use super::*;
         use crate::runtime::reactor::{EpollReactor, Interest};
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::task::{Wake, Waker};
-        use std::os::unix::net::UnixStream;
         use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::task::{Wake, Waker};
         use std::time::Duration;
 
         struct FlagWaker(AtomicBool);
@@ -1402,7 +1402,8 @@ mod tests {
             let waker = Waker::from(waker_state.clone());
 
             let driver = state.io_driver_mut().unwrap();
-            let token = driver.register(&sock_read, Interest::READABLE, waker)
+            let token = driver
+                .register(&sock_read, Interest::READABLE, waker)
                 .expect("register");
 
             // Not quiescent due to I/O registration
@@ -1412,7 +1413,9 @@ mod tests {
             sock_write.write_all(b"hello").expect("write");
 
             // Turn the driver to dispatch waker
-            let count = state.io_driver_mut().unwrap()
+            let count = state
+                .io_driver_mut()
+                .unwrap()
                 .turn(Some(Duration::from_millis(100)))
                 .expect("turn");
 
@@ -1420,7 +1423,11 @@ mod tests {
             assert!(waker_state.0.load(Ordering::SeqCst));
 
             // Deregister and verify quiescence
-            state.io_driver_mut().unwrap().deregister(token).expect("deregister");
+            state
+                .io_driver_mut()
+                .unwrap()
+                .deregister(token)
+                .expect("deregister");
             assert!(state.is_quiescent());
         }
     }

@@ -492,11 +492,17 @@ mod tests {
 
         assert_eq!(reactor.registration_count(), 3);
 
-        reactor.deregister(Token::new(2)).expect("deregister failed");
+        reactor
+            .deregister(Token::new(2))
+            .expect("deregister failed");
         assert_eq!(reactor.registration_count(), 2);
 
-        reactor.deregister(Token::new(1)).expect("deregister failed");
-        reactor.deregister(Token::new(3)).expect("deregister failed");
+        reactor
+            .deregister(Token::new(1))
+            .expect("deregister failed");
+        reactor
+            .deregister(Token::new(3))
+            .expect("deregister failed");
         assert_eq!(reactor.registration_count(), 0);
     }
 

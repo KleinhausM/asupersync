@@ -105,9 +105,9 @@ pub mod epoll;
 
 pub use interest::Interest;
 pub use lab::LabReactor;
-pub use registration::Registration;
 #[allow(unused_imports)]
 pub(crate) use registration::ReactorHandle;
+pub use registration::Registration;
 pub use source::{next_source_id, Source, SourceId, SourceWrapper};
 pub use token::{SlabToken, TokenSlab};
 
@@ -307,7 +307,6 @@ impl IntoIterator for Events {
         self.inner.into_iter()
     }
 }
-
 
 /// Platform-agnostic reactor for I/O event notification.
 ///

@@ -70,7 +70,8 @@ impl Interest {
     pub const EDGE_TRIGGERED: Self = Self(1 << 6);
 
     /// Common combination for sockets.
-    pub const SOCKET: Self = Self(Self::READABLE.0 | Self::WRITABLE.0 | Self::ERROR.0 | Self::HUP.0);
+    pub const SOCKET: Self =
+        Self(Self::READABLE.0 | Self::WRITABLE.0 | Self::ERROR.0 | Self::HUP.0);
 
     /// Returns interest in readable events.
     #[must_use]

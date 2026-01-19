@@ -470,9 +470,7 @@ mod tests {
         let mut events = crate::runtime::reactor::Events::with_capacity(10);
 
         // Poll with zero timeout should still deliver the event
-        reactor
-            .poll(&mut events, Some(Duration::ZERO))
-            .unwrap();
+        reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
         assert_eq!(events.iter().count(), 1);
     }
 
@@ -486,9 +484,15 @@ mod tests {
         let token2 = Token::new(2);
         let token3 = Token::new(3);
 
-        reactor.register(&source, token1, Interest::READABLE).unwrap();
-        reactor.register(&source, token2, Interest::READABLE).unwrap();
-        reactor.register(&source, token3, Interest::READABLE).unwrap();
+        reactor
+            .register(&source, token1, Interest::READABLE)
+            .unwrap();
+        reactor
+            .register(&source, token2, Interest::READABLE)
+            .unwrap();
+        reactor
+            .register(&source, token3, Interest::READABLE)
+            .unwrap();
 
         // Schedule all at the same time (10ms from now)
         // They should be delivered in insertion order: 1, 2, 3
@@ -499,7 +503,9 @@ mod tests {
         let mut events = crate::runtime::reactor::Events::with_capacity(10);
 
         // Advance time past the scheduled time
-        reactor.poll(&mut events, Some(Duration::from_millis(15))).unwrap();
+        reactor
+            .poll(&mut events, Some(Duration::from_millis(15)))
+            .unwrap();
 
         // Should have 3 events in order
         let collected: Vec<_> = events.iter().collect();
@@ -518,9 +524,15 @@ mod tests {
         let token2 = Token::new(2);
         let token3 = Token::new(3);
 
-        reactor.register(&source, token1, Interest::READABLE).unwrap();
-        reactor.register(&source, token2, Interest::READABLE).unwrap();
-        reactor.register(&source, token3, Interest::READABLE).unwrap();
+        reactor
+            .register(&source, token1, Interest::READABLE)
+            .unwrap();
+        reactor
+            .register(&source, token2, Interest::READABLE)
+            .unwrap();
+        reactor
+            .register(&source, token3, Interest::READABLE)
+            .unwrap();
 
         // Schedule in reverse order of delivery time
         // token3 at 5ms, token1 at 10ms, token2 at 15ms
@@ -531,7 +543,9 @@ mod tests {
         let mut events = crate::runtime::reactor::Events::with_capacity(10);
 
         // Poll to 20ms - all events should be delivered
-        reactor.poll(&mut events, Some(Duration::from_millis(20))).unwrap();
+        reactor
+            .poll(&mut events, Some(Duration::from_millis(20)))
+            .unwrap();
 
         // Should be in time order: token3, token1, token2
         let collected: Vec<_> = events.iter().collect();
@@ -547,13 +561,17 @@ mod tests {
         let token = Token::new(1);
         let source = MockSource;
 
-        reactor.register(&source, token, Interest::READABLE).unwrap();
+        reactor
+            .register(&source, token, Interest::READABLE)
+            .unwrap();
 
         // Use schedule_event (alias for inject_event)
         reactor.schedule_event(token, Event::readable(token), Duration::from_millis(10));
 
         let mut events = crate::runtime::reactor::Events::with_capacity(10);
-        reactor.poll(&mut events, Some(Duration::from_millis(15))).unwrap();
+        reactor
+            .poll(&mut events, Some(Duration::from_millis(15)))
+            .unwrap();
 
         assert_eq!(events.iter().count(), 1);
     }
@@ -564,7 +582,9 @@ mod tests {
         let source = MockSource;
         let token = Token::new(1);
 
-        reactor.register(&source, token, Interest::READABLE).unwrap();
+        reactor
+            .register(&source, token, Interest::READABLE)
+            .unwrap();
 
         // First advance time
         reactor.advance_time(Duration::from_millis(100));
@@ -588,8 +608,12 @@ mod tests {
         let token1 = Token::new(1);
         let token2 = Token::new(2);
 
-        reactor.register(&source, token1, Interest::READABLE).unwrap();
-        reactor.register(&source, token2, Interest::READABLE).unwrap();
+        reactor
+            .register(&source, token1, Interest::READABLE)
+            .unwrap();
+        reactor
+            .register(&source, token2, Interest::READABLE)
+            .unwrap();
 
         // Schedule events for both tokens
         reactor.schedule_event(token1, Event::readable(token1), Duration::from_millis(10));
@@ -602,7 +626,9 @@ mod tests {
         let mut events = crate::runtime::reactor::Events::with_capacity(10);
 
         // Advance time past all scheduled events
-        reactor.poll(&mut events, Some(Duration::from_millis(25))).unwrap();
+        reactor
+            .poll(&mut events, Some(Duration::from_millis(25)))
+            .unwrap();
 
         // Should only have token2's event (token1's events were cleaned up)
         let collected: Vec<_> = events.iter().collect();
@@ -662,9 +688,7 @@ mod tests {
             reactor.inject_event(token, Event::readable(token), Duration::ZERO);
 
             // Turn the driver - should dispatch the waker
-            let count = driver
-                .turn(Some(Duration::from_millis(10)))
-                .expect("turn");
+            let count = driver.turn(Some(Duration::from_millis(10))).expect("turn");
 
             assert!(count >= 1);
             assert!(waker_state.flag.load(Ordering::SeqCst));
@@ -682,9 +706,15 @@ mod tests {
             let (waker2, state2) = create_test_waker();
             let (waker3, state3) = create_test_waker();
 
-            let token1 = driver.register(&source, Interest::READABLE, waker1).unwrap();
-            let _token2 = driver.register(&source, Interest::READABLE, waker2).unwrap();
-            let token3 = driver.register(&source, Interest::READABLE, waker3).unwrap();
+            let token1 = driver
+                .register(&source, Interest::READABLE, waker1)
+                .unwrap();
+            let _token2 = driver
+                .register(&source, Interest::READABLE, waker2)
+                .unwrap();
+            let token3 = driver
+                .register(&source, Interest::READABLE, waker3)
+                .unwrap();
 
             // Inject events for tokens 1 and 3 only
             reactor.inject_event(token1, Event::readable(token1), Duration::ZERO);
