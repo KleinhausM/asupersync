@@ -9,7 +9,7 @@
 use crate::record::finalizer::Finalizer;
 use crate::record::{ObligationAbortReason, ObligationKind, ObligationRecord, RegionRecord, TaskRecord};
 use crate::error::{Error, ErrorKind};
-use crate::runtime::io_driver::IoDriver;
+use crate::runtime::io_driver::{IoDriver, IoDriverHandle};
 use crate::runtime::reactor::Reactor;
 use crate::runtime::stored_task::StoredTask;
 use crate::trace::{TraceBuffer, TraceEvent};
@@ -77,7 +77,7 @@ pub struct RuntimeState {
     ///
     /// When present, the runtime can wait on I/O events via the reactor.
     /// When `None`, the runtime operates in pure Lab mode without real I/O.
-    io_driver: Option<IoDriver>,
+    io_driver: Option<IoDriverHandle>,
 }
 
 impl RuntimeState {
@@ -129,7 +129,7 @@ impl RuntimeState {
             trace: TraceBuffer::new(4096),
             trace_seq: 0,
             stored_futures: HashMap::new(),
-            io_driver: Some(IoDriver::new(reactor)),
+            io_driver: Some(IoDriverHandle::new(reactor)),
         }
     }
 
@@ -142,19 +142,27 @@ impl RuntimeState {
         Self::new()
     }
 
-    /// Returns a reference to the I/O driver, if present.
+    /// Returns a reference to the I/O driver handle, if present.
     ///
     /// Returns `None` if the runtime was created without a reactor.
     #[must_use]
-    pub fn io_driver(&self) -> Option<&IoDriver> {
+    pub fn io_driver(&self) -> Option<&IoDriverHandle> {
         self.io_driver.as_ref()
     }
 
-    /// Returns a mutable reference to the I/O driver, if present.
+    /// Returns a locked guard to the I/O driver, if present.
     ///
     /// Returns `None` if the runtime was created without a reactor.
-    pub fn io_driver_mut(&mut self) -> Option<&mut IoDriver> {
-        self.io_driver.as_mut()
+    pub fn io_driver_mut(&self) -> Option<std::sync::MutexGuard<'_, IoDriver>> {
+        self.io_driver.as_ref().map(IoDriverHandle::lock)
+    }
+
+    /// Returns a cloned handle to the I/O driver, if present.
+    ///
+    /// Returns `None` if the runtime was created without a reactor.
+    #[must_use]
+    pub fn io_driver_handle(&self) -> Option<IoDriverHandle> {
+        self.io_driver.clone()
     }
 
     /// Returns `true` if this runtime has an I/O driver.
@@ -246,12 +254,19 @@ impl RuntimeState {
         }
 
         // Create the task's capability context
-        let cx = crate::cx::Cx::new(region, task_id, budget);
+        let cx = crate::cx::Cx::new_with_observability(
+            region,
+            task_id,
+            budget,
+            None,
+            self.io_driver_handle(),
+        );
         let cx_weak = std::sync::Arc::downgrade(&cx.inner);
 
         // Link the shared state to the TaskRecord
         if let Some(record) = self.tasks.get_mut(idx) {
             record.set_cx_inner(cx.inner.clone());
+            record.set_cx(cx.clone());
         }
 
         // Wrap the future to send the result through the channel
@@ -522,6 +537,25 @@ impl RuntimeState {
         self.stored_futures.remove(&task_id)
     }
 
+    /// Stores a spawned task's future for execution.
+    ///
+    /// This is called after `Scope::spawn` to register the `StoredTask` with
+    /// the runtime. The task must already have a `TaskRecord` created via spawn.
+    ///
+    /// # Arguments
+    /// * `task_id` - The ID of the task (from the TaskHandle)
+    /// * `stored` - The StoredTask containing the wrapped future
+    ///
+    /// # Example
+    /// ```ignore
+    /// let (handle, stored) = scope.spawn(&mut state, &cx, |_| async { 42 })?;
+    /// state.store_spawned_task(handle.task_id(), stored);
+    /// // Now the executor can poll the task
+    /// ```
+    pub fn store_spawned_task(&mut self, task_id: TaskId, stored: StoredTask) {
+        self.stored_futures.insert(task_id, stored);
+    }
+
     /// Returns the next trace sequence number and increments it.
     pub fn next_trace_seq(&mut self) -> u64 {
         let seq = self.trace_seq;
@@ -566,7 +600,7 @@ impl RuntimeState {
     pub fn is_quiescent(&self) -> bool {
         let no_tasks = self.live_task_count() == 0;
         let no_obligations = self.pending_obligation_count() == 0;
-        let no_io = self.io_driver.as_ref().is_none_or(IoDriver::is_empty);
+        let no_io = self.io_driver.as_ref().is_none_or(IoDriverHandle::is_empty);
         no_tasks && no_obligations && no_io
     }
 
@@ -1054,8 +1088,14 @@ impl Default for RuntimeState {
 mod tests {
     use super::*;
     use crate::record::task::TaskState;
+    use crate::test_utils::init_test_logging;
     use crate::types::CancelKind;
     use crate::util::ArenaIndex;
+
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
 
     fn insert_task(state: &mut RuntimeState, region: RegionId) -> TaskId {
         let idx = state.tasks.insert(TaskRecord::new(
@@ -1065,16 +1105,18 @@ mod tests {
         ));
         let id = TaskId::from_arena(idx);
         state.tasks.get_mut(idx).expect("task missing").id = id;
-        assert!(state
+        let added = state
             .regions
             .get_mut(region.arena_index())
             .expect("region missing")
-            .add_task(id));
+            .add_task(id);
+        crate::assert_with_log!(added, "task added to region", true, added);
         id
     }
 
     #[test]
     fn can_region_complete_close_checks_running_finalizer_tasks() {
+        init_test("can_region_complete_close_checks_running_finalizer_tasks");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1092,7 +1134,8 @@ mod tests {
             .start_running();
 
         // Should NOT be able to close because a task is running
-        assert!(!state.can_region_complete_close(region));
+        let can_close = state.can_region_complete_close(region);
+        crate::assert_with_log!(!can_close, "cannot close with running task", false, can_close);
 
         // Complete the task
         state
@@ -1102,26 +1145,49 @@ mod tests {
             .complete(Outcome::Ok(()));
 
         // Now should be able to close
-        assert!(state.can_region_complete_close(region));
+        let can_close = state.can_region_complete_close(region);
+        crate::assert_with_log!(can_close, "can close after task completes", true, can_close);
+        crate::test_complete!("can_region_complete_close_checks_running_finalizer_tasks");
     }
 
     #[test]
     fn empty_state_is_quiescent() {
+        init_test("empty_state_is_quiescent");
         let state = RuntimeState::new();
-        assert!(state.is_quiescent());
+        let quiescent = state.is_quiescent();
+        crate::assert_with_log!(quiescent, "state quiescent", true, quiescent);
+        crate::test_complete!("empty_state_is_quiescent");
     }
 
     #[test]
     fn create_root_region() {
+        init_test("create_root_region");
         let mut state = RuntimeState::new();
         let root = state.create_root_region(Budget::INFINITE);
-        assert!(state.root_region.is_some());
-        assert_eq!(state.root_region, Some(root));
-        assert_eq!(state.live_region_count(), 1);
+        crate::assert_with_log!(
+            state.root_region.is_some(),
+            "root region set",
+            true,
+            state.root_region.is_some()
+        );
+        crate::assert_with_log!(
+            state.root_region == Some(root),
+            "root id matches",
+            Some(root),
+            state.root_region
+        );
+        crate::assert_with_log!(
+            state.live_region_count() == 1,
+            "live region count",
+            1usize,
+            state.live_region_count()
+        );
+        crate::test_complete!("create_root_region");
     }
 
     #[test]
     fn policy_can_cancel_siblings() {
+        init_test("policy_can_cancel_siblings");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1135,27 +1201,38 @@ mod tests {
         ));
         let (action, tasks) = state.apply_policy_on_child_outcome(region, child, &outcome, &policy);
 
-        assert_eq!(
-            action,
-            PolicyAction::CancelSiblings(CancelReason::sibling_failed())
+        let expected_action = PolicyAction::CancelSiblings(CancelReason::sibling_failed());
+        crate::assert_with_log!(
+            action == expected_action,
+            "cancel siblings action",
+            expected_action,
+            action
         );
-        assert_eq!(tasks.len(), 2);
+        crate::assert_with_log!(tasks.len() == 2, "tasks len", 2usize, tasks.len());
 
         for sib in [sib1, sib2] {
             let record = state.tasks.get(sib.arena_index()).expect("sib missing");
             match &record.state {
                 TaskState::CancelRequested { reason, .. } => {
-                    assert_eq!(reason.kind, CancelKind::FailFast);
+                    crate::assert_with_log!(
+                        reason.kind == CancelKind::FailFast,
+                        "cancel reason kind",
+                        CancelKind::FailFast,
+                        reason.kind
+                    );
                 }
                 other => panic!("expected CancelRequested, got {other:?}"),
             }
         }
         let child_record = state.tasks.get(child.arena_index()).expect("child missing");
-        assert!(matches!(child_record.state, TaskState::Created));
+        let is_created = matches!(child_record.state, TaskState::Created);
+        crate::assert_with_log!(is_created, "child remains created", true, is_created);
+        crate::test_complete!("policy_can_cancel_siblings");
     }
 
     #[test]
     fn policy_does_not_cancel_siblings_on_cancelled_child() {
+        init_test("policy_does_not_cancel_siblings_on_cancelled_child");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1166,9 +1243,16 @@ mod tests {
         let outcome = Outcome::<(), crate::error::Error>::Cancelled(CancelReason::timeout());
         let (action, _) = state.apply_policy_on_child_outcome(region, child, &outcome, &policy);
 
-        assert_eq!(action, PolicyAction::Continue);
+        crate::assert_with_log!(
+            action == PolicyAction::Continue,
+            "action continue",
+            PolicyAction::Continue,
+            action
+        );
         let sib_record = state.tasks.get(sib.arena_index()).expect("sib missing");
-        assert!(matches!(sib_record.state, TaskState::Created));
+        let is_created = matches!(sib_record.state, TaskState::Created);
+        crate::assert_with_log!(is_created, "sibling remains created", true, is_created);
+        crate::test_complete!("policy_does_not_cancel_siblings_on_cancelled_child");
     }
 
     fn create_child_region(state: &mut RuntimeState, parent: RegionId) -> RegionId {
@@ -1179,16 +1263,18 @@ mod tests {
         ));
         let id = RegionId::from_arena(idx);
         state.regions.get_mut(idx).expect("region missing").id = id;
-        assert!(state
+        let added = state
             .regions
             .get_mut(parent.arena_index())
             .expect("parent missing")
-            .add_child(id));
+            .add_child(id);
+        crate::assert_with_log!(added, "child added to parent", true, added);
         id
     }
 
     #[test]
     fn cancel_request_marks_region() {
+        init_test("cancel_request_marks_region");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1198,15 +1284,26 @@ mod tests {
             .regions
             .get(region.arena_index())
             .expect("region missing");
-        assert!(region_record.cancel_reason().is_some());
-        assert_eq!(
-            region_record.cancel_reason().as_ref().unwrap().kind,
-            CancelKind::Timeout
+        let cancel_reason = region_record.cancel_reason();
+        crate::assert_with_log!(
+            cancel_reason.is_some(),
+            "cancel reason set",
+            true,
+            cancel_reason.is_some()
         );
+        let kind = cancel_reason.as_ref().unwrap().kind;
+        crate::assert_with_log!(
+            kind == CancelKind::Timeout,
+            "cancel kind timeout",
+            CancelKind::Timeout,
+            kind
+        );
+        crate::test_complete!("cancel_request_marks_region");
     }
 
     #[test]
     fn cancel_request_marks_tasks() {
+        init_test("cancel_request_marks_tasks");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
         let task1 = insert_task(&mut state, region);
@@ -1215,10 +1312,25 @@ mod tests {
         let tasks_to_schedule = state.cancel_request(region, &CancelReason::timeout(), None);
 
         // Both tasks should be returned for scheduling
-        assert_eq!(tasks_to_schedule.len(), 2);
+        crate::assert_with_log!(
+            tasks_to_schedule.len() == 2,
+            "tasks scheduled",
+            2usize,
+            tasks_to_schedule.len()
+        );
         let task_ids: Vec<_> = tasks_to_schedule.iter().map(|(id, _)| *id).collect();
-        assert!(task_ids.contains(&task1));
-        assert!(task_ids.contains(&task2));
+        crate::assert_with_log!(
+            task_ids.contains(&task1),
+            "contains task1",
+            true,
+            task_ids.contains(&task1)
+        );
+        crate::assert_with_log!(
+            task_ids.contains(&task2),
+            "contains task2",
+            true,
+            task_ids.contains(&task2)
+        );
 
         // Tasks should be in CancelRequested state
         for (task_id, _) in tasks_to_schedule {
@@ -1226,12 +1338,20 @@ mod tests {
                 .tasks
                 .get(task_id.arena_index())
                 .expect("task missing");
-            assert!(matches!(task.state, TaskState::CancelRequested { .. }));
+            let is_cancel_requested = matches!(task.state, TaskState::CancelRequested { .. });
+            crate::assert_with_log!(
+                is_cancel_requested,
+                "task cancel requested",
+                true,
+                is_cancel_requested
+            );
         }
+        crate::test_complete!("cancel_request_marks_tasks");
     }
 
     #[test]
     fn cancel_request_propagates_to_descendants() {
+        init_test("cancel_request_propagates_to_descendants");
         let mut state = RuntimeState::new();
         let root = state.create_root_region(Budget::INFINITE);
         let child = create_child_region(&mut state, root);
@@ -1244,13 +1364,21 @@ mod tests {
         let tasks_to_schedule = state.cancel_request(root, &CancelReason::user("stop"), None);
 
         // All 3 tasks should be scheduled
-        assert_eq!(tasks_to_schedule.len(), 3);
+        crate::assert_with_log!(
+            tasks_to_schedule.len() == 3,
+            "tasks scheduled",
+            3usize,
+            tasks_to_schedule.len()
+        );
 
         // Root region gets original reason
         let root_record = state.regions.get(root.arena_index()).expect("root missing");
-        assert_eq!(
-            root_record.cancel_reason().as_ref().unwrap().kind,
-            CancelKind::User
+        let root_kind = root_record.cancel_reason().as_ref().unwrap().kind;
+        crate::assert_with_log!(
+            root_kind == CancelKind::User,
+            "root cancel kind",
+            CancelKind::User,
+            root_kind
         );
 
         // Descendants get ParentCancelled
@@ -1258,18 +1386,24 @@ mod tests {
             .regions
             .get(child.arena_index())
             .expect("child missing");
-        assert_eq!(
-            child_record.cancel_reason().as_ref().unwrap().kind,
-            CancelKind::ParentCancelled
+        let child_kind = child_record.cancel_reason().as_ref().unwrap().kind;
+        crate::assert_with_log!(
+            child_kind == CancelKind::ParentCancelled,
+            "child cancel kind",
+            CancelKind::ParentCancelled,
+            child_kind
         );
 
         let grandchild_record = state
             .regions
             .get(grandchild.arena_index())
             .expect("grandchild missing");
-        assert_eq!(
-            grandchild_record.cancel_reason().as_ref().unwrap().kind,
-            CancelKind::ParentCancelled
+        let grandchild_kind = grandchild_record.cancel_reason().as_ref().unwrap().kind;
+        crate::assert_with_log!(
+            grandchild_kind == CancelKind::ParentCancelled,
+            "grandchild cancel kind",
+            CancelKind::ParentCancelled,
+            grandchild_kind
         );
 
         // Root task gets User reason, descendants get ParentCancelled
@@ -1279,7 +1413,12 @@ mod tests {
             .expect("task missing");
         match &root_task_record.state {
             TaskState::CancelRequested { reason, .. } => {
-                assert_eq!(reason.kind, CancelKind::User);
+                crate::assert_with_log!(
+                    reason.kind == CancelKind::User,
+                    "root task cancel kind",
+                    CancelKind::User,
+                    reason.kind
+                );
             }
             other => panic!("expected CancelRequested, got {other:?}"),
         }
@@ -1290,7 +1429,12 @@ mod tests {
             .expect("task missing");
         match &child_task_record.state {
             TaskState::CancelRequested { reason, .. } => {
-                assert_eq!(reason.kind, CancelKind::ParentCancelled);
+                crate::assert_with_log!(
+                    reason.kind == CancelKind::ParentCancelled,
+                    "child task cancel kind",
+                    CancelKind::ParentCancelled,
+                    reason.kind
+                );
             }
             other => panic!("expected CancelRequested, got {other:?}"),
         }
@@ -1301,14 +1445,21 @@ mod tests {
             .expect("task missing");
         match &grandchild_task_record.state {
             TaskState::CancelRequested { reason, .. } => {
-                assert_eq!(reason.kind, CancelKind::ParentCancelled);
+                crate::assert_with_log!(
+                    reason.kind == CancelKind::ParentCancelled,
+                    "grandchild task cancel kind",
+                    CancelKind::ParentCancelled,
+                    reason.kind
+                );
             }
             other => panic!("expected CancelRequested, got {other:?}"),
         }
+        crate::test_complete!("cancel_request_propagates_to_descendants");
     }
 
     #[test]
     fn cancel_request_strengthens_existing_reason() {
+        init_test("cancel_request_strengthens_existing_reason");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
         let task = insert_task(&mut state, region);
@@ -1324,29 +1475,45 @@ mod tests {
             .regions
             .get(region.arena_index())
             .expect("region missing");
-        assert_eq!(
-            region_record.cancel_reason().as_ref().unwrap().kind,
-            CancelKind::Shutdown
+        let region_kind = region_record.cancel_reason().as_ref().unwrap().kind;
+        crate::assert_with_log!(
+            region_kind == CancelKind::Shutdown,
+            "region cancel kind",
+            CancelKind::Shutdown,
+            region_kind
         );
 
         // Task should have Shutdown reason
         let task_record = state.tasks.get(task.arena_index()).expect("task missing");
         match &task_record.state {
             TaskState::CancelRequested { reason, .. } => {
-                assert_eq!(reason.kind, CancelKind::Shutdown);
+                crate::assert_with_log!(
+                    reason.kind == CancelKind::Shutdown,
+                    "task cancel kind",
+                    CancelKind::Shutdown,
+                    reason.kind
+                );
             }
             other => panic!("expected CancelRequested, got {other:?}"),
         }
+        crate::test_complete!("cancel_request_strengthens_existing_reason");
     }
 
     #[test]
     fn can_region_finalize_with_all_tasks_done() {
+        init_test("can_region_finalize_with_all_tasks_done");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
         let task = insert_task(&mut state, region);
 
         // Not finalizable while task is live
-        assert!(!state.can_region_finalize(region));
+        let can_finalize = state.can_region_finalize(region);
+        crate::assert_with_log!(
+            !can_finalize,
+            "cannot finalize with live task",
+            false,
+            can_finalize
+        );
 
         // Complete the task
         state
@@ -1356,17 +1523,26 @@ mod tests {
             .complete(Outcome::Ok(()));
 
         // Now region can finalize
-        assert!(state.can_region_finalize(region));
+        let can_finalize = state.can_region_finalize(region);
+        crate::assert_with_log!(can_finalize, "can finalize", true, can_finalize);
+        crate::test_complete!("can_region_finalize_with_all_tasks_done");
     }
 
     #[test]
     fn can_region_finalize_requires_child_regions_closed() {
+        init_test("can_region_finalize_requires_child_regions_closed");
         let mut state = RuntimeState::new();
         let root = state.create_root_region(Budget::INFINITE);
         let child = create_child_region(&mut state, root);
 
         // Child region is Open, so root cannot finalize
-        assert!(!state.can_region_finalize(root));
+        let can_finalize = state.can_region_finalize(root);
+        crate::assert_with_log!(
+            !can_finalize,
+            "cannot finalize with open child",
+            false,
+            can_finalize
+        );
 
         // Close the child region
         let child_record = state
@@ -1378,7 +1554,9 @@ mod tests {
         child_record.complete_close();
 
         // Now root can finalize
-        assert!(state.can_region_finalize(root));
+        let can_finalize = state.can_region_finalize(root);
+        crate::assert_with_log!(can_finalize, "can finalize", true, can_finalize);
+        crate::test_complete!("can_region_finalize_requires_child_regions_closed");
     }
 
     // =========================================================================
@@ -1387,30 +1565,62 @@ mod tests {
 
     #[test]
     fn register_sync_finalizer() {
+        init_test("register_sync_finalizer");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
-        assert!(state.region_finalizers_empty(region));
-        assert_eq!(state.region_finalizer_count(region), 0);
+        crate::assert_with_log!(
+            state.region_finalizers_empty(region),
+            "finalizers empty",
+            true,
+            state.region_finalizers_empty(region)
+        );
+        crate::assert_with_log!(
+            state.region_finalizer_count(region) == 0,
+            "finalizer count",
+            0usize,
+            state.region_finalizer_count(region)
+        );
 
         // Register a sync finalizer
-        assert!(state.register_sync_finalizer(region, || {}));
+        let registered = state.register_sync_finalizer(region, || {});
+        crate::assert_with_log!(registered, "register sync finalizer", true, registered);
 
-        assert!(!state.region_finalizers_empty(region));
-        assert_eq!(state.region_finalizer_count(region), 1);
+        crate::assert_with_log!(
+            !state.region_finalizers_empty(region),
+            "finalizers not empty",
+            false,
+            state.region_finalizers_empty(region)
+        );
+        crate::assert_with_log!(
+            state.region_finalizer_count(region) == 1,
+            "finalizer count",
+            1usize,
+            state.region_finalizer_count(region)
+        );
+        crate::test_complete!("register_sync_finalizer");
     }
 
     #[test]
     fn register_async_finalizer() {
+        init_test("register_async_finalizer");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
-        assert!(state.register_async_finalizer(region, async {}));
-        assert_eq!(state.region_finalizer_count(region), 1);
+        let registered = state.register_async_finalizer(region, async {});
+        crate::assert_with_log!(registered, "register async finalizer", true, registered);
+        crate::assert_with_log!(
+            state.region_finalizer_count(region) == 1,
+            "finalizer count",
+            1usize,
+            state.region_finalizer_count(region)
+        );
+        crate::test_complete!("register_async_finalizer");
     }
 
     #[test]
     fn register_finalizer_fails_when_region_not_open() {
+        init_test("register_finalizer_fails_when_region_not_open");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1422,21 +1632,29 @@ mod tests {
             .begin_close(None);
 
         // Registration should fail
-        assert!(!state.register_sync_finalizer(region, || {}));
-        assert!(!state.register_async_finalizer(region, async {}));
+        let sync_ok = state.register_sync_finalizer(region, || {});
+        let async_ok = state.register_async_finalizer(region, async {});
+        crate::assert_with_log!(!sync_ok, "sync finalizer rejected", false, sync_ok);
+        crate::assert_with_log!(!async_ok, "async finalizer rejected", false, async_ok);
+        crate::test_complete!("register_finalizer_fails_when_region_not_open");
     }
 
     #[test]
     fn register_finalizer_fails_for_nonexistent_region() {
+        init_test("register_finalizer_fails_for_nonexistent_region");
         let mut state = RuntimeState::new();
         let fake_region = RegionId::from_arena(ArenaIndex::new(999, 0));
 
-        assert!(!state.register_sync_finalizer(fake_region, || {}));
-        assert!(!state.register_async_finalizer(fake_region, async {}));
+        let sync_ok = state.register_sync_finalizer(fake_region, || {});
+        let async_ok = state.register_async_finalizer(fake_region, async {});
+        crate::assert_with_log!(!sync_ok, "sync finalizer rejected", false, sync_ok);
+        crate::assert_with_log!(!async_ok, "async finalizer rejected", false, async_ok);
+        crate::test_complete!("register_finalizer_fails_for_nonexistent_region");
     }
 
     #[test]
     fn pop_region_finalizer_lifo() {
+        init_test("pop_region_finalizer_lifo");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1458,11 +1676,19 @@ mod tests {
         }
 
         // Should be 3, 2, 1 (LIFO)
-        assert_eq!(*order.lock().unwrap(), vec![3, 2, 1]);
+        let observed = order.lock().unwrap().clone();
+        crate::assert_with_log!(
+            observed == vec![3, 2, 1],
+            "finalizer order",
+            vec![3, 2, 1],
+            observed
+        );
+        crate::test_complete!("pop_region_finalizer_lifo");
     }
 
     #[test]
     fn run_sync_finalizers_executes_and_returns_async() {
+        init_test("run_sync_finalizers_executes_and_returns_async");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1479,23 +1705,39 @@ mod tests {
         let async_finalizers = state.run_sync_finalizers(region);
 
         // Sync finalizers should have been called
-        assert!(sync_called.load(std::sync::atomic::Ordering::SeqCst));
+        let sync_flag = sync_called.load(std::sync::atomic::Ordering::SeqCst);
+        crate::assert_with_log!(sync_flag, "sync finalizer called", true, sync_flag);
 
         // One async finalizer should be returned
-        assert_eq!(async_finalizers.len(), 1);
-        assert!(matches!(async_finalizers[0], Finalizer::Async(_)));
+        crate::assert_with_log!(
+            async_finalizers.len() == 1,
+            "async finalizers len",
+            1usize,
+            async_finalizers.len()
+        );
+        let is_async = matches!(async_finalizers[0], Finalizer::Async(_));
+        crate::assert_with_log!(is_async, "async finalizer returned", true, is_async);
 
         // All finalizers should be cleared from region
-        assert!(state.region_finalizers_empty(region));
+        let empty = state.region_finalizers_empty(region);
+        crate::assert_with_log!(empty, "finalizers cleared", true, empty);
+        crate::test_complete!("run_sync_finalizers_executes_and_returns_async");
     }
 
     #[test]
     fn can_region_complete_close_requires_finalizing_state() {
+        init_test("can_region_complete_close_requires_finalizing_state");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
         // Must be in Finalizing state
-        assert!(!state.can_region_complete_close(region));
+        let can_close = state.can_region_complete_close(region);
+        crate::assert_with_log!(
+            !can_close,
+            "cannot close when not finalizing",
+            false,
+            can_close
+        );
 
         // Transition to Finalizing
         let region_record = state.regions.get_mut(region.arena_index()).expect("region");
@@ -1503,11 +1745,14 @@ mod tests {
         region_record.begin_finalize();
 
         // Now it can complete (no finalizers)
-        assert!(state.can_region_complete_close(region));
+        let can_close = state.can_region_complete_close(region);
+        crate::assert_with_log!(can_close, "can close", true, can_close);
+        crate::test_complete!("can_region_complete_close_requires_finalizing_state");
     }
 
     #[test]
     fn can_region_complete_close_checks_finalizers() {
+        init_test("can_region_complete_close_checks_finalizers");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1520,17 +1765,26 @@ mod tests {
         region_record.begin_finalize();
 
         // Can't complete while finalizers pending
-        assert!(!state.can_region_complete_close(region));
+        let can_close = state.can_region_complete_close(region);
+        crate::assert_with_log!(
+            !can_close,
+            "cannot close with pending finalizers",
+            false,
+            can_close
+        );
 
         // Run the finalizers
         let _ = state.run_sync_finalizers(region);
 
         // Now can complete
-        assert!(state.can_region_complete_close(region));
+        let can_close = state.can_region_complete_close(region);
+        crate::assert_with_log!(can_close, "can close", true, can_close);
+        crate::test_complete!("can_region_complete_close_checks_finalizers");
     }
 
     #[test]
     fn task_completed_removes_task_from_region() {
+        init_test("task_completed_removes_task_from_region");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1542,10 +1796,30 @@ mod tests {
         // Verify all tasks are in the region
         let region_record = state.regions.get(region.arena_index()).expect("region");
         let task_ids = region_record.task_ids();
-        assert_eq!(task_ids.len(), 3);
-        assert!(task_ids.contains(&task1));
-        assert!(task_ids.contains(&task2));
-        assert!(task_ids.contains(&task3));
+        crate::assert_with_log!(
+            task_ids.len() == 3,
+            "task count",
+            3usize,
+            task_ids.len()
+        );
+        crate::assert_with_log!(
+            task_ids.contains(&task1),
+            "contains task1",
+            true,
+            task_ids.contains(&task1)
+        );
+        crate::assert_with_log!(
+            task_ids.contains(&task2),
+            "contains task2",
+            true,
+            task_ids.contains(&task2)
+        );
+        crate::assert_with_log!(
+            task_ids.contains(&task3),
+            "contains task3",
+            true,
+            task_ids.contains(&task3)
+        );
 
         // Complete task2 (transition to Completed state first)
         state
@@ -1556,18 +1830,44 @@ mod tests {
 
         // Call task_completed to notify the runtime
         let waiters = state.task_completed(task2);
-        assert!(waiters.is_empty()); // No waiters registered
+        crate::assert_with_log!(
+            waiters.is_empty(),
+            "no waiters",
+            true,
+            waiters.is_empty()
+        ); // No waiters registered
 
         // Verify task2 is removed from the region
         let region_record = state.regions.get(region.arena_index()).expect("region");
         let task_ids = region_record.task_ids();
-        assert_eq!(task_ids.len(), 2);
-        assert!(task_ids.contains(&task1));
-        assert!(!task_ids.contains(&task2)); // task2 should be removed
-        assert!(task_ids.contains(&task3));
+        crate::assert_with_log!(
+            task_ids.len() == 2,
+            "task count",
+            2usize,
+            task_ids.len()
+        );
+        crate::assert_with_log!(
+            task_ids.contains(&task1),
+            "contains task1",
+            true,
+            task_ids.contains(&task1)
+        );
+        crate::assert_with_log!(
+            !task_ids.contains(&task2),
+            "task2 removed",
+            false,
+            task_ids.contains(&task2)
+        );
+        crate::assert_with_log!(
+            task_ids.contains(&task3),
+            "contains task3",
+            true,
+            task_ids.contains(&task3)
+        );
 
         // Verify task2 is removed from the state
-        assert!(state.tasks.get(task2.arena_index()).is_none());
+        let removed = state.tasks.get(task2.arena_index()).is_none();
+        crate::assert_with_log!(removed, "task2 removed from state", true, removed);
 
         // Complete remaining tasks
         state
@@ -1586,11 +1886,14 @@ mod tests {
 
         // Verify all tasks removed from region
         let region_record = state.regions.get(region.arena_index()).expect("region");
-        assert!(region_record.task_ids().is_empty());
+        let empty = region_record.task_ids().is_empty();
+        crate::assert_with_log!(empty, "region tasks empty", true, empty);
+        crate::test_complete!("task_completed_removes_task_from_region");
     }
 
     #[test]
     fn cancel_request_should_prevent_new_spawns() {
+        init_test("cancel_request_should_prevent_new_spawns");
         let mut state = RuntimeState::new();
         let region = state.create_root_region(Budget::INFINITE);
 
@@ -1599,14 +1902,19 @@ mod tests {
 
         // Verify state transition
         let region_record = state.regions.get(region.arena_index()).expect("region");
-        assert_eq!(
-            region_record.state(),
-            crate::record::region::RegionState::Closing
+        let region_state = region_record.state();
+        crate::assert_with_log!(
+            region_state == crate::record::region::RegionState::Closing,
+            "region closing",
+            crate::record::region::RegionState::Closing,
+            region_state
         );
 
         // Verify spawning is rejected with error (not panic)
         let result = state.create_task(region, Budget::INFINITE, async { 42 });
-        assert!(matches!(result, Err(SpawnError::RegionClosed(_))));
+        let rejected = matches!(result, Err(SpawnError::RegionClosed(_)));
+        crate::assert_with_log!(rejected, "spawn rejected", true, rejected);
+        crate::test_complete!("cancel_request_should_prevent_new_spawns");
     }
 
     // =========================================================================
@@ -1615,37 +1923,84 @@ mod tests {
 
     #[test]
     fn new_creates_state_without_io_driver() {
+        init_test("new_creates_state_without_io_driver");
         let state = RuntimeState::new();
-        assert!(!state.has_io_driver());
-        assert!(state.io_driver().is_none());
+        crate::assert_with_log!(
+            !state.has_io_driver(),
+            "no io driver",
+            false,
+            state.has_io_driver()
+        );
+        crate::assert_with_log!(
+            state.io_driver().is_none(),
+            "io driver none",
+            true,
+            state.io_driver().is_none()
+        );
+        crate::test_complete!("new_creates_state_without_io_driver");
     }
 
     #[test]
     fn without_reactor_creates_state_without_io_driver() {
+        init_test("without_reactor_creates_state_without_io_driver");
         let state = RuntimeState::without_reactor();
-        assert!(!state.has_io_driver());
-        assert!(state.io_driver().is_none());
+        crate::assert_with_log!(
+            !state.has_io_driver(),
+            "no io driver",
+            false,
+            state.has_io_driver()
+        );
+        crate::assert_with_log!(
+            state.io_driver().is_none(),
+            "io driver none",
+            true,
+            state.io_driver().is_none()
+        );
+        crate::test_complete!("without_reactor_creates_state_without_io_driver");
     }
 
     #[test]
     fn with_reactor_creates_state_with_io_driver() {
+        init_test("with_reactor_creates_state_with_io_driver");
         use crate::runtime::reactor::LabReactor;
         use std::sync::Arc;
 
         let reactor = Arc::new(LabReactor::new());
         let state = RuntimeState::with_reactor(reactor);
 
-        assert!(state.has_io_driver());
-        assert!(state.io_driver().is_some());
+        crate::assert_with_log!(
+            state.has_io_driver(),
+            "has io driver",
+            true,
+            state.has_io_driver()
+        );
+        crate::assert_with_log!(
+            state.io_driver().is_some(),
+            "io driver some",
+            true,
+            state.io_driver().is_some()
+        );
 
         // Verify the driver is functional
         let driver = state.io_driver().unwrap();
-        assert!(driver.is_empty());
-        assert_eq!(driver.waker_count(), 0);
+        crate::assert_with_log!(
+            driver.is_empty(),
+            "driver empty",
+            true,
+            driver.is_empty()
+        );
+        crate::assert_with_log!(
+            driver.waker_count() == 0,
+            "waker count",
+            0usize,
+            driver.waker_count()
+        );
+        crate::test_complete!("with_reactor_creates_state_with_io_driver");
     }
 
     #[test]
     fn io_driver_mut_allows_modification() {
+        init_test("io_driver_mut_allows_modification");
         use crate::runtime::reactor::LabReactor;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
@@ -1659,21 +2014,32 @@ mod tests {
         }
 
         let reactor = Arc::new(LabReactor::new());
-        let mut state = RuntimeState::with_reactor(reactor);
+        let state = RuntimeState::with_reactor(reactor);
 
         // Mutably access driver to register a waker
-        let driver = state.io_driver_mut().unwrap();
         let waker_state = Arc::new(TestWaker(AtomicBool::new(false)));
         let waker = Waker::from(waker_state);
-        let _key = driver.register_waker(waker);
+        {
+            let mut driver = state.io_driver_mut().unwrap();
+            let _key = driver.register_waker(waker);
+        }
 
         // Verify registration
-        assert_eq!(state.io_driver().unwrap().waker_count(), 1);
-        assert!(!state.io_driver().unwrap().is_empty());
+        let waker_count = state.io_driver().unwrap().waker_count();
+        crate::assert_with_log!(
+            waker_count == 1,
+            "waker count",
+            1usize,
+            waker_count
+        );
+        let empty = state.io_driver().unwrap().is_empty();
+        crate::assert_with_log!(!empty, "driver not empty", false, empty);
+        crate::test_complete!("io_driver_mut_allows_modification");
     }
 
     #[test]
     fn is_quiescent_considers_io_driver() {
+        init_test("is_quiescent_considers_io_driver");
         use crate::runtime::reactor::LabReactor;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
@@ -1687,33 +2053,45 @@ mod tests {
         }
 
         let reactor = Arc::new(LabReactor::new());
-        let mut state = RuntimeState::with_reactor(reactor);
+        let state = RuntimeState::with_reactor(reactor);
 
         // Initially quiescent (no tasks, no I/O registrations)
-        assert!(state.is_quiescent());
+        let quiescent = state.is_quiescent();
+        crate::assert_with_log!(quiescent, "initial quiescent", true, quiescent);
 
         // Register a waker
-        let driver = state.io_driver_mut().unwrap();
         let waker_state = Arc::new(TestWaker(AtomicBool::new(false)));
         let waker = Waker::from(waker_state);
-        let key = driver.register_waker(waker);
+        let key = {
+            let mut driver = state.io_driver_mut().unwrap();
+            driver.register_waker(waker)
+        };
 
         // No longer quiescent due to I/O registration
-        assert!(!state.is_quiescent());
+        let quiescent = state.is_quiescent();
+        crate::assert_with_log!(!quiescent, "not quiescent", false, quiescent);
 
         // Deregister
-        state.io_driver_mut().unwrap().deregister_waker(key);
+        {
+            let mut driver = state.io_driver_mut().unwrap();
+            driver.deregister_waker(key);
+        }
 
         // Quiescent again
-        assert!(state.is_quiescent());
+        let quiescent = state.is_quiescent();
+        crate::assert_with_log!(quiescent, "quiescent again", true, quiescent);
+        crate::test_complete!("is_quiescent_considers_io_driver");
     }
 
     #[test]
     fn is_quiescent_without_io_driver_ignores_io() {
+        init_test("is_quiescent_without_io_driver_ignores_io");
         let state = RuntimeState::new();
 
         // Quiescent without I/O driver
-        assert!(state.is_quiescent());
+        let quiescent = state.is_quiescent();
+        crate::assert_with_log!(quiescent, "quiescent", true, quiescent);
+        crate::test_complete!("is_quiescent_without_io_driver_ignores_io");
     }
 
     /// Integration test with real epoll reactor.
@@ -1737,11 +2115,18 @@ mod tests {
 
         #[test]
         fn runtime_state_with_epoll_reactor() {
+            super::init_test("runtime_state_with_epoll_reactor");
             let reactor = Arc::new(EpollReactor::new().expect("create reactor"));
-            let mut state = RuntimeState::with_reactor(reactor);
+            let state = RuntimeState::with_reactor(reactor);
 
-            assert!(state.has_io_driver());
-            assert!(state.is_quiescent());
+            crate::assert_with_log!(
+                state.has_io_driver(),
+                "has io driver",
+                true,
+                state.has_io_driver()
+            );
+            let quiescent = state.is_quiescent();
+            crate::assert_with_log!(quiescent, "quiescent", true, quiescent);
 
             // Create a socket pair
             let (sock_read, mut sock_write) = UnixStream::pair().expect("socket pair");
@@ -1750,34 +2135,40 @@ mod tests {
             let waker_state = Arc::new(FlagWaker(AtomicBool::new(false)));
             let waker = Waker::from(waker_state.clone());
 
-            let driver = state.io_driver_mut().unwrap();
-            let token = driver
-                .register(&sock_read, Interest::READABLE, waker)
-                .expect("register");
+            let token = {
+                let mut driver = state.io_driver_mut().unwrap();
+                driver
+                    .register(&sock_read, Interest::READABLE, waker)
+                    .expect("register")
+            };
 
             // Not quiescent due to I/O registration
-            assert!(!state.is_quiescent());
+            let quiescent = state.is_quiescent();
+            crate::assert_with_log!(!quiescent, "not quiescent", false, quiescent);
 
             // Make socket readable
             sock_write.write_all(b"hello").expect("write");
 
             // Turn the driver to dispatch waker
-            let count = state
-                .io_driver_mut()
-                .unwrap()
-                .turn(Some(Duration::from_millis(100)))
-                .expect("turn");
+            let count = {
+                let mut driver = state.io_driver_mut().unwrap();
+                driver
+                    .turn(Some(Duration::from_millis(100)))
+                    .expect("turn")
+            };
 
-            assert!(count >= 1);
-            assert!(waker_state.0.load(Ordering::SeqCst));
+            crate::assert_with_log!(count >= 1, "event count", true, count >= 1);
+            let flag = waker_state.0.load(Ordering::SeqCst);
+            crate::assert_with_log!(flag, "waker fired", true, flag);
 
             // Deregister and verify quiescence
-            state
-                .io_driver_mut()
-                .unwrap()
-                .deregister(token)
-                .expect("deregister");
-            assert!(state.is_quiescent());
+            {
+                let mut driver = state.io_driver_mut().unwrap();
+                driver.deregister(token).expect("deregister");
+            }
+            let quiescent = state.is_quiescent();
+            crate::assert_with_log!(quiescent, "quiescent", true, quiescent);
+            crate::test_complete!("runtime_state_with_epoll_reactor");
         }
     }
 }

@@ -140,23 +140,34 @@ impl<P: Policy> Scope<'_, P> {
             task_id = ?task_id,
             region_id = ?self.region,
             initial_state = "Created",
-            poll_quota = self.budget.poll_quota
-        );
+            budget_deadline = ?self.budget.deadline,
+            budget_poll_quota = self.budget.poll_quota,
+            budget_cost_quota = ?self.budget.cost_quota,
+            budget_priority = self.budget.priority,
+            budget_source = "scope"
+        )
+        .entered();
         debug!(
             task_id = ?task_id,
             region_id = ?self.region,
             initial_state = "Created",
-            poll_quota = self.budget.poll_quota,
+            budget_deadline = ?self.budget.deadline,
+            budget_poll_quota = self.budget.poll_quota,
+            budget_cost_quota = ?self.budget.cost_quota,
+            budget_priority = self.budget.priority,
+            budget_source = "scope",
             "task spawned"
         );
 
         // Create the child task's capability context
         let child_observability = cx.child_observability(self.region, task_id);
+        let io_driver = state.io_driver_handle();
         let child_cx = Cx::new_with_observability(
             self.region,
             task_id,
             self.budget,
             Some(child_observability),
+            io_driver,
         );
 
         // Create the TaskHandle
@@ -166,6 +177,7 @@ impl<P: Policy> Scope<'_, P> {
         // This links the user-facing Cx to the runtime's TaskRecord
         if let Some(record) = state.tasks.get_mut(task_id.arena_index()) {
             record.set_cx_inner(child_cx.inner.clone());
+            record.set_cx(child_cx.clone());
         }
 
         // Capture child_cx for result sending
@@ -197,6 +209,48 @@ impl<P: Policy> Scope<'_, P> {
         let stored = StoredTask::new(wrapped);
 
         Ok((handle, stored))
+    }
+
+    /// Spawns a task and registers it with the runtime state.
+    ///
+    /// This is a convenience method that combines `spawn()` with
+    /// `RuntimeState::store_spawned_task()`. It's the primary method
+    /// used by the `spawn!` macro.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The runtime state (for storing the task)
+    /// * `cx` - The capability context (for creating child context)
+    /// * `f` - A closure that produces the future, receiving the new task's `Cx`
+    ///
+    /// # Returns
+    ///
+    /// A `TaskHandle<T>` for awaiting the task's result.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let handle = scope.spawn_registered(&mut state, &cx, |cx| async move {
+    ///     cx.trace("Child task running");
+    ///     compute_value().await
+    /// })?;
+    ///
+    /// let result = handle.join(&cx).await?;
+    /// ```
+    pub fn spawn_registered<F, Fut>(
+        &self,
+        state: &mut RuntimeState,
+        cx: &Cx,
+        f: F,
+    ) -> Result<TaskHandle<Fut::Output>, SpawnError>
+    where
+        F: FnOnce(Cx) -> Fut + Send + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: Send + 'static,
+    {
+        let (handle, stored) = self.spawn(state, cx, f)?;
+        state.store_spawned_task(handle.task_id(), stored);
+        Ok(handle)
     }
 
     /// Spawns a local (non-Send) task within this scope's region.
@@ -316,11 +370,13 @@ impl<P: Policy> Scope<'_, P> {
 
         // Create the child task's capability context
         let child_observability = cx.child_observability(self.region, task_id);
+        let io_driver = state.io_driver_handle();
         let child_cx = Cx::new_with_observability(
             self.region,
             task_id,
             self.budget,
             Some(child_observability),
+            io_driver,
         );
 
         // Create the TaskHandle
@@ -329,6 +385,7 @@ impl<P: Policy> Scope<'_, P> {
         // Set the shared inner state in the TaskRecord
         if let Some(record) = state.tasks.get_mut(task_id.arena_index()) {
             record.set_cx_inner(child_cx.inner.clone());
+            record.set_cx(child_cx.clone());
         }
 
         // Capture child_cx for result sending
@@ -616,6 +673,63 @@ mod tests {
         // Task should be owned by the region
         let task = task.unwrap();
         assert_eq!(task.owner, region);
+    }
+
+    #[test]
+    fn spawn_registered_stores_task() {
+        let mut state = RuntimeState::new();
+        let cx = test_cx();
+        let region = state.create_root_region(Budget::INFINITE);
+        let scope = test_scope(region, Budget::INFINITE);
+
+        // spawn_registered should both create and store the task
+        let handle = scope
+            .spawn_registered(&mut state, &cx, |_| async { 42_i32 })
+            .unwrap();
+
+        // Task record should exist
+        let task = state.tasks.get(handle.task_id().arena_index());
+        assert!(task.is_some());
+        assert_eq!(task.unwrap().owner, region);
+
+        // StoredTask should be registered (can be retrieved for polling)
+        let stored = state.get_stored_future(handle.task_id());
+        assert!(stored.is_some(), "spawn_registered should store the task");
+    }
+
+    #[test]
+    fn spawn_registered_task_can_be_polled() {
+        use std::sync::Arc;
+        use std::task::{Context, Poll, Waker};
+
+        struct NoopWaker;
+        impl std::task::Wake for NoopWaker {
+            fn wake(self: Arc<Self>) {}
+        }
+
+        let mut state = RuntimeState::new();
+        let cx = test_cx();
+        let region = state.create_root_region(Budget::INFINITE);
+        let scope = test_scope(region, Budget::INFINITE);
+
+        let handle = scope
+            .spawn_registered(&mut state, &cx, |_| async { 42_i32 })
+            .unwrap();
+
+        // Get the stored future and poll it
+        let waker = Waker::from(Arc::new(NoopWaker));
+        let mut poll_cx = Context::from_waker(&waker);
+
+        let stored = state.get_stored_future(handle.task_id()).unwrap();
+        let poll_result = stored.poll(&mut poll_cx);
+        assert!(poll_result.is_ready(), "Simple async should complete in one poll");
+
+        // Join should now have the result
+        let mut join_fut = Box::pin(handle.join(&cx));
+        match join_fut.as_mut().poll(&mut poll_cx) {
+            Poll::Ready(Ok(val)) => assert_eq!(val, 42),
+            other => panic!("Expected Ready(Ok(42)), got {:?}", other),
+        }
     }
 
     #[test]

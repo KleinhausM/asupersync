@@ -153,10 +153,16 @@ impl<T> TaskHandle<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use crate::types::Budget;
     use crate::util::ArenaIndex;
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
+
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
 
     fn test_cx() -> Cx {
         Cx::new(
@@ -184,24 +190,42 @@ mod tests {
 
     #[test]
     fn task_handle_basic() {
+        init_test("task_handle_basic");
+        crate::test_section!("setup");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(1, 0));
         let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
 
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
-        assert_eq!(handle.task_id(), task_id);
-        assert!(!handle.is_finished());
+        crate::assert_with_log!(
+            handle.task_id() == task_id,
+            "task id matches",
+            task_id,
+            handle.task_id()
+        );
+        crate::assert_with_log!(
+            !handle.is_finished(),
+            "handle not finished",
+            false,
+            handle.is_finished()
+        );
 
         // Send the result
+        crate::test_section!("send");
         tx.send(&cx, Ok::<i32, JoinError>(42)).expect("send failed");
 
         // Join should succeed
+        crate::test_section!("join");
         let result = block_on(handle.join(&cx));
-        assert_eq!(result, Ok(42));
+        let expected: Result<i32, JoinError> = Ok(42);
+        crate::assert_with_log!(result == expected, "join result", expected, result);
+        crate::test_complete!("task_handle_basic");
     }
 
     #[test]
     fn task_handle_cancelled() {
+        init_test("task_handle_cancelled");
+        crate::test_section!("setup");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(1, 0));
         let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
@@ -209,52 +233,95 @@ mod tests {
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
 
         // Send a cancelled result
+        crate::test_section!("send");
         tx.send(
             &cx,
             Err::<i32, JoinError>(JoinError::Cancelled(CancelReason::race_loser())),
         )
         .expect("send failed");
 
+        crate::test_section!("join");
         let result = block_on(handle.join(&cx));
         match result {
             Err(JoinError::Cancelled(r)) => {
-                assert!(matches!(r.kind, crate::types::CancelKind::RaceLost));
+                crate::assert_with_log!(
+                    matches!(r.kind, crate::types::CancelKind::RaceLost),
+                    "cancel kind is race lost",
+                    crate::types::CancelKind::RaceLost,
+                    r.kind
+                );
             }
             _ => panic!("expected Cancelled"),
         }
+        crate::test_complete!("task_handle_cancelled");
     }
 
     #[test]
     fn task_handle_panicked() {
+        init_test("task_handle_panicked");
+        crate::test_section!("setup");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(1, 0));
         let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
 
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
 
+        crate::test_section!("send");
         tx.send(
             &cx,
             Err::<i32, JoinError>(JoinError::Panicked(PanicPayload::new("boom"))),
         )
         .expect("send failed");
 
+        crate::test_section!("join");
         let result = block_on(handle.join(&cx));
         match result {
             Err(JoinError::Panicked(p)) => {
-                assert!(p.to_string().contains("boom"));
+                let payload = p.to_string();
+                crate::assert_with_log!(
+                    payload.contains("boom"),
+                    "panic payload contains boom",
+                    true,
+                    payload
+                );
             }
             _ => panic!("expected Panicked"),
         }
+        crate::test_complete!("task_handle_panicked");
     }
 
     #[test]
     fn join_error_display() {
+        init_test("join_error_display");
         let cancelled = JoinError::Cancelled(CancelReason::user("stop"));
-        assert!(cancelled.to_string().contains("task was cancelled"));
-        assert!(cancelled.to_string().contains("stop"));
+        let cancelled_text = cancelled.to_string();
+        crate::assert_with_log!(
+            cancelled_text.contains("task was cancelled"),
+            "cancelled display mentions cancelled",
+            true,
+            cancelled_text
+        );
+        crate::assert_with_log!(
+            cancelled_text.contains("stop"),
+            "cancelled display includes reason",
+            true,
+            cancelled_text
+        );
 
         let panicked = JoinError::Panicked(PanicPayload::new("crash"));
-        assert!(panicked.to_string().contains("task panicked"));
-        assert!(panicked.to_string().contains("crash"));
+        let panicked_text = panicked.to_string();
+        crate::assert_with_log!(
+            panicked_text.contains("task panicked"),
+            "panicked display mentions panic",
+            true,
+            panicked_text
+        );
+        crate::assert_with_log!(
+            panicked_text.contains("crash"),
+            "panicked display includes payload",
+            true,
+            panicked_text
+        );
+        crate::test_complete!("join_error_display");
     }
 }

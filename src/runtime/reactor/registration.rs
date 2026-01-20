@@ -197,6 +197,7 @@ impl std::fmt::Debug for Registration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -242,8 +243,14 @@ mod tests {
         }
     }
 
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn drop_deregisters() {
+        init_test("drop_deregisters");
         let reactor = MockReactor::new();
         let token = Token::new(42);
 
@@ -253,15 +260,25 @@ mod tests {
                 Arc::downgrade(&reactor) as Weak<dyn ReactorHandle>,
                 Interest::READABLE,
             );
-            assert!(!reactor.was_deregistered());
+            let was = reactor.was_deregistered();
+            crate::assert_with_log!(!was, "not deregistered in scope", false, was);
         }
 
-        assert!(reactor.was_deregistered());
-        assert_eq!(*reactor.last_token.lock().unwrap(), Some(token));
+        let was = reactor.was_deregistered();
+        crate::assert_with_log!(was, "deregistered on drop", true, was);
+        let last_token = *reactor.last_token.lock().unwrap();
+        crate::assert_with_log!(
+            last_token == Some(token),
+            "last token recorded",
+            Some(token),
+            last_token
+        );
+        crate::test_complete!("drop_deregisters");
     }
 
     #[test]
     fn set_interest_updates_reactor() {
+        init_test("set_interest_updates_reactor");
         let reactor = MockReactor::new();
         let token = Token::new(1);
 
@@ -271,19 +288,34 @@ mod tests {
             Interest::READABLE,
         );
 
-        assert_eq!(reg.interest(), Interest::READABLE);
+        crate::assert_with_log!(
+            reg.interest() == Interest::READABLE,
+            "initial interest",
+            Interest::READABLE,
+            reg.interest()
+        );
 
         reg.set_interest(Interest::WRITABLE).unwrap();
 
-        assert_eq!(reg.interest(), Interest::WRITABLE);
-        assert_eq!(
-            *reactor.last_interest.lock().unwrap(),
-            Some(Interest::WRITABLE)
+        crate::assert_with_log!(
+            reg.interest() == Interest::WRITABLE,
+            "interest updated",
+            Interest::WRITABLE,
+            reg.interest()
         );
+        let last_interest = *reactor.last_interest.lock().unwrap();
+        crate::assert_with_log!(
+            last_interest == Some(Interest::WRITABLE),
+            "reactor saw interest update",
+            Some(Interest::WRITABLE),
+            last_interest
+        );
+        crate::test_complete!("set_interest_updates_reactor");
     }
 
     #[test]
     fn handles_reactor_dropped() {
+        init_test("handles_reactor_dropped");
         let token = Token::new(1);
 
         let reg = {
@@ -297,18 +329,21 @@ mod tests {
         };
 
         // Registration should not panic when reactor is gone
-        assert!(!reg.is_active());
+        let active = reg.is_active();
+        crate::assert_with_log!(!active, "inactive after reactor drop", false, active);
 
         // set_interest should fail gracefully
         let result = reg.set_interest(Interest::WRITABLE);
-        assert!(result.is_err());
+        crate::assert_with_log!(result.is_err(), "set_interest fails", true, result.is_err());
 
         // drop should not panic
         drop(reg);
+        crate::test_complete!("handles_reactor_dropped");
     }
 
     #[test]
     fn is_active() {
+        init_test("is_active");
         let reactor = MockReactor::new();
         let token = Token::new(1);
 
@@ -318,15 +353,24 @@ mod tests {
             Interest::READABLE,
         );
 
-        assert!(reg.is_active());
+        let active = reg.is_active();
+        crate::assert_with_log!(active, "active before drop", true, active);
 
         drop(reactor);
 
-        assert!(!reg.is_active());
+        let active_after = reg.is_active();
+        crate::assert_with_log!(
+            !active_after,
+            "inactive after drop",
+            false,
+            active_after
+        );
+        crate::test_complete!("is_active");
     }
 
     #[test]
     fn explicit_deregister() {
+        init_test("explicit_deregister");
         let reactor = MockReactor::new();
         let token = Token::new(1);
 
@@ -337,14 +381,18 @@ mod tests {
         );
 
         let result = reg.deregister();
-        assert!(result.is_ok());
-        assert!(reactor.was_deregistered());
-        assert_eq!(reactor.deregister_count(), 1);
+        crate::assert_with_log!(result.is_ok(), "deregister ok", true, result.is_ok());
+        let was = reactor.was_deregistered();
+        crate::assert_with_log!(was, "reactor deregistered", true, was);
+        let count = reactor.deregister_count();
+        crate::assert_with_log!(count == 1, "deregister count", 1usize, count);
         // Note: reg is consumed, so drop won't run again
+        crate::test_complete!("explicit_deregister");
     }
 
     #[test]
     fn explicit_deregister_when_reactor_gone() {
+        init_test("explicit_deregister_when_reactor_gone");
         let token = Token::new(1);
 
         let reg = {
@@ -358,11 +406,13 @@ mod tests {
 
         // Should succeed even though reactor is gone
         let result = reg.deregister();
-        assert!(result.is_ok());
+        crate::assert_with_log!(result.is_ok(), "deregister ok", true, result.is_ok());
+        crate::test_complete!("explicit_deregister_when_reactor_gone");
     }
 
     #[test]
     fn token_accessor() {
+        init_test("token_accessor");
         let reactor = MockReactor::new();
         let token = Token::new(999);
 
@@ -372,11 +422,13 @@ mod tests {
             Interest::READABLE,
         );
 
-        assert_eq!(reg.token(), token);
+        crate::assert_with_log!(reg.token() == token, "token accessor", token, reg.token());
+        crate::test_complete!("token_accessor");
     }
 
     #[test]
     fn debug_impl() {
+        init_test("debug_impl");
         let reactor = MockReactor::new();
         let token = Token::new(42);
 
@@ -386,13 +438,25 @@ mod tests {
             Interest::READABLE,
         );
 
-        let debug = format!("{:?}", reg);
-        assert!(debug.contains("Registration"));
-        assert!(debug.contains("42"));
+        let debug_text = format!("{:?}", reg);
+        crate::assert_with_log!(
+            debug_text.contains("Registration"),
+            "debug includes type",
+            true,
+            debug_text.contains("Registration")
+        );
+        crate::assert_with_log!(
+            debug_text.contains("42"),
+            "debug includes token",
+            true,
+            debug_text.contains("42")
+        );
+        crate::test_complete!("debug_impl");
     }
 
     #[test]
     fn multiple_registrations() {
+        init_test("multiple_registrations");
         let reactor = MockReactor::new();
 
         {
@@ -407,10 +471,13 @@ mod tests {
                 Interest::WRITABLE,
             );
 
-            assert_eq!(reactor.deregister_count(), 0);
+            let count = reactor.deregister_count();
+            crate::assert_with_log!(count == 0, "no deregisters yet", 0usize, count);
         }
 
         // Both should have been deregistered
-        assert_eq!(reactor.deregister_count(), 2);
+        let count = reactor.deregister_count();
+        crate::assert_with_log!(count == 2, "two deregisters", 2usize, count);
+        crate::test_complete!("multiple_registrations");
     }
 }

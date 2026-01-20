@@ -28,7 +28,7 @@ pub mod yield_now;
 
 pub use builder::{JoinHandle, Runtime, RuntimeBuilder, RuntimeHandle};
 pub use config::{BlockingPoolConfig, RuntimeConfig};
-pub use io_driver::IoDriver;
+pub use io_driver::{IoDriver, IoDriverHandle, IoRegistration};
 pub use reactor::{Event, Events, Interest, LabReactor, Reactor, Registration, Source, Token};
 pub use scheduler::Scheduler;
 pub use state::{RuntimeState, SpawnError};

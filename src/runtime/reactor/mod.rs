@@ -104,7 +104,7 @@ pub mod token;
 pub mod epoll;
 
 pub use interest::Interest;
-pub use lab::LabReactor;
+pub use lab::{FaultConfig, LabReactor};
 #[allow(unused_imports)]
 pub(crate) use registration::ReactorHandle;
 pub use registration::Registration;
@@ -521,105 +521,280 @@ pub trait Reactor: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
+
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
 
     // Event tests
     #[test]
     fn event_new() {
+        init_test("event_new");
         let event = Event::new(Token::new(42), Interest::READABLE | Interest::WRITABLE);
-        assert_eq!(event.token.0, 42);
-        assert!(event.is_readable());
-        assert!(event.is_writable());
-        assert!(!event.is_error());
-        assert!(!event.is_hangup());
+        crate::assert_with_log!(event.token.0 == 42, "token id", 42usize, event.token.0);
+        crate::assert_with_log!(
+            event.is_readable(),
+            "readable flag",
+            true,
+            event.is_readable()
+        );
+        crate::assert_with_log!(
+            event.is_writable(),
+            "writable flag",
+            true,
+            event.is_writable()
+        );
+        crate::assert_with_log!(
+            !event.is_error(),
+            "error flag unset",
+            false,
+            event.is_error()
+        );
+        crate::assert_with_log!(
+            !event.is_hangup(),
+            "hangup flag unset",
+            false,
+            event.is_hangup()
+        );
+        crate::test_complete!("event_new");
     }
 
     #[test]
     fn event_readable() {
+        init_test("event_readable");
         let event = Event::readable(Token::new(1));
-        assert!(event.is_readable());
-        assert!(!event.is_writable());
-        assert!(!event.is_error());
-        assert!(!event.is_hangup());
+        crate::assert_with_log!(
+            event.is_readable(),
+            "readable flag",
+            true,
+            event.is_readable()
+        );
+        crate::assert_with_log!(
+            !event.is_writable(),
+            "writable flag unset",
+            false,
+            event.is_writable()
+        );
+        crate::assert_with_log!(
+            !event.is_error(),
+            "error flag unset",
+            false,
+            event.is_error()
+        );
+        crate::assert_with_log!(
+            !event.is_hangup(),
+            "hangup flag unset",
+            false,
+            event.is_hangup()
+        );
+        crate::test_complete!("event_readable");
     }
 
     #[test]
     fn event_writable() {
+        init_test("event_writable");
         let event = Event::writable(Token::new(2));
-        assert!(!event.is_readable());
-        assert!(event.is_writable());
-        assert!(!event.is_error());
-        assert!(!event.is_hangup());
+        crate::assert_with_log!(
+            !event.is_readable(),
+            "readable flag unset",
+            false,
+            event.is_readable()
+        );
+        crate::assert_with_log!(
+            event.is_writable(),
+            "writable flag",
+            true,
+            event.is_writable()
+        );
+        crate::assert_with_log!(
+            !event.is_error(),
+            "error flag unset",
+            false,
+            event.is_error()
+        );
+        crate::assert_with_log!(
+            !event.is_hangup(),
+            "hangup flag unset",
+            false,
+            event.is_hangup()
+        );
+        crate::test_complete!("event_writable");
     }
 
     #[test]
     fn event_errored() {
+        init_test("event_errored");
         let event = Event::errored(Token::new(3));
-        assert!(!event.is_readable());
-        assert!(!event.is_writable());
-        assert!(event.is_error());
-        assert!(!event.is_hangup());
+        crate::assert_with_log!(
+            !event.is_readable(),
+            "readable flag unset",
+            false,
+            event.is_readable()
+        );
+        crate::assert_with_log!(
+            !event.is_writable(),
+            "writable flag unset",
+            false,
+            event.is_writable()
+        );
+        crate::assert_with_log!(
+            event.is_error(),
+            "error flag",
+            true,
+            event.is_error()
+        );
+        crate::assert_with_log!(
+            !event.is_hangup(),
+            "hangup flag unset",
+            false,
+            event.is_hangup()
+        );
+        crate::test_complete!("event_errored");
     }
 
     #[test]
     fn event_hangup() {
+        init_test("event_hangup");
         let event = Event::hangup(Token::new(4));
-        assert!(!event.is_readable());
-        assert!(!event.is_writable());
-        assert!(!event.is_error());
-        assert!(event.is_hangup());
+        crate::assert_with_log!(
+            !event.is_readable(),
+            "readable flag unset",
+            false,
+            event.is_readable()
+        );
+        crate::assert_with_log!(
+            !event.is_writable(),
+            "writable flag unset",
+            false,
+            event.is_writable()
+        );
+        crate::assert_with_log!(
+            !event.is_error(),
+            "error flag unset",
+            false,
+            event.is_error()
+        );
+        crate::assert_with_log!(
+            event.is_hangup(),
+            "hangup flag",
+            true,
+            event.is_hangup()
+        );
+        crate::test_complete!("event_hangup");
     }
 
     #[test]
     fn event_combined_flags() {
+        init_test("event_combined_flags");
         let event = Event::new(
             Token::new(5),
             Interest::READABLE | Interest::ERROR | Interest::HUP,
         );
-        assert!(event.is_readable());
-        assert!(!event.is_writable());
-        assert!(event.is_error());
-        assert!(event.is_hangup());
+        crate::assert_with_log!(
+            event.is_readable(),
+            "readable flag",
+            true,
+            event.is_readable()
+        );
+        crate::assert_with_log!(
+            !event.is_writable(),
+            "writable flag unset",
+            false,
+            event.is_writable()
+        );
+        crate::assert_with_log!(
+            event.is_error(),
+            "error flag",
+            true,
+            event.is_error()
+        );
+        crate::assert_with_log!(
+            event.is_hangup(),
+            "hangup flag",
+            true,
+            event.is_hangup()
+        );
+        crate::test_complete!("event_combined_flags");
     }
 
     // Events container tests
     #[test]
     fn events_with_capacity() {
+        init_test("events_with_capacity");
         let events = Events::with_capacity(64);
-        assert_eq!(events.capacity(), 64);
-        assert_eq!(events.len(), 0);
-        assert!(events.is_empty());
+        crate::assert_with_log!(
+            events.capacity() == 64,
+            "capacity",
+            64usize,
+            events.capacity()
+        );
+        crate::assert_with_log!(events.len() == 0, "len", 0usize, events.len());
+        crate::assert_with_log!(
+            events.is_empty(),
+            "is_empty",
+            true,
+            events.is_empty()
+        );
+        crate::test_complete!("events_with_capacity");
     }
 
     #[test]
     fn events_push_and_iterate() {
+        init_test("events_push_and_iterate");
         let mut events = Events::with_capacity(10);
         events.push(Event::readable(Token::new(1)));
         events.push(Event::writable(Token::new(2)));
         events.push(Event::errored(Token::new(3)));
 
-        assert_eq!(events.len(), 3);
-        assert!(!events.is_empty());
+        crate::assert_with_log!(events.len() == 3, "len", 3usize, events.len());
+        crate::assert_with_log!(
+            !events.is_empty(),
+            "not empty",
+            false,
+            events.is_empty()
+        );
 
         let tokens: Vec<usize> = events.iter().map(|e| e.token.0).collect();
-        assert_eq!(tokens, vec![1, 2, 3]);
+        crate::assert_with_log!(
+            tokens == vec![1, 2, 3],
+            "tokens order",
+            vec![1, 2, 3],
+            tokens
+        );
+        crate::test_complete!("events_push_and_iterate");
     }
 
     #[test]
     fn events_clear() {
+        init_test("events_clear");
         let mut events = Events::with_capacity(10);
         events.push(Event::readable(Token::new(1)));
         events.push(Event::readable(Token::new(2)));
 
-        assert_eq!(events.len(), 2);
+        crate::assert_with_log!(events.len() == 2, "len before clear", 2usize, events.len());
         events.clear();
-        assert_eq!(events.len(), 0);
-        assert!(events.is_empty());
+        crate::assert_with_log!(events.len() == 0, "len after clear", 0usize, events.len());
+        crate::assert_with_log!(
+            events.is_empty(),
+            "empty after clear",
+            true,
+            events.is_empty()
+        );
         // Capacity is maintained
-        assert_eq!(events.capacity(), 10);
+        crate::assert_with_log!(
+            events.capacity() == 10,
+            "capacity maintained",
+            10usize,
+            events.capacity()
+        );
+        crate::test_complete!("events_clear");
     }
 
     #[test]
     fn events_capacity_limit_respected() {
+        init_test("events_capacity_limit_respected");
         let mut events = Events::with_capacity(3);
         events.push(Event::readable(Token::new(1)));
         events.push(Event::readable(Token::new(2)));
@@ -628,73 +803,117 @@ mod tests {
         events.push(Event::readable(Token::new(4)));
         events.push(Event::readable(Token::new(5)));
 
-        assert_eq!(events.len(), 3);
-        assert_eq!(events.capacity(), 3);
+        crate::assert_with_log!(events.len() == 3, "len capped", 3usize, events.len());
+        crate::assert_with_log!(
+            events.capacity() == 3,
+            "capacity",
+            3usize,
+            events.capacity()
+        );
 
         let tokens: Vec<usize> = events.iter().map(|e| e.token.0).collect();
-        assert_eq!(tokens, vec![1, 2, 3]);
+        crate::assert_with_log!(
+            tokens == vec![1, 2, 3],
+            "tokens retained",
+            vec![1, 2, 3],
+            tokens
+        );
+        crate::test_complete!("events_capacity_limit_respected");
     }
 
     #[test]
     fn events_into_iter_ref() {
+        init_test("events_into_iter_ref");
         let mut events = Events::with_capacity(10);
         events.push(Event::readable(Token::new(1)));
         events.push(Event::writable(Token::new(2)));
 
         let mut count = 0;
         for event in &events {
-            assert!(event.is_readable() || event.is_writable());
+            let ok = event.is_readable() || event.is_writable();
+            crate::assert_with_log!(ok, "event readable or writable", true, ok);
             count += 1;
         }
-        assert_eq!(count, 2);
+        crate::assert_with_log!(count == 2, "iter count", 2usize, count);
+        crate::test_complete!("events_into_iter_ref");
     }
 
     #[test]
     fn events_into_iter_owned() {
+        init_test("events_into_iter_owned");
         let mut events = Events::with_capacity(10);
         events.push(Event::readable(Token::new(1)));
         events.push(Event::writable(Token::new(2)));
 
         let collected: Vec<Event> = events.into_iter().collect();
-        assert_eq!(collected.len(), 2);
-        assert!(collected[0].is_readable());
-        assert!(collected[1].is_writable());
+        crate::assert_with_log!(
+            collected.len() == 2,
+            "collected len",
+            2usize,
+            collected.len()
+        );
+        crate::assert_with_log!(
+            collected[0].is_readable(),
+            "first readable",
+            true,
+            collected[0].is_readable()
+        );
+        crate::assert_with_log!(
+            collected[1].is_writable(),
+            "second writable",
+            true,
+            collected[1].is_writable()
+        );
+        crate::test_complete!("events_into_iter_owned");
     }
 
     #[test]
     fn events_zero_capacity() {
+        init_test("events_zero_capacity");
         let mut events = Events::with_capacity(0);
-        assert_eq!(events.capacity(), 0);
-        assert_eq!(events.len(), 0);
+        crate::assert_with_log!(
+            events.capacity() == 0,
+            "capacity zero",
+            0usize,
+            events.capacity()
+        );
+        crate::assert_with_log!(events.len() == 0, "len zero", 0usize, events.len());
 
         // Should be silently dropped
         events.push(Event::readable(Token::new(1)));
-        assert_eq!(events.len(), 0);
+        crate::assert_with_log!(events.len() == 0, "len stays zero", 0usize, events.len());
+        crate::test_complete!("events_zero_capacity");
     }
 
     // Token tests
     #[test]
     fn token_new() {
+        init_test("token_new");
         let token = Token::new(123);
-        assert_eq!(token.0, 123);
+        crate::assert_with_log!(token.0 == 123, "token id", 123usize, token.0);
+        crate::test_complete!("token_new");
     }
 
     #[test]
     fn token_equality() {
+        init_test("token_equality");
         let t1 = Token::new(1);
         let t2 = Token::new(1);
         let t3 = Token::new(2);
 
-        assert_eq!(t1, t2);
-        assert_ne!(t1, t3);
+        crate::assert_with_log!(t1 == t2, "t1 == t2", t2, t1);
+        crate::assert_with_log!(t1 != t3, "t1 != t3", true, t1 != t3);
+        crate::test_complete!("token_equality");
     }
 
     #[test]
     fn token_ordering() {
+        init_test("token_ordering");
         let t1 = Token::new(1);
         let t2 = Token::new(2);
 
-        assert!(t1 < t2);
-        assert!(t2 > t1);
+        crate::assert_with_log!(t1 < t2, "t1 < t2", true, t1 < t2);
+        crate::assert_with_log!(t2 > t1, "t2 > t1", true, t2 > t1);
+        crate::test_complete!("token_ordering");
     }
 }

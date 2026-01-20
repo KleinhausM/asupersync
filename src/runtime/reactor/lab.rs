@@ -32,6 +32,8 @@
 //! ```
 
 use super::{Event, Interest, Reactor, Source, Token};
+use crate::lab::chaos::{ChaosConfig, ChaosRng, ChaosStats};
+use crate::tracing_compat::debug;
 use crate::types::Time;
 use std::collections::{BinaryHeap, HashMap};
 use std::io;
@@ -51,6 +53,8 @@ struct TimedEvent {
     sequence: u64,
     /// The actual event to deliver.
     event: Event,
+    /// Whether delay injection has already been applied.
+    delayed: bool,
 }
 
 impl PartialOrd for TimedEvent {
@@ -69,10 +73,175 @@ impl Ord for TimedEvent {
     }
 }
 
+/// Per-token fault injection configuration.
+///
+/// Allows fine-grained control over I/O behavior for individual tokens during testing.
+/// This enables simulating connection failures, errors, and network partitions
+/// on a per-connection basis, complementing the global chaos injection.
+///
+/// # Determinism
+///
+/// When `error_probability` is non-zero, fault injection uses a deterministic RNG
+/// seeded from the token value, ensuring reproducible behavior across test runs.
+///
+/// # Example
+///
+/// ```ignore
+/// use asupersync::runtime::reactor::{LabReactor, FaultConfig, Token, Interest};
+/// use std::io;
+///
+/// let reactor = LabReactor::new();
+/// let token = Token::new(1);
+///
+/// // Configure token to occasionally fail with connection reset
+/// let config = FaultConfig::new()
+///     .with_error_probability(0.1)
+///     .with_error_kinds(vec![io::ErrorKind::ConnectionReset]);
+/// reactor.set_fault_config(token, config);
+///
+/// // Or inject an immediate error
+/// reactor.inject_error(token, io::ErrorKind::BrokenPipe);
+///
+/// // Or simulate connection close
+/// reactor.inject_close(token);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct FaultConfig {
+    /// One-shot error to inject on next event delivery.
+    /// Cleared after delivery.
+    pub pending_error: Option<io::ErrorKind>,
+    /// Whether the connection is closed (delivers HUP on next poll).
+    /// Once set, remains set until explicitly cleared.
+    pub closed: bool,
+    /// Whether this token is partitioned (events are dropped, not delivered).
+    pub partitioned: bool,
+    /// Probability of random error injection (0.0 - 1.0).
+    pub error_probability: f64,
+    /// Possible error kinds for random injection.
+    pub error_kinds: Vec<io::ErrorKind>,
+}
+
+impl FaultConfig {
+    /// Creates a new fault config with no faults configured.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the probability of random error injection.
+    #[must_use]
+    pub fn with_error_probability(mut self, prob: f64) -> Self {
+        self.error_probability = prob.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Sets the possible error kinds for random injection.
+    #[must_use]
+    pub fn with_error_kinds(mut self, kinds: Vec<io::ErrorKind>) -> Self {
+        self.error_kinds = kinds;
+        self
+    }
+
+    /// Sets the partitioned state.
+    #[must_use]
+    pub fn with_partitioned(mut self, partitioned: bool) -> Self {
+        self.partitioned = partitioned;
+        self
+    }
+
+    /// Sets a pending error to inject on next event.
+    #[must_use]
+    pub fn with_pending_error(mut self, kind: io::ErrorKind) -> Self {
+        self.pending_error = Some(kind);
+        self
+    }
+
+    /// Marks the connection as closed.
+    #[must_use]
+    pub fn with_closed(mut self, closed: bool) -> Self {
+        self.closed = closed;
+        self
+    }
+}
+
+/// Per-token fault injection state.
+#[derive(Debug)]
+struct FaultState {
+    config: FaultConfig,
+    /// Per-token RNG for deterministic random fault injection.
+    /// Seeded from the token value for reproducibility.
+    rng: ChaosRng,
+    /// Last error kind injected (for diagnostics).
+    last_error_kind: Option<io::ErrorKind>,
+    /// Count of injected errors.
+    injected_error_count: u64,
+    /// Count of injected closes.
+    injected_close_count: u64,
+    /// Count of dropped events (partition).
+    dropped_event_count: u64,
+}
+
+impl FaultState {
+    fn new(token: Token, config: FaultConfig) -> Self {
+        // Create deterministic RNG seeded from token for reproducibility
+        let seed = token.0 as u64;
+        Self {
+            config,
+            rng: ChaosRng::new(seed),
+            last_error_kind: None,
+            injected_error_count: 0,
+            injected_close_count: 0,
+            dropped_event_count: 0,
+        }
+    }
+
+    /// Checks if a random error should be injected based on probability.
+    fn should_inject_random_error(&mut self) -> bool {
+        let prob = self.config.error_probability;
+        if prob <= 0.0 || self.config.error_kinds.is_empty() {
+            return false;
+        }
+        if prob >= 1.0 {
+            return true;
+        }
+        self.rng.next_f64() < prob
+    }
+
+    /// Returns a random error kind from the configured list.
+    fn next_error_kind(&mut self) -> Option<io::ErrorKind> {
+        if self.config.error_kinds.is_empty() {
+            return None;
+        }
+        let idx = (self.rng.next_f64() * self.config.error_kinds.len() as f64) as usize;
+        Some(self.config.error_kinds[idx])
+    }
+}
+
 /// A virtual socket state.
 #[derive(Debug)]
 struct VirtualSocket {
     interest: Interest,
+    /// Per-token fault injection state.
+    fault: Option<FaultState>,
+}
+
+#[derive(Debug)]
+struct LabChaos {
+    config: ChaosConfig,
+    rng: ChaosRng,
+    stats: ChaosStats,
+    last_io_error_kind: Option<io::ErrorKind>,
+}
+
+impl LabChaos {
+    fn new(config: ChaosConfig) -> Self {
+        Self {
+            rng: ChaosRng::from_config(&config),
+            stats: ChaosStats::new(),
+            last_io_error_kind: None,
+            config,
+        }
+    }
 }
 
 /// A deterministic reactor for testing.
@@ -94,6 +263,7 @@ struct LabInner {
     time: Time,
     /// Monotonic sequence counter for deterministic same-time event ordering.
     next_sequence: u64,
+    chaos: Option<LabChaos>,
 }
 
 impl LabReactor {
@@ -106,6 +276,22 @@ impl LabReactor {
                 pending: BinaryHeap::new(),
                 time: Time::ZERO,
                 next_sequence: 0,
+                chaos: None,
+            }),
+            woken: AtomicBool::new(false),
+        }
+    }
+
+    /// Creates a new lab reactor with chaos injection enabled.
+    #[must_use]
+    pub fn with_chaos(config: ChaosConfig) -> Self {
+        Self {
+            inner: Mutex::new(LabInner {
+                sockets: HashMap::new(),
+                pending: BinaryHeap::new(),
+                time: Time::ZERO,
+                next_sequence: 0,
+                chaos: Some(LabChaos::new(config)),
             }),
             woken: AtomicBool::new(false),
         }
@@ -136,6 +322,7 @@ impl LabReactor {
             time,
             sequence,
             event,
+            delayed: false,
         });
     }
 
@@ -195,6 +382,284 @@ impl LabReactor {
     pub fn check_and_clear_wake(&self) -> bool {
         self.woken.swap(false, Ordering::SeqCst)
     }
+
+    // ========================================================================
+    // Per-token fault injection API
+    // ========================================================================
+
+    /// Sets the fault configuration for a specific token.
+    ///
+    /// This enables per-connection fault injection, allowing tests to simulate
+    /// failures on specific connections while others remain healthy.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The token to configure faults for
+    /// * `config` - The fault configuration to apply
+    ///
+    /// # Returns
+    ///
+    /// Returns `Err` if the token is not registered.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use asupersync::runtime::reactor::{LabReactor, FaultConfig, Token};
+    /// use std::io;
+    ///
+    /// let reactor = LabReactor::new();
+    /// let token = Token::new(1);
+    /// // ... register token ...
+    ///
+    /// let config = FaultConfig::new()
+    ///     .with_error_probability(0.5)
+    ///     .with_error_kinds(vec![io::ErrorKind::ConnectionReset]);
+    /// reactor.set_fault_config(token, config)?;
+    /// ```
+    pub fn set_fault_config(&self, token: Token, config: FaultConfig) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.sockets.get_mut(&token) {
+            Some(socket) => {
+                socket.fault = Some(FaultState::new(token, config));
+                Ok(())
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "token not registered",
+            )),
+        }
+    }
+
+    /// Clears fault configuration for a token.
+    ///
+    /// Removes any per-token fault injection, returning to normal behavior.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Err` if the token is not registered.
+    pub fn clear_fault_config(&self, token: Token) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.sockets.get_mut(&token) {
+            Some(socket) => {
+                socket.fault = None;
+                Ok(())
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "token not registered",
+            )),
+        }
+    }
+
+    /// Injects an immediate error for the next event on a token.
+    ///
+    /// The next event delivered for this token will be converted to an error
+    /// event with the specified `ErrorKind`. This is a one-shot operation;
+    /// subsequent events are not affected unless `inject_error` is called again.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The token to inject an error for
+    /// * `kind` - The error kind to inject
+    ///
+    /// # Returns
+    ///
+    /// Returns `Err` if the token is not registered.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use asupersync::runtime::reactor::{LabReactor, Token};
+    /// use std::io;
+    ///
+    /// let reactor = LabReactor::new();
+    /// let token = Token::new(1);
+    /// // ... register token ...
+    ///
+    /// // The next event for this token will be an error
+    /// reactor.inject_error(token, io::ErrorKind::BrokenPipe)?;
+    /// ```
+    pub fn inject_error(&self, token: Token, kind: io::ErrorKind) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.sockets.get_mut(&token) {
+            Some(socket) => {
+                if let Some(ref mut fault) = socket.fault {
+                    fault.config.pending_error = Some(kind);
+                } else {
+                    let mut config = FaultConfig::new();
+                    config.pending_error = Some(kind);
+                    socket.fault = Some(FaultState::new(token, config));
+                }
+                Ok(())
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "token not registered",
+            )),
+        }
+    }
+
+    /// Injects a connection close (HUP) for a token.
+    ///
+    /// Schedules a HUP event for the token, simulating the remote end closing
+    /// the connection. The HUP event will be delivered on the next poll.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The token to close
+    ///
+    /// # Returns
+    ///
+    /// Returns `Err` if the token is not registered.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use asupersync::runtime::reactor::{LabReactor, Token};
+    ///
+    /// let reactor = LabReactor::new();
+    /// let token = Token::new(1);
+    /// // ... register token ...
+    ///
+    /// // Simulate remote close
+    /// reactor.inject_close(token)?;
+    /// // Next poll will deliver HUP event
+    /// ```
+    pub fn inject_close(&self, token: Token) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+
+        // Verify token is registered
+        if !inner.sockets.contains_key(&token) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "token not registered",
+            ));
+        }
+
+        // Mark socket as closed and schedule HUP event
+        if let Some(socket) = inner.sockets.get_mut(&token) {
+            if let Some(ref mut fault) = socket.fault {
+                fault.config.closed = true;
+                fault.injected_close_count += 1;
+            } else {
+                let config = FaultConfig::new().with_closed(true);
+                let mut fault_state = FaultState::new(token, config);
+                fault_state.injected_close_count = 1;
+                socket.fault = Some(fault_state);
+            }
+        }
+
+        // Schedule the HUP event for immediate delivery
+        let time = inner.time;
+        let sequence = inner.next_sequence;
+        inner.next_sequence += 1;
+        inner.pending.push(TimedEvent {
+            time,
+            sequence,
+            event: Event::hangup(token),
+            delayed: false,
+        });
+
+        debug!(
+            target: "fault",
+            token = token.0,
+            injection = "close",
+            "injected connection close"
+        );
+
+        Ok(())
+    }
+
+    /// Sets the partition state for a token.
+    ///
+    /// When partitioned, events for this token are dropped rather than delivered,
+    /// simulating a network partition. This is useful for testing timeout handling
+    /// and partition recovery.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The token to partition
+    /// * `partitioned` - `true` to enable partition, `false` to disable
+    ///
+    /// # Returns
+    ///
+    /// Returns `Err` if the token is not registered.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use asupersync::runtime::reactor::{LabReactor, Token, Interest, Event};
+    /// use std::time::Duration;
+    ///
+    /// let reactor = LabReactor::new();
+    /// let token = Token::new(1);
+    /// // ... register token ...
+    ///
+    /// // Simulate network partition
+    /// reactor.partition(token, true)?;
+    /// reactor.inject_event(token, Event::readable(token), Duration::ZERO);
+    ///
+    /// // Event will be dropped, not delivered
+    /// let mut events = Events::with_capacity(10);
+    /// reactor.poll(&mut events, Some(Duration::ZERO))?;
+    /// assert!(events.is_empty());
+    ///
+    /// // Restore connectivity
+    /// reactor.partition(token, false)?;
+    /// ```
+    pub fn partition(&self, token: Token, partitioned: bool) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.sockets.get_mut(&token) {
+            Some(socket) => {
+                if let Some(ref mut fault) = socket.fault {
+                    fault.config.partitioned = partitioned;
+                } else if partitioned {
+                    let config = FaultConfig::new().with_partitioned(true);
+                    socket.fault = Some(FaultState::new(token, config));
+                }
+                // If not partitioned and no fault state, nothing to do
+
+                debug!(
+                    target: "fault",
+                    token = token.0,
+                    partitioned = partitioned,
+                    "partition state changed"
+                );
+
+                Ok(())
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "token not registered",
+            )),
+        }
+    }
+
+    /// Returns the last error kind injected for a token (for diagnostics).
+    pub fn last_injected_error(&self, token: Token) -> Option<io::ErrorKind> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .sockets
+            .get(&token)
+            .and_then(|s| s.fault.as_ref())
+            .and_then(|f| f.last_error_kind)
+    }
+
+    /// Returns fault injection statistics for a token.
+    ///
+    /// Returns `(injected_errors, injected_closes, dropped_events)`.
+    pub fn fault_stats(&self, token: Token) -> Option<(u64, u64, u64)> {
+        let inner = self.inner.lock().unwrap();
+        inner.sockets.get(&token).and_then(|s| {
+            s.fault.as_ref().map(|f| {
+                (
+                    f.injected_error_count,
+                    f.injected_close_count,
+                    f.dropped_event_count,
+                )
+            })
+        })
+    }
 }
 
 impl Default for LabReactor {
@@ -212,7 +677,13 @@ impl Reactor for LabReactor {
                 "token already registered",
             ));
         }
-        inner.sockets.insert(token, VirtualSocket { interest });
+        inner.sockets.insert(
+            token,
+            VirtualSocket {
+                interest,
+                fault: None,
+            },
+        );
         Ok(())
     }
 
@@ -261,17 +732,143 @@ impl Reactor for LabReactor {
             inner.time = inner.time.saturating_add_nanos(d.as_nanos() as u64);
         }
 
+        let mut ready_events = Vec::new();
         let mut count = 0;
         // Pop events that are due
         while let Some(te) = inner.pending.peek() {
             if te.time <= inner.time {
                 let te = inner.pending.pop().unwrap();
                 if inner.sockets.contains_key(&te.event.token) {
-                    events.push(te.event);
-                    count += 1;
+                    ready_events.push(te);
                 }
             } else {
                 break;
+            }
+        }
+
+        let LabInner {
+            sockets,
+            pending,
+            time,
+            next_sequence,
+            chaos,
+        } = &mut *inner;
+
+        for timed in ready_events {
+            let event = timed.event;
+            let token = event.token;
+
+            // ================================================================
+            // Per-token fault injection (checked first, before global chaos)
+            // ================================================================
+            if let Some(socket) = sockets.get_mut(&token) {
+                if let Some(ref mut fault) = socket.fault {
+                    // Check partition - drop events silently
+                    if fault.config.partitioned {
+                        fault.dropped_event_count += 1;
+                        debug!(
+                            target: "fault",
+                            token = token.0,
+                            injection = "partition_drop",
+                            "event dropped due to partition"
+                        );
+                        continue;
+                    }
+
+                    // Check pending error (one-shot)
+                    if let Some(kind) = fault.config.pending_error.take() {
+                        fault.last_error_kind = Some(kind);
+                        fault.injected_error_count += 1;
+                        debug!(
+                            target: "fault",
+                            token = token.0,
+                            injection = "pending_error",
+                            error_kind = ?kind,
+                            "injected pending error"
+                        );
+                        events.push(Event::errored(token));
+                        count += 1;
+                        continue;
+                    }
+
+                    // Check random error injection
+                    if fault.should_inject_random_error() {
+                        if let Some(kind) = fault.next_error_kind() {
+                            fault.last_error_kind = Some(kind);
+                            fault.injected_error_count += 1;
+                            debug!(
+                                target: "fault",
+                                token = token.0,
+                                injection = "random_error",
+                                error_kind = ?kind,
+                                "injected random error"
+                            );
+                            events.push(Event::errored(token));
+                            count += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // ================================================================
+            // Global chaos injection (if enabled)
+            // ================================================================
+            if let Some(chaos) = chaos.as_mut() {
+                let config = &chaos.config;
+
+                // Check for delay injection
+                if !timed.delayed && chaos.rng.should_inject_delay(config) {
+                    let delay = chaos.rng.next_delay(config);
+                    if !delay.is_zero() {
+                        let sequence = *next_sequence;
+                        *next_sequence += 1;
+                        let delayed_time = time.saturating_add_nanos(delay.as_nanos() as u64);
+                        pending.push(TimedEvent {
+                            time: delayed_time,
+                            sequence,
+                            event,
+                            delayed: true,
+                        });
+                        chaos.stats.record_delay(delay);
+                        debug!(
+                            target: "chaos",
+                            token = token.0,
+                            injection = "io_delay",
+                            delay_ns = delay.as_nanos() as u64
+                        );
+                        continue;
+                    }
+                }
+
+                // Check for error injection
+                let mut injected = false;
+                let mut delivered_event = event;
+                if chaos.rng.should_inject_io_error(config) {
+                    if let Some(kind) = chaos.rng.next_io_error_kind(config) {
+                        delivered_event = Event::errored(token);
+                        chaos.last_io_error_kind = Some(kind);
+                        chaos.stats.record_io_error();
+                        debug!(
+                            target: "chaos",
+                            token = token.0,
+                            injection = "io_error",
+                            error_kind = ?kind
+                        );
+                        injected = true;
+                    }
+                }
+
+                if !injected {
+                    chaos.stats.record_no_injection();
+                }
+
+                events.push(delivered_event);
+                count += 1;
+            } else {
+                // No chaos - deliver event as-is
+                events.push(event);
+                count += 1;
             }
         }
 
@@ -291,6 +888,7 @@ impl Reactor for LabReactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
 
     struct MockSource;
     impl std::os::fd::AsRawFd for MockSource {
@@ -299,8 +897,14 @@ mod tests {
         }
     }
 
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn delivers_injected_event() {
+        init_test("delivers_injected_event");
         let reactor = LabReactor::new();
         let token = Token::new(1);
         let source = MockSource;
@@ -317,17 +921,25 @@ mod tests {
         reactor
             .poll(&mut events, Some(Duration::from_millis(5)))
             .unwrap();
-        assert!(events.is_empty());
+        crate::assert_with_log!(
+            events.is_empty(),
+            "events empty before time",
+            true,
+            events.is_empty()
+        );
 
         // Poll after time - should have event
         reactor
             .poll(&mut events, Some(Duration::from_millis(10)))
             .unwrap();
-        assert_eq!(events.iter().count(), 1);
+        let count = events.iter().count();
+        crate::assert_with_log!(count == 1, "event delivered", 1usize, count);
+        crate::test_complete!("delivers_injected_event");
     }
 
     #[test]
     fn modify_interest() {
+        init_test("modify_interest");
         let reactor = LabReactor::new();
         let token = Token::new(1);
         let source = MockSource;
@@ -335,18 +947,25 @@ mod tests {
         reactor
             .register(&source, token, Interest::READABLE)
             .unwrap();
-        assert_eq!(reactor.registration_count(), 1);
+        crate::assert_with_log!(
+            reactor.registration_count() == 1,
+            "registration count",
+            1usize,
+            reactor.registration_count()
+        );
 
         // Modify to writable
         reactor.modify(token, Interest::WRITABLE).unwrap();
 
         // Should fail for non-existent token
         let result = reactor.modify(Token::new(999), Interest::READABLE);
-        assert!(result.is_err());
+        crate::assert_with_log!(result.is_err(), "modify missing fails", true, result.is_err());
+        crate::test_complete!("modify_interest");
     }
 
     #[test]
     fn deregister_by_token() {
+        init_test("deregister_by_token");
         let reactor = LabReactor::new();
         let token = Token::new(1);
         let source = MockSource;
@@ -354,18 +973,30 @@ mod tests {
         reactor
             .register(&source, token, Interest::READABLE)
             .unwrap();
-        assert_eq!(reactor.registration_count(), 1);
+        crate::assert_with_log!(
+            reactor.registration_count() == 1,
+            "registration count",
+            1usize,
+            reactor.registration_count()
+        );
 
         reactor.deregister(token).unwrap();
-        assert_eq!(reactor.registration_count(), 0);
+        crate::assert_with_log!(
+            reactor.registration_count() == 0,
+            "registration count",
+            0usize,
+            reactor.registration_count()
+        );
 
         // Deregister again should fail
         let result = reactor.deregister(token);
-        assert!(result.is_err());
+        crate::assert_with_log!(result.is_err(), "deregister missing fails", true, result.is_err());
+        crate::test_complete!("deregister_by_token");
     }
 
     #[test]
     fn duplicate_register_fails() {
+        init_test("duplicate_register_fails");
         let reactor = LabReactor::new();
         let token = Token::new(1);
         let source = MockSource;
@@ -376,86 +1007,169 @@ mod tests {
 
         // Second registration with same token should fail
         let result = reactor.register(&source, token, Interest::WRITABLE);
-        assert!(result.is_err());
+        crate::assert_with_log!(result.is_err(), "duplicate fails", true, result.is_err());
+        crate::test_complete!("duplicate_register_fails");
     }
 
     #[test]
     fn wake_sets_flag() {
+        init_test("wake_sets_flag");
         let reactor = LabReactor::new();
 
-        assert!(!reactor.check_and_clear_wake());
+        let was_set = reactor.check_and_clear_wake();
+        crate::assert_with_log!(!was_set, "wake flag initially false", false, was_set);
 
         reactor.wake().unwrap();
-        assert!(reactor.check_and_clear_wake());
+        let now_set = reactor.check_and_clear_wake();
+        crate::assert_with_log!(now_set, "wake flag set", true, now_set);
 
         // Flag should be cleared
-        assert!(!reactor.check_and_clear_wake());
+        let cleared = reactor.check_and_clear_wake();
+        crate::assert_with_log!(!cleared, "wake flag cleared", false, cleared);
+        crate::test_complete!("wake_sets_flag");
     }
 
     #[test]
     fn registration_count_and_is_empty() {
+        init_test("registration_count_and_is_empty");
         let reactor = LabReactor::new();
         let source = MockSource;
 
-        assert!(reactor.is_empty());
-        assert_eq!(reactor.registration_count(), 0);
+        crate::assert_with_log!(
+            reactor.is_empty(),
+            "reactor empty",
+            true,
+            reactor.is_empty()
+        );
+        crate::assert_with_log!(
+            reactor.registration_count() == 0,
+            "registration count",
+            0usize,
+            reactor.registration_count()
+        );
 
         reactor
             .register(&source, Token::new(1), Interest::READABLE)
             .unwrap();
-        assert!(!reactor.is_empty());
-        assert_eq!(reactor.registration_count(), 1);
+        crate::assert_with_log!(
+            !reactor.is_empty(),
+            "reactor not empty",
+            false,
+            reactor.is_empty()
+        );
+        crate::assert_with_log!(
+            reactor.registration_count() == 1,
+            "registration count",
+            1usize,
+            reactor.registration_count()
+        );
 
         reactor
             .register(&source, Token::new(2), Interest::WRITABLE)
             .unwrap();
-        assert_eq!(reactor.registration_count(), 2);
+        crate::assert_with_log!(
+            reactor.registration_count() == 2,
+            "registration count",
+            2usize,
+            reactor.registration_count()
+        );
 
         reactor.deregister(Token::new(1)).unwrap();
-        assert_eq!(reactor.registration_count(), 1);
+        crate::assert_with_log!(
+            reactor.registration_count() == 1,
+            "registration count",
+            1usize,
+            reactor.registration_count()
+        );
 
         reactor.deregister(Token::new(2)).unwrap();
-        assert!(reactor.is_empty());
+        crate::assert_with_log!(
+            reactor.is_empty(),
+            "reactor empty",
+            true,
+            reactor.is_empty()
+        );
+        crate::test_complete!("registration_count_and_is_empty");
     }
 
     #[test]
     fn virtual_time_advances() {
+        init_test("virtual_time_advances");
         let reactor = LabReactor::new();
 
-        assert_eq!(reactor.now(), Time::ZERO);
+        crate::assert_with_log!(
+            reactor.now() == Time::ZERO,
+            "initial time",
+            Time::ZERO,
+            reactor.now()
+        );
 
         reactor.advance_time(Duration::from_secs(1));
-        assert_eq!(reactor.now().as_nanos(), 1_000_000_000);
+        crate::assert_with_log!(
+            reactor.now().as_nanos() == 1_000_000_000,
+            "time after advance",
+            1_000_000_000u64,
+            reactor.now().as_nanos()
+        );
 
         // Poll also advances time
         let mut events = crate::runtime::reactor::Events::with_capacity(10);
         reactor
             .poll(&mut events, Some(Duration::from_millis(500)))
             .unwrap();
-        assert_eq!(reactor.now().as_nanos(), 1_500_000_000);
+        crate::assert_with_log!(
+            reactor.now().as_nanos() == 1_500_000_000,
+            "time after poll",
+            1_500_000_000u64,
+            reactor.now().as_nanos()
+        );
+        crate::test_complete!("virtual_time_advances");
     }
 
     #[test]
     fn advance_time_to_target() {
+        init_test("advance_time_to_target");
         let reactor = LabReactor::new();
 
-        assert_eq!(reactor.now(), Time::ZERO);
+        crate::assert_with_log!(
+            reactor.now() == Time::ZERO,
+            "initial time",
+            Time::ZERO,
+            reactor.now()
+        );
 
         // Advance to 1 second
         reactor.advance_time_to(Time::from_nanos(1_000_000_000));
-        assert_eq!(reactor.now().as_nanos(), 1_000_000_000);
+        crate::assert_with_log!(
+            reactor.now().as_nanos() == 1_000_000_000,
+            "time after advance",
+            1_000_000_000u64,
+            reactor.now().as_nanos()
+        );
 
         // Advancing to past time is a no-op
         reactor.advance_time_to(Time::from_nanos(500_000_000));
-        assert_eq!(reactor.now().as_nanos(), 1_000_000_000);
+        crate::assert_with_log!(
+            reactor.now().as_nanos() == 1_000_000_000,
+            "time unchanged",
+            1_000_000_000u64,
+            reactor.now().as_nanos()
+        );
 
         // Advance further
         reactor.advance_time_to(Time::from_nanos(2_000_000_000));
-        assert_eq!(reactor.now().as_nanos(), 2_000_000_000);
+        crate::assert_with_log!(
+            reactor.now().as_nanos() == 2_000_000_000,
+            "time advanced",
+            2_000_000_000u64,
+            reactor.now().as_nanos()
+        );
+        crate::test_complete!("advance_time_to_target");
     }
 
     #[test]
     fn set_ready_delivers_immediately() {
+        init_test("set_ready_delivers_immediately");
         let reactor = LabReactor::new();
         let token = Token::new(1);
         let source = MockSource;
@@ -471,11 +1185,14 @@ mod tests {
 
         // Poll with zero timeout should still deliver the event
         reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
-        assert_eq!(events.iter().count(), 1);
+        let count = events.iter().count();
+        crate::assert_with_log!(count == 1, "event delivered", 1usize, count);
+        crate::test_complete!("set_ready_delivers_immediately");
     }
 
     #[test]
     fn same_time_events_delivered_in_order() {
+        init_test("same_time_events_delivered_in_order");
         let reactor = LabReactor::new();
         let source = MockSource;
 
@@ -509,14 +1226,36 @@ mod tests {
 
         // Should have 3 events in order
         let collected: Vec<_> = events.iter().collect();
-        assert_eq!(collected.len(), 3);
-        assert_eq!(collected[0].token, token1);
-        assert_eq!(collected[1].token, token2);
-        assert_eq!(collected[2].token, token3);
+        crate::assert_with_log!(
+            collected.len() == 3,
+            "event count",
+            3usize,
+            collected.len()
+        );
+        crate::assert_with_log!(
+            collected[0].token == token1,
+            "first token",
+            token1,
+            collected[0].token
+        );
+        crate::assert_with_log!(
+            collected[1].token == token2,
+            "second token",
+            token2,
+            collected[1].token
+        );
+        crate::assert_with_log!(
+            collected[2].token == token3,
+            "third token",
+            token3,
+            collected[2].token
+        );
+        crate::test_complete!("same_time_events_delivered_in_order");
     }
 
     #[test]
     fn different_time_events_delivered_in_time_order() {
+        init_test("different_time_events_delivered_in_time_order");
         let reactor = LabReactor::new();
         let source = MockSource;
 
@@ -549,14 +1288,36 @@ mod tests {
 
         // Should be in time order: token3, token1, token2
         let collected: Vec<_> = events.iter().collect();
-        assert_eq!(collected.len(), 3);
-        assert_eq!(collected[0].token, token3);
-        assert_eq!(collected[1].token, token1);
-        assert_eq!(collected[2].token, token2);
+        crate::assert_with_log!(
+            collected.len() == 3,
+            "event count",
+            3usize,
+            collected.len()
+        );
+        crate::assert_with_log!(
+            collected[0].token == token3,
+            "first token",
+            token3,
+            collected[0].token
+        );
+        crate::assert_with_log!(
+            collected[1].token == token1,
+            "second token",
+            token1,
+            collected[1].token
+        );
+        crate::assert_with_log!(
+            collected[2].token == token2,
+            "third token",
+            token2,
+            collected[2].token
+        );
+        crate::test_complete!("different_time_events_delivered_in_time_order");
     }
 
     #[test]
     fn schedule_event_alias_works() {
+        init_test("schedule_event_alias_works");
         let reactor = LabReactor::new();
         let token = Token::new(1);
         let source = MockSource;
@@ -573,11 +1334,14 @@ mod tests {
             .poll(&mut events, Some(Duration::from_millis(15)))
             .unwrap();
 
-        assert_eq!(events.iter().count(), 1);
+        let count = events.iter().count();
+        crate::assert_with_log!(count == 1, "event delivered", 1usize, count);
+        crate::test_complete!("schedule_event_alias_works");
     }
 
     #[test]
     fn events_before_current_time_delivered_immediately() {
+        init_test("events_before_current_time_delivered_immediately");
         let reactor = LabReactor::new();
         let source = MockSource;
         let token = Token::new(1);
@@ -597,11 +1361,14 @@ mod tests {
         // Poll with zero timeout should deliver
         reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
 
-        assert_eq!(events.iter().count(), 1);
+        let count = events.iter().count();
+        crate::assert_with_log!(count == 1, "event delivered", 1usize, count);
+        crate::test_complete!("events_before_current_time_delivered_immediately");
     }
 
     #[test]
     fn deregister_cleans_up_scheduled_events() {
+        init_test("deregister_cleans_up_scheduled_events");
         let reactor = LabReactor::new();
         let source = MockSource;
 
@@ -632,8 +1399,159 @@ mod tests {
 
         // Should only have token2's event (token1's events were cleaned up)
         let collected: Vec<_> = events.iter().collect();
-        assert_eq!(collected.len(), 1);
-        assert_eq!(collected[0].token, token2);
+        crate::assert_with_log!(
+            collected.len() == 1,
+            "event count",
+            1usize,
+            collected.len()
+        );
+        crate::assert_with_log!(
+            collected[0].token == token2,
+            "remaining token",
+            token2,
+            collected[0].token
+        );
+        crate::test_complete!("deregister_cleans_up_scheduled_events");
+    }
+
+    #[test]
+    fn io_chaos_injects_error_events() {
+        init_test("io_chaos_injects_error_events");
+        let config = ChaosConfig::new(7)
+            .with_io_error_probability(1.0)
+            .with_io_error_kinds(vec![io::ErrorKind::TimedOut]);
+
+        let reactor = LabReactor::with_chaos(config);
+        let token = Token::new(1);
+        let source = MockSource;
+
+        reactor
+            .register(&source, token, Interest::READABLE)
+            .unwrap();
+        reactor.set_ready(token, Event::readable(token));
+
+        let mut events = crate::runtime::reactor::Events::with_capacity(10);
+        reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+        let event = events.iter().next().expect("event");
+        crate::assert_with_log!(
+            event.is_error(),
+            "event is error",
+            true,
+            event.is_error()
+        );
+
+        let last_kind = reactor
+            .inner
+            .lock()
+            .unwrap()
+            .chaos
+            .as_ref()
+            .and_then(|chaos| chaos.last_io_error_kind);
+        crate::assert_with_log!(
+            last_kind == Some(io::ErrorKind::TimedOut),
+            "last error kind",
+            Some(io::ErrorKind::TimedOut),
+            last_kind
+        );
+        crate::test_complete!("io_chaos_injects_error_events");
+    }
+
+    #[test]
+    fn io_chaos_delays_events() {
+        init_test("io_chaos_delays_events");
+        let config = ChaosConfig::new(11)
+            .with_delay_probability(1.0)
+            .with_delay_range(Duration::from_millis(5)..Duration::from_millis(6));
+
+        let reactor = LabReactor::with_chaos(config);
+        let token = Token::new(1);
+        let source = MockSource;
+
+        reactor
+            .register(&source, token, Interest::READABLE)
+            .unwrap();
+        reactor.set_ready(token, Event::readable(token));
+
+        let mut events = crate::runtime::reactor::Events::with_capacity(10);
+        reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+        crate::assert_with_log!(
+            events.is_empty(),
+            "initial poll empty",
+            true,
+            events.is_empty()
+        );
+
+        let delayed_at = reactor
+            .inner
+            .lock()
+            .unwrap()
+            .pending
+            .peek()
+            .map(|te| te.time)
+            .expect("delayed event");
+
+        reactor.advance_time_to(delayed_at);
+        events.clear();
+        reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+        let count = events.iter().count();
+        crate::assert_with_log!(count == 1, "delayed event delivered", 1usize, count);
+        crate::test_complete!("io_chaos_delays_events");
+    }
+
+    #[test]
+    fn io_chaos_is_deterministic_with_same_seed() {
+        init_test("io_chaos_is_deterministic_with_same_seed");
+        let config = ChaosConfig::new(123)
+            .with_io_error_probability(0.5)
+            .with_io_error_kinds(vec![
+                io::ErrorKind::WouldBlock,
+                io::ErrorKind::TimedOut,
+            ]);
+
+        let reactor_a = LabReactor::with_chaos(config.clone());
+        let reactor_b = LabReactor::with_chaos(config);
+
+        let token_a = Token::new(1);
+        let token_b = Token::new(1);
+        let source = MockSource;
+
+        reactor_a
+            .register(&source, token_a, Interest::READABLE)
+            .unwrap();
+        reactor_b
+            .register(&source, token_b, Interest::READABLE)
+            .unwrap();
+
+        reactor_a.set_ready(token_a, Event::readable(token_a));
+        reactor_b.set_ready(token_b, Event::readable(token_b));
+
+        let mut events_a = crate::runtime::reactor::Events::with_capacity(10);
+        let mut events_b = crate::runtime::reactor::Events::with_capacity(10);
+
+        reactor_a.poll(&mut events_a, Some(Duration::ZERO)).unwrap();
+        reactor_b.poll(&mut events_b, Some(Duration::ZERO)).unwrap();
+
+        let ready_a = events_a.iter().next().expect("event").ready;
+        let ready_b = events_b.iter().next().expect("event").ready;
+        crate::assert_with_log!(ready_a == ready_b, "ready matches", ready_b, ready_a);
+
+        let last_a = reactor_a
+            .inner
+            .lock()
+            .unwrap()
+            .chaos
+            .as_ref()
+            .and_then(|chaos| chaos.last_io_error_kind);
+        let last_b = reactor_b
+            .inner
+            .lock()
+            .unwrap()
+            .chaos
+            .as_ref()
+            .and_then(|chaos| chaos.last_io_error_kind);
+        crate::assert_with_log!(last_a == last_b, "last error kind", last_b, last_a);
+        crate::test_complete!("io_chaos_is_deterministic_with_same_seed");
     }
 
     /// Integration test verifying IoDriver correctly dispatches wakers with LabReactor.
@@ -671,6 +1589,7 @@ mod tests {
 
         #[test]
         fn io_driver_with_lab_reactor_dispatches_wakers() {
+            super::init_test("io_driver_with_lab_reactor_dispatches_wakers");
             let reactor = Arc::new(LabReactor::new());
             let mut driver = IoDriver::new(reactor.clone());
             let source = MockSource;
@@ -682,7 +1601,13 @@ mod tests {
                 .expect("register");
 
             // Waker should not be woken yet
-            assert!(!waker_state.flag.load(Ordering::SeqCst));
+            let initial = waker_state.flag.load(Ordering::SeqCst);
+            crate::assert_with_log!(
+                !initial,
+                "waker not yet woken",
+                false,
+                initial
+            );
 
             // Inject an event for our token
             reactor.inject_event(token, Event::readable(token), Duration::ZERO);
@@ -690,13 +1615,17 @@ mod tests {
             // Turn the driver - should dispatch the waker
             let count = driver.turn(Some(Duration::from_millis(10))).expect("turn");
 
-            assert!(count >= 1);
-            assert!(waker_state.flag.load(Ordering::SeqCst));
-            assert_eq!(waker_state.count.load(Ordering::SeqCst), 1);
+            crate::assert_with_log!(count >= 1, "events dispatched", true, count >= 1);
+            let flag = waker_state.flag.load(Ordering::SeqCst);
+            crate::assert_with_log!(flag, "waker fired", true, flag);
+            let wake_count = waker_state.count.load(Ordering::SeqCst);
+            crate::assert_with_log!(wake_count == 1, "wake count", 1usize, wake_count);
+            crate::test_complete!("io_driver_with_lab_reactor_dispatches_wakers");
         }
 
         #[test]
         fn io_driver_with_lab_reactor_multiple_wakers() {
+            super::init_test("io_driver_with_lab_reactor_multiple_wakers");
             let reactor = Arc::new(LabReactor::new());
             let mut driver = IoDriver::new(reactor.clone());
             let source = MockSource;
@@ -723,10 +1652,510 @@ mod tests {
             // Turn should dispatch wakers 1 and 3
             let count = driver.turn(Some(Duration::from_millis(10))).unwrap();
 
-            assert_eq!(count, 2);
-            assert!(state1.flag.load(Ordering::SeqCst));
-            assert!(!state2.flag.load(Ordering::SeqCst)); // Not woken
-            assert!(state3.flag.load(Ordering::SeqCst));
+            crate::assert_with_log!(count == 2, "dispatch count", 2usize, count);
+            let flag1 = state1.flag.load(Ordering::SeqCst);
+            let flag2 = state2.flag.load(Ordering::SeqCst);
+            let flag3 = state3.flag.load(Ordering::SeqCst);
+            crate::assert_with_log!(flag1, "waker1 fired", true, flag1);
+            crate::assert_with_log!(!flag2, "waker2 not fired", false, flag2);
+            crate::assert_with_log!(flag3, "waker3 fired", true, flag3);
+            crate::test_complete!("io_driver_with_lab_reactor_multiple_wakers");
+        }
+    }
+
+    /// Per-token fault injection tests.
+    mod fault_injection {
+        use super::*;
+
+        #[test]
+        fn fault_config_builder() {
+            super::init_test("fault_config_builder");
+
+            let config = FaultConfig::new()
+                .with_error_probability(0.5)
+                .with_error_kinds(vec![io::ErrorKind::BrokenPipe, io::ErrorKind::ConnectionReset])
+                .with_partitioned(true)
+                .with_closed(true)
+                .with_pending_error(io::ErrorKind::TimedOut);
+
+            crate::assert_with_log!(
+                config.error_probability == 0.5,
+                "error_probability",
+                0.5f64,
+                config.error_probability
+            );
+            crate::assert_with_log!(
+                config.error_kinds.len() == 2,
+                "error_kinds len",
+                2usize,
+                config.error_kinds.len()
+            );
+            crate::assert_with_log!(config.partitioned, "partitioned", true, config.partitioned);
+            crate::assert_with_log!(config.closed, "closed", true, config.closed);
+            crate::assert_with_log!(
+                config.pending_error == Some(io::ErrorKind::TimedOut),
+                "pending_error",
+                Some(io::ErrorKind::TimedOut),
+                config.pending_error
+            );
+
+            crate::test_complete!("fault_config_builder");
+        }
+
+        #[test]
+        fn fault_config_probability_clamped() {
+            super::init_test("fault_config_probability_clamped");
+
+            let config_low = FaultConfig::new().with_error_probability(-0.5);
+            let config_high = FaultConfig::new().with_error_probability(1.5);
+
+            crate::assert_with_log!(
+                config_low.error_probability == 0.0,
+                "clamped to 0",
+                0.0f64,
+                config_low.error_probability
+            );
+            crate::assert_with_log!(
+                config_high.error_probability == 1.0,
+                "clamped to 1",
+                1.0f64,
+                config_high.error_probability
+            );
+
+            crate::test_complete!("fault_config_probability_clamped");
+        }
+
+        #[test]
+        fn set_and_clear_fault_config() {
+            super::init_test("set_and_clear_fault_config");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(1);
+            let source = MockSource;
+
+            reactor
+                .register(&source, token, Interest::READABLE)
+                .unwrap();
+
+            // Set fault config
+            let config = FaultConfig::new().with_partitioned(true);
+            reactor.set_fault_config(token, config).unwrap();
+
+            // Verify fault is set
+            let has_fault = reactor
+                .inner
+                .lock()
+                .unwrap()
+                .sockets
+                .get(&token)
+                .and_then(|s| s.fault.as_ref())
+                .is_some();
+            crate::assert_with_log!(has_fault, "fault config set", true, has_fault);
+
+            // Clear fault config
+            reactor.clear_fault_config(token).unwrap();
+
+            let has_fault = reactor
+                .inner
+                .lock()
+                .unwrap()
+                .sockets
+                .get(&token)
+                .and_then(|s| s.fault.as_ref())
+                .is_some();
+            crate::assert_with_log!(!has_fault, "fault config cleared", false, has_fault);
+
+            crate::test_complete!("set_and_clear_fault_config");
+        }
+
+        #[test]
+        fn set_fault_config_unregistered_token_fails() {
+            super::init_test("set_fault_config_unregistered_token_fails");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(999);
+
+            let result = reactor.set_fault_config(token, FaultConfig::new());
+            crate::assert_with_log!(result.is_err(), "unregistered fails", true, result.is_err());
+
+            crate::test_complete!("set_fault_config_unregistered_token_fails");
+        }
+
+        #[test]
+        fn inject_error_one_shot() {
+            super::init_test("inject_error_one_shot");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(1);
+            let source = MockSource;
+
+            reactor
+                .register(&source, token, Interest::READABLE)
+                .unwrap();
+
+            // Inject error
+            reactor
+                .inject_error(token, io::ErrorKind::BrokenPipe)
+                .unwrap();
+
+            // Schedule a readable event
+            reactor.set_ready(token, Event::readable(token));
+
+            let mut events = crate::runtime::reactor::Events::with_capacity(10);
+            reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+            // First event should be error
+            let event = events.iter().next().expect("event");
+            crate::assert_with_log!(
+                event.is_error(),
+                "first event is error",
+                true,
+                event.is_error()
+            );
+
+            // Verify last error kind recorded
+            let last_error = reactor.last_injected_error(token);
+            crate::assert_with_log!(
+                last_error == Some(io::ErrorKind::BrokenPipe),
+                "last error recorded",
+                Some(io::ErrorKind::BrokenPipe),
+                last_error
+            );
+
+            // Second event should be normal (one-shot)
+            events.clear();
+            reactor.set_ready(token, Event::readable(token));
+            reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+            let event = events.iter().next().expect("event");
+            crate::assert_with_log!(
+                event.is_readable(),
+                "second event is readable",
+                true,
+                event.is_readable()
+            );
+
+            crate::test_complete!("inject_error_one_shot");
+        }
+
+        #[test]
+        fn inject_close_delivers_hup() {
+            super::init_test("inject_close_delivers_hup");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(1);
+            let source = MockSource;
+
+            reactor
+                .register(&source, token, Interest::READABLE)
+                .unwrap();
+
+            // Inject close
+            reactor.inject_close(token).unwrap();
+
+            let mut events = crate::runtime::reactor::Events::with_capacity(10);
+            reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+            // Should receive HUP event
+            let event = events.iter().next().expect("event");
+            crate::assert_with_log!(event.is_hangup(), "received HUP", true, event.is_hangup());
+
+            // Verify stats
+            let stats = reactor.fault_stats(token);
+            crate::assert_with_log!(stats.is_some(), "has stats", true, stats.is_some());
+            let (errors, closes, dropped) = stats.unwrap();
+            crate::assert_with_log!(closes == 1, "close count", 1u64, closes);
+            crate::assert_with_log!(errors == 0, "error count", 0u64, errors);
+            crate::assert_with_log!(dropped == 0, "dropped count", 0u64, dropped);
+
+            crate::test_complete!("inject_close_delivers_hup");
+        }
+
+        #[test]
+        fn partition_drops_events() {
+            super::init_test("partition_drops_events");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(1);
+            let source = MockSource;
+
+            reactor
+                .register(&source, token, Interest::READABLE)
+                .unwrap();
+
+            // Enable partition
+            reactor.partition(token, true).unwrap();
+
+            // Schedule events
+            reactor.set_ready(token, Event::readable(token));
+            reactor.set_ready(token, Event::writable(token));
+
+            let mut events = crate::runtime::reactor::Events::with_capacity(10);
+            reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+            // Events should be dropped
+            crate::assert_with_log!(events.is_empty(), "events dropped", true, events.is_empty());
+
+            // Verify stats
+            let stats = reactor.fault_stats(token);
+            let (_, _, dropped) = stats.unwrap();
+            crate::assert_with_log!(dropped == 2, "dropped count", 2u64, dropped);
+
+            // Disable partition
+            reactor.partition(token, false).unwrap();
+
+            // Schedule another event
+            reactor.set_ready(token, Event::readable(token));
+            events.clear();
+            reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+            // Event should be delivered
+            crate::assert_with_log!(events.len() == 1, "event delivered", 1usize, events.len());
+
+            crate::test_complete!("partition_drops_events");
+        }
+
+        #[test]
+        fn random_error_injection() {
+            super::init_test("random_error_injection");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(42); // Use specific token for deterministic RNG
+            let source = MockSource;
+
+            reactor
+                .register(&source, token, Interest::READABLE)
+                .unwrap();
+
+            // Configure 100% error probability
+            let config = FaultConfig::new()
+                .with_error_probability(1.0)
+                .with_error_kinds(vec![io::ErrorKind::ConnectionReset]);
+            reactor.set_fault_config(token, config).unwrap();
+
+            // Schedule a readable event
+            reactor.set_ready(token, Event::readable(token));
+
+            let mut events = crate::runtime::reactor::Events::with_capacity(10);
+            reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+            // Should be error
+            let event = events.iter().next().expect("event");
+            crate::assert_with_log!(event.is_error(), "error injected", true, event.is_error());
+
+            let last_error = reactor.last_injected_error(token);
+            crate::assert_with_log!(
+                last_error == Some(io::ErrorKind::ConnectionReset),
+                "error kind",
+                Some(io::ErrorKind::ConnectionReset),
+                last_error
+            );
+
+            crate::test_complete!("random_error_injection");
+        }
+
+        #[test]
+        fn per_token_fault_isolated() {
+            super::init_test("per_token_fault_isolated");
+
+            let reactor = LabReactor::new();
+            let token1 = Token::new(1);
+            let token2 = Token::new(2);
+            let source = MockSource;
+
+            reactor
+                .register(&source, token1, Interest::READABLE)
+                .unwrap();
+            reactor
+                .register(&source, token2, Interest::READABLE)
+                .unwrap();
+
+            // Partition only token1
+            reactor.partition(token1, true).unwrap();
+
+            // Schedule events for both
+            reactor.set_ready(token1, Event::readable(token1));
+            reactor.set_ready(token2, Event::readable(token2));
+
+            let mut events = crate::runtime::reactor::Events::with_capacity(10);
+            reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+            // Only token2's event should be delivered
+            crate::assert_with_log!(events.len() == 1, "one event", 1usize, events.len());
+            let event = events.iter().next().expect("event");
+            crate::assert_with_log!(
+                event.token == token2,
+                "token2 delivered",
+                token2,
+                event.token
+            );
+
+            crate::test_complete!("per_token_fault_isolated");
+        }
+
+        #[test]
+        fn fault_injection_deterministic_with_same_token() {
+            super::init_test("fault_injection_deterministic_with_same_token");
+
+            // Two reactors with same token should produce same random fault sequence
+            let reactor_a = LabReactor::new();
+            let reactor_b = LabReactor::new();
+            let token = Token::new(123); // Same token = same RNG seed
+            let source = MockSource;
+
+            reactor_a
+                .register(&source, token, Interest::READABLE)
+                .unwrap();
+            reactor_b
+                .register(&source, token, Interest::READABLE)
+                .unwrap();
+
+            // Configure 50% error probability with multiple kinds
+            let config = FaultConfig::new()
+                .with_error_probability(0.5)
+                .with_error_kinds(vec![
+                    io::ErrorKind::WouldBlock,
+                    io::ErrorKind::TimedOut,
+                    io::ErrorKind::ConnectionReset,
+                ]);
+
+            reactor_a.set_fault_config(token, config.clone()).unwrap();
+            reactor_b.set_fault_config(token, config).unwrap();
+
+            // Run multiple events and compare outcomes
+            let mut results_a = Vec::new();
+            let mut results_b = Vec::new();
+
+            for _ in 0..10 {
+                reactor_a.set_ready(token, Event::readable(token));
+                reactor_b.set_ready(token, Event::readable(token));
+
+                let mut events_a = crate::runtime::reactor::Events::with_capacity(10);
+                let mut events_b = crate::runtime::reactor::Events::with_capacity(10);
+
+                reactor_a.poll(&mut events_a, Some(Duration::ZERO)).unwrap();
+                reactor_b.poll(&mut events_b, Some(Duration::ZERO)).unwrap();
+
+                results_a.push(events_a.iter().next().map(|e| e.ready));
+                results_b.push(events_b.iter().next().map(|e| e.ready));
+            }
+
+            crate::assert_with_log!(
+                results_a == results_b,
+                "deterministic results",
+                results_b,
+                results_a
+            );
+
+            crate::test_complete!("fault_injection_deterministic_with_same_token");
+        }
+
+        #[test]
+        fn inject_error_creates_fault_state_if_missing() {
+            super::init_test("inject_error_creates_fault_state_if_missing");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(1);
+            let source = MockSource;
+
+            reactor
+                .register(&source, token, Interest::READABLE)
+                .unwrap();
+
+            // No fault config set, inject error should create one
+            reactor
+                .inject_error(token, io::ErrorKind::TimedOut)
+                .unwrap();
+
+            let has_fault = reactor
+                .inner
+                .lock()
+                .unwrap()
+                .sockets
+                .get(&token)
+                .and_then(|s| s.fault.as_ref())
+                .is_some();
+            crate::assert_with_log!(has_fault, "fault state created", true, has_fault);
+
+            crate::test_complete!("inject_error_creates_fault_state_if_missing");
+        }
+
+        #[test]
+        fn per_token_fault_with_global_chaos() {
+            super::init_test("per_token_fault_with_global_chaos");
+
+            // Per-token faults should take precedence over global chaos
+            let config = ChaosConfig::new(42)
+                .with_io_error_probability(1.0)
+                .with_io_error_kinds(vec![io::ErrorKind::TimedOut]);
+
+            let reactor = LabReactor::with_chaos(config);
+            let token1 = Token::new(1);
+            let token2 = Token::new(2);
+            let source = MockSource;
+
+            reactor
+                .register(&source, token1, Interest::READABLE)
+                .unwrap();
+            reactor
+                .register(&source, token2, Interest::READABLE)
+                .unwrap();
+
+            // Partition token1 (per-token fault)
+            reactor.partition(token1, true).unwrap();
+
+            // Schedule events for both
+            reactor.set_ready(token1, Event::readable(token1));
+            reactor.set_ready(token2, Event::readable(token2));
+
+            let mut events = crate::runtime::reactor::Events::with_capacity(10);
+            reactor.poll(&mut events, Some(Duration::ZERO)).unwrap();
+
+            // token1 should be dropped (per-token partition)
+            // token2 should be error (global chaos)
+            crate::assert_with_log!(events.len() == 1, "one event", 1usize, events.len());
+
+            let event = events.iter().next().expect("event");
+            crate::assert_with_log!(
+                event.token == token2,
+                "token2 delivered",
+                token2,
+                event.token
+            );
+            crate::assert_with_log!(
+                event.is_error(),
+                "token2 has error (global chaos)",
+                true,
+                event.is_error()
+            );
+
+            crate::test_complete!("per_token_fault_with_global_chaos");
+        }
+
+        #[test]
+        fn inject_close_unregistered_token_fails() {
+            super::init_test("inject_close_unregistered_token_fails");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(999);
+
+            let result = reactor.inject_close(token);
+            crate::assert_with_log!(result.is_err(), "unregistered fails", true, result.is_err());
+
+            crate::test_complete!("inject_close_unregistered_token_fails");
+        }
+
+        #[test]
+        fn partition_unregistered_token_fails() {
+            super::init_test("partition_unregistered_token_fails");
+
+            let reactor = LabReactor::new();
+            let token = Token::new(999);
+
+            let result = reactor.partition(token, true);
+            crate::assert_with_log!(result.is_err(), "unregistered fails", true, result.is_err());
+
+            crate::test_complete!("partition_unregistered_token_fails");
         }
     }
 }

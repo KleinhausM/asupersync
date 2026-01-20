@@ -264,18 +264,37 @@ impl std::fmt::Debug for EpollReactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn create_reactor() {
+        init_test("create_reactor");
         let reactor = EpollReactor::new().expect("failed to create reactor");
-        assert!(reactor.is_empty());
-        assert_eq!(reactor.registration_count(), 0);
+        crate::assert_with_log!(
+            reactor.is_empty(),
+            "reactor empty",
+            true,
+            reactor.is_empty()
+        );
+        crate::assert_with_log!(
+            reactor.registration_count() == 0,
+            "registration count",
+            0usize,
+            reactor.registration_count()
+        );
+        crate::test_complete!("create_reactor");
     }
 
     #[test]
     fn register_and_deregister() {
+        init_test("register_and_deregister");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let (sock1, _sock2) = UnixStream::pair().expect("failed to create unix stream pair");
 
@@ -284,25 +303,55 @@ mod tests {
             .register(&sock1, token, Interest::READABLE)
             .expect("register failed");
 
-        assert_eq!(reactor.registration_count(), 1);
-        assert!(!reactor.is_empty());
+        crate::assert_with_log!(
+            reactor.registration_count() == 1,
+            "registration count",
+            1usize,
+            reactor.registration_count()
+        );
+        crate::assert_with_log!(
+            !reactor.is_empty(),
+            "reactor not empty",
+            false,
+            reactor.is_empty()
+        );
 
         reactor.deregister(token).expect("deregister failed");
 
-        assert_eq!(reactor.registration_count(), 0);
-        assert!(reactor.is_empty());
+        crate::assert_with_log!(
+            reactor.registration_count() == 0,
+            "registration count",
+            0usize,
+            reactor.registration_count()
+        );
+        crate::assert_with_log!(
+            reactor.is_empty(),
+            "reactor empty",
+            true,
+            reactor.is_empty()
+        );
+        crate::test_complete!("register_and_deregister");
     }
 
     #[test]
     fn deregister_not_found() {
+        init_test("deregister_not_found");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let result = reactor.deregister(Token::new(999));
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+        crate::assert_with_log!(result.is_err(), "deregister fails", true, result.is_err());
+        let kind = result.unwrap_err().kind();
+        crate::assert_with_log!(
+            kind == io::ErrorKind::NotFound,
+            "not found kind",
+            io::ErrorKind::NotFound,
+            kind
+        );
+        crate::test_complete!("deregister_not_found");
     }
 
     #[test]
     fn modify_interest() {
+        init_test("modify_interest");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let (sock1, _sock2) = UnixStream::pair().expect("failed to create unix stream pair");
 
@@ -319,22 +368,37 @@ mod tests {
         // Verify bookkeeping was updated
         let regs = reactor.registrations.lock();
         let info = regs.get(&token).unwrap();
-        assert_eq!(info.interest, Interest::WRITABLE);
+        crate::assert_with_log!(
+            info.interest == Interest::WRITABLE,
+            "interest updated",
+            Interest::WRITABLE,
+            info.interest
+        );
         drop(regs);
 
         reactor.deregister(token).expect("deregister failed");
+        crate::test_complete!("modify_interest");
     }
 
     #[test]
     fn modify_not_found() {
+        init_test("modify_not_found");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let result = reactor.modify(Token::new(999), Interest::READABLE);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+        crate::assert_with_log!(result.is_err(), "modify fails", true, result.is_err());
+        let kind = result.unwrap_err().kind();
+        crate::assert_with_log!(
+            kind == io::ErrorKind::NotFound,
+            "not found kind",
+            io::ErrorKind::NotFound,
+            kind
+        );
+        crate::test_complete!("modify_not_found");
     }
 
     #[test]
     fn wake_unblocks_poll() {
+        init_test("wake_unblocks_poll");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let mut events = Events::with_capacity(64);
 
@@ -353,12 +417,20 @@ mod tests {
                 .expect("poll failed");
 
             // Should return quickly, not wait 5 seconds
-            assert!(start.elapsed() < Duration::from_secs(1));
+            let elapsed = start.elapsed();
+            crate::assert_with_log!(
+                elapsed < Duration::from_secs(1),
+                "poll woke early",
+                true,
+                elapsed < Duration::from_secs(1)
+            );
         });
+        crate::test_complete!("wake_unblocks_poll");
     }
 
     #[test]
     fn poll_timeout() {
+        init_test("poll_timeout");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let mut events = Events::with_capacity(64);
 
@@ -369,13 +441,25 @@ mod tests {
 
         // Should return after ~50ms with no events
         let elapsed = start.elapsed();
-        assert!(elapsed >= Duration::from_millis(40)); // Allow some tolerance
-        assert!(elapsed < Duration::from_millis(200));
-        assert_eq!(count, 0);
+        crate::assert_with_log!(
+            elapsed >= Duration::from_millis(40),
+            "elapsed lower bound",
+            true,
+            elapsed >= Duration::from_millis(40)
+        );
+        crate::assert_with_log!(
+            elapsed < Duration::from_millis(200),
+            "elapsed upper bound",
+            true,
+            elapsed < Duration::from_millis(200)
+        );
+        crate::assert_with_log!(count == 0, "no events", 0usize, count);
+        crate::test_complete!("poll_timeout");
     }
 
     #[test]
     fn poll_non_blocking() {
+        init_test("poll_non_blocking");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let mut events = Events::with_capacity(64);
 
@@ -385,12 +469,20 @@ mod tests {
             .expect("poll failed");
 
         // Should return immediately
-        assert!(start.elapsed() < Duration::from_millis(10));
-        assert_eq!(count, 0);
+        let elapsed = start.elapsed();
+        crate::assert_with_log!(
+            elapsed < Duration::from_millis(10),
+            "poll returns quickly",
+            true,
+            elapsed < Duration::from_millis(10)
+        );
+        crate::assert_with_log!(count == 0, "no events", 0usize, count);
+        crate::test_complete!("poll_non_blocking");
     }
 
     #[test]
     fn poll_writable() {
+        init_test("poll_writable");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let (sock1, _sock2) = UnixStream::pair().expect("failed to create unix stream pair");
 
@@ -405,7 +497,7 @@ mod tests {
             .expect("poll failed");
 
         // Socket should be immediately writable
-        assert!(count >= 1);
+        crate::assert_with_log!(count >= 1, "has events", true, count >= 1);
 
         let mut found = false;
         for event in events.iter() {
@@ -414,13 +506,20 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "expected writable event for token");
+        crate::assert_with_log!(
+            found,
+            "expected writable event for token",
+            true,
+            found
+        );
 
         reactor.deregister(token).expect("deregister failed");
+        crate::test_complete!("poll_writable");
     }
 
     #[test]
     fn poll_readable() {
+        init_test("poll_readable");
         use std::io::Write;
 
         let reactor = EpollReactor::new().expect("failed to create reactor");
@@ -440,7 +539,7 @@ mod tests {
             .expect("poll failed");
 
         // Socket should be readable now
-        assert!(count >= 1);
+        crate::assert_with_log!(count >= 1, "has events", true, count >= 1);
 
         let mut found = false;
         for event in events.iter() {
@@ -449,13 +548,20 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "expected readable event for token");
+        crate::assert_with_log!(
+            found,
+            "expected readable event for token",
+            true,
+            found
+        );
 
         reactor.deregister(token).expect("deregister failed");
+        crate::test_complete!("poll_readable");
     }
 
     #[test]
     fn duplicate_register_fails() {
+        init_test("duplicate_register_fails");
         let reactor = EpollReactor::new().expect("failed to create reactor");
         let (sock1, _sock2) = UnixStream::pair().expect("failed to create unix stream pair");
 
@@ -466,14 +572,22 @@ mod tests {
 
         // Second registration with same token should fail
         let result = reactor.register(&sock1, token, Interest::WRITABLE);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        crate::assert_with_log!(result.is_err(), "duplicate fails", true, result.is_err());
+        let kind = result.unwrap_err().kind();
+        crate::assert_with_log!(
+            kind == io::ErrorKind::AlreadyExists,
+            "already exists kind",
+            io::ErrorKind::AlreadyExists,
+            kind
+        );
 
         reactor.deregister(token).expect("deregister failed");
+        crate::test_complete!("duplicate_register_fails");
     }
 
     #[test]
     fn multiple_registrations() {
+        init_test("multiple_registrations");
         let reactor = EpollReactor::new().expect("failed to create reactor");
 
         let (sock1, _) = UnixStream::pair().expect("failed to create unix stream pair");
@@ -490,12 +604,14 @@ mod tests {
             .register(&sock3, Token::new(3), Interest::both())
             .expect("register 3 failed");
 
-        assert_eq!(reactor.registration_count(), 3);
+        let count = reactor.registration_count();
+        crate::assert_with_log!(count == 3, "registration count", 3usize, count);
 
         reactor
             .deregister(Token::new(2))
             .expect("deregister failed");
-        assert_eq!(reactor.registration_count(), 2);
+        let count = reactor.registration_count();
+        crate::assert_with_log!(count == 2, "after deregister", 2usize, count);
 
         reactor
             .deregister(Token::new(1))
@@ -503,55 +619,103 @@ mod tests {
         reactor
             .deregister(Token::new(3))
             .expect("deregister failed");
-        assert_eq!(reactor.registration_count(), 0);
+        let count = reactor.registration_count();
+        crate::assert_with_log!(count == 0, "after deregister all", 0usize, count);
+        crate::test_complete!("multiple_registrations");
     }
 
     #[test]
     fn interest_to_poll_event_mapping() {
+        init_test("interest_to_poll_event_mapping");
         // Test readable
         let event = EpollReactor::interest_to_poll_event(Token::new(1), Interest::READABLE);
-        assert!(event.readable);
-        assert!(!event.writable);
+        crate::assert_with_log!(event.readable, "readable set", true, event.readable);
+        crate::assert_with_log!(!event.writable, "writable unset", false, event.writable);
 
         // Test writable
         let event = EpollReactor::interest_to_poll_event(Token::new(2), Interest::WRITABLE);
-        assert!(!event.readable);
-        assert!(event.writable);
+        crate::assert_with_log!(!event.readable, "readable unset", false, event.readable);
+        crate::assert_with_log!(event.writable, "writable set", true, event.writable);
 
         // Test both
         let event = EpollReactor::interest_to_poll_event(Token::new(3), Interest::both());
-        assert!(event.readable);
-        assert!(event.writable);
+        crate::assert_with_log!(event.readable, "readable set", true, event.readable);
+        crate::assert_with_log!(event.writable, "writable set", true, event.writable);
 
         // Test none
         let event = EpollReactor::interest_to_poll_event(Token::new(4), Interest::NONE);
-        assert!(!event.readable);
-        assert!(!event.writable);
+        crate::assert_with_log!(!event.readable, "readable unset", false, event.readable);
+        crate::assert_with_log!(!event.writable, "writable unset", false, event.writable);
+        crate::test_complete!("interest_to_poll_event_mapping");
     }
 
     #[test]
     fn poll_event_to_interest_mapping() {
+        init_test("poll_event_to_interest_mapping");
         let event = PollEvent::all(1);
         let interest = EpollReactor::poll_event_to_interest(&event);
-        assert!(interest.is_readable());
-        assert!(interest.is_writable());
+        crate::assert_with_log!(
+            interest.is_readable(),
+            "all readable",
+            true,
+            interest.is_readable()
+        );
+        crate::assert_with_log!(
+            interest.is_writable(),
+            "all writable",
+            true,
+            interest.is_writable()
+        );
 
         let event = PollEvent::readable(2);
         let interest = EpollReactor::poll_event_to_interest(&event);
-        assert!(interest.is_readable());
-        assert!(!interest.is_writable());
+        crate::assert_with_log!(
+            interest.is_readable(),
+            "readable set",
+            true,
+            interest.is_readable()
+        );
+        crate::assert_with_log!(
+            !interest.is_writable(),
+            "writable unset",
+            false,
+            interest.is_writable()
+        );
 
         let event = PollEvent::writable(3);
         let interest = EpollReactor::poll_event_to_interest(&event);
-        assert!(!interest.is_readable());
-        assert!(interest.is_writable());
+        crate::assert_with_log!(
+            !interest.is_readable(),
+            "readable unset",
+            false,
+            interest.is_readable()
+        );
+        crate::assert_with_log!(
+            interest.is_writable(),
+            "writable set",
+            true,
+            interest.is_writable()
+        );
+        crate::test_complete!("poll_event_to_interest_mapping");
     }
 
     #[test]
     fn debug_impl() {
+        init_test("debug_impl");
         let reactor = EpollReactor::new().expect("failed to create reactor");
-        let debug = format!("{:?}", reactor);
-        assert!(debug.contains("EpollReactor"));
-        assert!(debug.contains("registration_count"));
+        let debug_text = format!("{:?}", reactor);
+        crate::assert_with_log!(
+            debug_text.contains("EpollReactor"),
+            "debug contains type",
+            true,
+            debug_text.contains("EpollReactor")
+        );
+        crate::assert_with_log!(
+            debug_text.contains("registration_count"),
+            "debug contains registration_count",
+            true,
+            debug_text.contains("registration_count")
+        );
+        crate::test_complete!("debug_impl");
     }
 }

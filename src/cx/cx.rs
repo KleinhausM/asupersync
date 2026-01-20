@@ -52,8 +52,10 @@
 //! - All capabilities flow through the wrapped Cx
 
 use crate::observability::{DiagnosticContext, LogCollector, LogEntry, SpanId};
-use crate::tracing_compat::trace;
+use crate::runtime::io_driver::IoDriverHandle;
+use crate::tracing_compat::{debug, info, trace};
 use crate::types::{Budget, CxInner, RegionId, TaskId};
+use std::cell::RefCell;
 use std::sync::Arc;
 
 /// The capability context for a task.
@@ -113,6 +115,7 @@ use std::sync::Arc;
 pub struct Cx {
     pub(crate) inner: Arc<std::sync::RwLock<CxInner>>,
     observability: Arc<std::sync::RwLock<ObservabilityState>>,
+    io_driver: Option<IoDriverHandle>,
 }
 
 /// Internal observability state shared by `Cx` clones.
@@ -156,12 +159,30 @@ impl Drop for MaskGuard<'_> {
     }
 }
 
+thread_local! {
+    static CURRENT_CX: RefCell<Option<Cx>> = const { RefCell::new(None) };
+}
+
+/// Guard that restores the previous Cx on drop.
+pub(crate) struct CurrentCxGuard {
+    prev: Option<Cx>,
+}
+
+impl Drop for CurrentCxGuard {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        CURRENT_CX.with(|slot| {
+            *slot.borrow_mut() = prev;
+        });
+    }
+}
+
 impl Cx {
     /// Creates a new capability context (internal use).
     #[must_use]
     #[allow(dead_code)]
     pub(crate) fn new(region: RegionId, task: TaskId, budget: Budget) -> Self {
-        Self::new_with_observability(region, task, budget, None)
+        Self::new_with_observability(region, task, budget, None, None)
     }
 
     /// Creates a new capability context from shared state (internal use).
@@ -175,6 +196,7 @@ impl Cx {
             observability: Arc::new(std::sync::RwLock::new(ObservabilityState::new(
                 region, task,
             ))),
+            io_driver: None,
         }
     }
 
@@ -184,12 +206,27 @@ impl Cx {
         task: TaskId,
         budget: Budget,
         observability: Option<ObservabilityState>,
+        io_driver: Option<IoDriverHandle>,
     ) -> Self {
+        let inner = Arc::new(std::sync::RwLock::new(CxInner::new(region, task, budget)));
+        let observability_state = observability.unwrap_or_else(|| ObservabilityState::new(region, task));
+        let observability = Arc::new(std::sync::RwLock::new(observability_state));
+
+        debug!(
+            task_id = ?task,
+            region_id = ?region,
+            budget_deadline = ?budget.deadline,
+            budget_poll_quota = budget.poll_quota,
+            budget_cost_quota = ?budget.cost_quota,
+            budget_priority = budget.priority,
+            budget_source = "cx_new",
+            "budget initialized for context"
+        );
+
         Self {
-            inner: Arc::new(std::sync::RwLock::new(CxInner::new(region, task, budget))),
-            observability: Arc::new(std::sync::RwLock::new(
-                observability.unwrap_or_else(|| ObservabilityState::new(region, task)),
-            )),
+            inner,
+            observability,
+            io_driver,
         }
     }
 
@@ -220,6 +257,31 @@ impl Cx {
             TaskId::new_for_test(0, 0),
             Budget::INFINITE,
         )
+    }
+
+    /// Returns the current task context, if one is set.
+    ///
+    /// This is set by the runtime while polling a task.
+    #[must_use]
+    pub fn current() -> Option<Self> {
+        CURRENT_CX.with(|slot| slot.borrow().clone())
+    }
+
+    /// Sets the current task context for the duration of the guard.
+    pub(crate) fn set_current(cx: Option<Self>) -> CurrentCxGuard {
+        let prev = CURRENT_CX.with(|slot| {
+            let mut guard = slot.borrow_mut();
+            let prev = guard.take();
+            *guard = cx;
+            prev
+        });
+        CurrentCxGuard { prev }
+    }
+
+    /// Returns a cloned handle to the I/O driver, if present.
+    #[must_use]
+    pub(crate) fn io_driver_handle(&self) -> Option<IoDriverHandle> {
+        self.io_driver.clone()
     }
 
     /// Returns the current region ID.
@@ -343,7 +405,15 @@ impl Cx {
     /// ```
     #[allow(clippy::result_large_err)]
     pub fn checkpoint(&self) -> Result<(), crate::error::Error> {
-        let (cancel_requested, mask_depth, _task, _region, _budget, _cancel_reason) = {
+        let (
+            cancel_requested,
+            mask_depth,
+            task,
+            region,
+            budget,
+            budget_baseline,
+            cancel_reason,
+        ) = {
             let inner = self.inner.read().expect("lock poisoned");
             (
                 inner.cancel_requested,
@@ -351,31 +421,88 @@ impl Cx {
                 inner.task,
                 inner.region,
                 inner.budget,
+                inner.budget_baseline,
                 inner.cancel_reason.clone(),
             )
         };
 
+        let polls_used = if budget_baseline.poll_quota == u32::MAX {
+            None
+        } else {
+            Some(budget_baseline.poll_quota.saturating_sub(budget.poll_quota))
+        };
+        let cost_used = match (budget_baseline.cost_quota, budget.cost_quota) {
+            (Some(baseline), Some(remaining)) => Some(baseline.saturating_sub(remaining)),
+            _ => None,
+        };
+        // Best-effort until a clock is threaded through Cx.
+        let time_remaining = budget.deadline;
+
+        let _ = (
+            &task,
+            &region,
+            &budget,
+            &budget_baseline,
+            &cancel_reason,
+            &polls_used,
+            &cost_used,
+            &time_remaining,
+        );
+
+        // Trace every checkpoint call at TRACE level for high-frequency observability
+        trace!(
+            task_id = ?task,
+            region_id = ?region,
+            polls_used = ?polls_used,
+            polls_remaining = budget.poll_quota,
+            time_remaining = ?time_remaining,
+            time_remaining_source = "deadline",
+            cost_used = ?cost_used,
+            cost_remaining = ?budget.cost_quota,
+            deadline = ?budget.deadline,
+            cancel_requested,
+            mask_depth,
+            "checkpoint"
+        );
+
         if cancel_requested {
             if mask_depth == 0 {
+                // Determine which resource triggered cancellation for INFO logging
+                let cancel_reason_ref = cancel_reason.as_ref();
+                let exhausted_resource = cancel_reason_ref
+                    .map_or_else(|| "unknown".to_string(), |r| format!("{:?}", r.kind));
+                let _ = &exhausted_resource;
+
+                info!(
+                    task_id = ?task,
+                    region_id = ?region,
+                    exhausted_resource = %exhausted_resource,
+                    cancel_reason = ?cancel_reason,
+                    budget_deadline = ?budget.deadline,
+                    budget_poll_quota = budget.poll_quota,
+                    budget_cost_quota = ?budget.cost_quota,
+                    "cancel observed at checkpoint - task cancelled"
+                );
+
                 trace!(
-                    task_id = ?_task,
-                    region_id = ?_region,
-                    cancel_reason = ?_cancel_reason,
-                    cancel_kind = ?_cancel_reason.as_ref().map(|r| r.kind),
+                    task_id = ?task,
+                    region_id = ?region,
+                    cancel_reason = ?cancel_reason,
+                    cancel_kind = ?cancel_reason.as_ref().map(|r| r.kind),
                     mask_depth,
-                    budget_deadline = ?_budget.deadline,
-                    budget_poll_quota = _budget.poll_quota,
-                    budget_cost_quota = ?_budget.cost_quota,
-                    budget_priority = _budget.priority,
+                    budget_deadline = ?budget.deadline,
+                    budget_poll_quota = budget.poll_quota,
+                    budget_cost_quota = ?budget.cost_quota,
+                    budget_priority = budget.priority,
                     "cancel observed at checkpoint"
                 );
                 Err(crate::error::Error::new(crate::error::ErrorKind::Cancelled))
             } else {
                 trace!(
-                    task_id = ?_task,
-                    region_id = ?_region,
-                    cancel_reason = ?_cancel_reason,
-                    cancel_kind = ?_cancel_reason.as_ref().map(|r| r.kind),
+                    task_id = ?task,
+                    region_id = ?region,
+                    cancel_reason = ?cancel_reason,
+                    cancel_kind = ?cancel_reason.as_ref().map(|r| r.kind),
                     mask_depth,
                     "cancel observed but masked"
                 );
@@ -574,7 +701,18 @@ impl Cx {
     /// quiescence guarantees.
     #[must_use]
     pub fn scope(&self) -> crate::cx::Scope<'static> {
-        crate::cx::Scope::new(self.region_id(), self.budget())
+        let budget = self.budget();
+        debug!(
+            task_id = ?self.task_id(),
+            region_id = ?self.region_id(),
+            budget_deadline = ?budget.deadline,
+            budget_poll_quota = budget.poll_quota,
+            budget_cost_quota = ?budget.cost_quota,
+            budget_priority = budget.priority,
+            budget_source = "inherited",
+            "scope budget inherited"
+        );
+        crate::cx::Scope::new(self.region_id(), budget)
     }
 
     /// Creates a [`Scope`] bound to this context's region with a custom budget.
@@ -587,6 +725,44 @@ impl Cx {
     /// ```
     #[must_use]
     pub fn scope_with_budget(&self, budget: Budget) -> crate::cx::Scope<'static> {
+        let parent_budget = self.budget();
+        let deadline_tightened = match (parent_budget.deadline, budget.deadline) {
+            (Some(parent), Some(child)) => child < parent,
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        let poll_tightened = budget.poll_quota < parent_budget.poll_quota;
+        let cost_tightened = match (parent_budget.cost_quota, budget.cost_quota) {
+            (Some(parent), Some(child)) => child < parent,
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        let priority_boosted = budget.priority > parent_budget.priority;
+        let _ = (
+            &deadline_tightened,
+            &poll_tightened,
+            &cost_tightened,
+            &priority_boosted,
+        );
+
+        debug!(
+            task_id = ?self.task_id(),
+            region_id = ?self.region_id(),
+            parent_deadline = ?parent_budget.deadline,
+            parent_poll_quota = parent_budget.poll_quota,
+            parent_cost_quota = ?parent_budget.cost_quota,
+            parent_priority = parent_budget.priority,
+            budget_deadline = ?budget.deadline,
+            budget_poll_quota = budget.poll_quota,
+            budget_cost_quota = ?budget.cost_quota,
+            budget_priority = budget.priority,
+            deadline_tightened,
+            poll_tightened,
+            cost_tightened,
+            priority_boosted,
+            budget_source = "explicit",
+            "scope budget set"
+        );
         crate::cx::Scope::new(self.region_id(), budget)
     }
 }

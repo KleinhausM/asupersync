@@ -41,7 +41,7 @@
 use crate::runtime::reactor::{Events, Interest, Reactor, Source, Token};
 use slab::Slab;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 use std::task::Waker;
 use std::time::Duration;
 
@@ -192,6 +192,13 @@ impl IoDriver {
         }
     }
 
+    /// Modifies the interest set for an existing registration.
+    ///
+    /// This forwards to the underlying reactor and does not touch waker state.
+    pub fn modify_interest(&mut self, token: Token, interest: Interest) -> io::Result<()> {
+        self.reactor.modify(token, interest)
+    }
+
     /// Deregisters an I/O source.
     ///
     /// Removes the source from the reactor and frees the waker slot.
@@ -297,6 +304,167 @@ impl IoDriver {
     }
 }
 
+/// Shared handle to an [`IoDriver`].
+///
+/// This wrapper provides interior mutability for registering and updating
+/// wakers from async I/O types while keeping the driver single-threaded.
+#[derive(Debug, Clone)]
+pub struct IoDriverHandle {
+    inner: Arc<Mutex<IoDriver>>,
+}
+
+impl IoDriverHandle {
+    /// Creates a new handle with the default events buffer capacity.
+    #[must_use]
+    pub fn new(reactor: Arc<dyn Reactor>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(IoDriver::new(reactor))),
+        }
+    }
+
+    /// Creates a new handle with a custom events buffer capacity.
+    #[must_use]
+    pub fn with_capacity(reactor: Arc<dyn Reactor>, events_capacity: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(IoDriver::with_capacity(reactor, events_capacity))),
+        }
+    }
+
+    /// Registers a source with the reactor and associates the waker.
+    pub fn register(
+        &self,
+        source: &dyn Source,
+        interest: Interest,
+        waker: Waker,
+    ) -> io::Result<IoRegistration> {
+        let mut driver = self.inner.lock().expect("lock poisoned");
+        let token = driver.register(source, interest, waker)?;
+        Ok(IoRegistration::new(
+            token,
+            Arc::downgrade(&self.inner),
+            interest,
+        ))
+    }
+
+    /// Updates the waker for an existing registration.
+    pub fn update_waker(&self, token: Token, waker: Waker) -> bool {
+        let mut driver = self.inner.lock().expect("lock poisoned");
+        driver.update_waker(token, waker)
+    }
+
+    /// Returns true if the driver has no registered wakers.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        let driver = self.inner.lock().expect("lock poisoned");
+        driver.is_empty()
+    }
+
+    /// Returns the number of registered wakers.
+    #[must_use]
+    pub fn waker_count(&self) -> usize {
+        let driver = self.inner.lock().expect("lock poisoned");
+        driver.waker_count()
+    }
+
+    /// Returns a snapshot of the current I/O stats.
+    #[must_use]
+    pub fn stats(&self) -> IoStats {
+        let driver = self.inner.lock().expect("lock poisoned");
+        driver.stats().clone()
+    }
+
+    /// Returns a lock guard for direct access to the driver.
+    pub fn lock(&self) -> std::sync::MutexGuard<'_, IoDriver> {
+        self.inner.lock().expect("lock poisoned")
+    }
+}
+
+/// RAII handle for a registered I/O source.
+///
+/// Dropping this handle will automatically deregister the source and
+/// remove its waker from the driver.
+#[derive(Debug)]
+pub struct IoRegistration {
+    token: Token,
+    interest: Interest,
+    driver: Weak<Mutex<IoDriver>>,
+}
+
+impl IoRegistration {
+    fn new(token: Token, driver: Weak<Mutex<IoDriver>>, interest: Interest) -> Self {
+        Self {
+            token,
+            interest,
+            driver,
+        }
+    }
+
+    /// Returns the registration token.
+    #[must_use]
+    pub fn token(&self) -> Token {
+        self.token
+    }
+
+    /// Returns the current interest set.
+    #[must_use]
+    pub fn interest(&self) -> Interest {
+        self.interest
+    }
+
+    /// Returns true if the driver is still alive.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.driver.strong_count() > 0
+    }
+
+    /// Updates the interest set for this registration.
+    pub fn set_interest(&mut self, interest: Interest) -> io::Result<()> {
+        if let Some(driver) = self.driver.upgrade() {
+            let mut guard = driver.lock().expect("lock poisoned");
+            guard.modify_interest(self.token, interest)?;
+            self.interest = interest;
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "I/O driver has been dropped",
+            ))
+        }
+    }
+
+    /// Updates the waker for this registration.
+    pub fn update_waker(&self, waker: Waker) -> bool {
+        if let Some(driver) = self.driver.upgrade() {
+            let mut guard = driver.lock().expect("lock poisoned");
+            guard.update_waker(self.token, waker)
+        } else {
+            false
+        }
+    }
+
+    /// Explicitly deregisters without waiting for drop.
+    pub fn deregister(self) -> io::Result<()> {
+        if let Some(driver) = self.driver.upgrade() {
+            let mut guard = driver.lock().expect("lock poisoned");
+            let result = guard.deregister(self.token);
+            std::mem::forget(self);
+            result
+        } else {
+            std::mem::forget(self);
+            Ok(())
+        }
+    }
+}
+
+impl Drop for IoRegistration {
+    fn drop(&mut self) {
+        if let Some(driver) = self.driver.upgrade() {
+            let mut guard = driver.lock().expect("lock poisoned");
+            let _ = guard.deregister(self.token);
+        }
+    }
+}
+
 impl std::fmt::Debug for IoDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IoDriver")
@@ -311,6 +479,7 @@ impl std::fmt::Debug for IoDriver {
 mod tests {
     use super::*;
     use crate::runtime::reactor::{Event, Interest, LabReactor, Token};
+    use crate::test_utils::init_test_logging;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::task::Wake;
@@ -350,26 +519,56 @@ mod tests {
         }
     }
 
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn io_driver_new() {
+        init_test("io_driver_new");
         let reactor = Arc::new(LabReactor::new());
         let driver = IoDriver::new(reactor);
 
-        assert!(driver.is_empty());
-        assert_eq!(driver.waker_count(), 0);
-        assert_eq!(driver.stats().polls, 0);
+        crate::assert_with_log!(
+            driver.is_empty(),
+            "driver empty",
+            true,
+            driver.is_empty()
+        );
+        crate::assert_with_log!(
+            driver.waker_count() == 0,
+            "waker count",
+            0usize,
+            driver.waker_count()
+        );
+        crate::assert_with_log!(
+            driver.stats().polls == 0,
+            "polls",
+            0usize,
+            driver.stats().polls
+        );
+        crate::test_complete!("io_driver_new");
     }
 
     #[test]
     fn io_driver_with_capacity() {
+        init_test("io_driver_with_capacity");
         let reactor = Arc::new(LabReactor::new());
         let driver = IoDriver::with_capacity(reactor, 256);
 
-        assert_eq!(driver.events.capacity(), 256);
+        crate::assert_with_log!(
+            driver.events.capacity() == 256,
+            "events capacity",
+            256usize,
+            driver.events.capacity()
+        );
+        crate::test_complete!("io_driver_with_capacity");
     }
 
     #[test]
     fn io_driver_register_full_flow() {
+        init_test("io_driver_register_full_flow");
         let reactor = Arc::new(LabReactor::new());
         let mut driver = IoDriver::new(reactor);
         let source = MockSource;
@@ -379,16 +578,33 @@ mod tests {
             .register(&source, Interest::READABLE, waker)
             .expect("register should succeed");
 
-        assert_eq!(driver.waker_count(), 1);
-        assert!(!driver.is_empty());
-        assert_eq!(driver.stats().registrations, 1);
+        crate::assert_with_log!(
+            driver.waker_count() == 1,
+            "waker count",
+            1usize,
+            driver.waker_count()
+        );
+        crate::assert_with_log!(
+            !driver.is_empty(),
+            "driver not empty",
+            false,
+            driver.is_empty()
+        );
+        crate::assert_with_log!(
+            driver.stats().registrations == 1,
+            "registrations",
+            1usize,
+            driver.stats().registrations
+        );
 
         // Token should be 0 (first slab entry)
-        assert_eq!(token.0, 0);
+        crate::assert_with_log!(token.0 == 0, "token id", 0usize, token.0);
+        crate::test_complete!("io_driver_register_full_flow");
     }
 
     #[test]
     fn io_driver_deregister() {
+        init_test("io_driver_deregister");
         let reactor = Arc::new(LabReactor::new());
         let mut driver = IoDriver::new(reactor);
         let source = MockSource;
@@ -398,17 +614,39 @@ mod tests {
             .register(&source, Interest::READABLE, waker)
             .expect("register should succeed");
 
-        assert_eq!(driver.waker_count(), 1);
+        crate::assert_with_log!(
+            driver.waker_count() == 1,
+            "waker count",
+            1usize,
+            driver.waker_count()
+        );
 
         driver.deregister(token).expect("deregister should succeed");
 
-        assert_eq!(driver.waker_count(), 0);
-        assert!(driver.is_empty());
-        assert_eq!(driver.stats().deregistrations, 1);
+        crate::assert_with_log!(
+            driver.waker_count() == 0,
+            "waker count",
+            0usize,
+            driver.waker_count()
+        );
+        crate::assert_with_log!(
+            driver.is_empty(),
+            "driver empty",
+            true,
+            driver.is_empty()
+        );
+        crate::assert_with_log!(
+            driver.stats().deregistrations == 1,
+            "deregistrations",
+            1usize,
+            driver.stats().deregistrations
+        );
+        crate::test_complete!("io_driver_deregister");
     }
 
     #[test]
     fn io_driver_update_waker() {
+        init_test("io_driver_update_waker");
         let reactor = Arc::new(LabReactor::new());
         let mut driver = IoDriver::new(reactor);
 
@@ -419,14 +657,23 @@ mod tests {
         let token = Token::new(key);
 
         // Update should succeed for existing token
-        assert!(driver.update_waker(token, waker2.clone()));
+        let updated = driver.update_waker(token, waker2.clone());
+        crate::assert_with_log!(updated, "update succeeds", true, updated);
 
         // Update should fail for non-existent token
-        assert!(!driver.update_waker(Token::new(999), waker2));
+        let updated_missing = driver.update_waker(Token::new(999), waker2);
+        crate::assert_with_log!(
+            !updated_missing,
+            "update missing fails",
+            false,
+            updated_missing
+        );
+        crate::test_complete!("io_driver_update_waker");
     }
 
     #[test]
     fn io_driver_turn_dispatches_wakers() {
+        init_test("io_driver_turn_dispatches_wakers");
         let reactor = Arc::new(LabReactor::new());
         let source = MockSource;
 
@@ -445,26 +692,51 @@ mod tests {
         reactor.inject_event(token, Event::readable(token), Duration::ZERO);
 
         // Waker should not be woken yet
-        assert!(!waker_state.flag.load(Ordering::SeqCst));
+        let initial = waker_state.flag.load(Ordering::SeqCst);
+        crate::assert_with_log!(!initial, "waker not yet woken", false, initial);
 
         // Turn should dispatch the waker
         let count = driver
             .turn(Some(Duration::from_millis(10)))
             .expect("turn should succeed");
 
-        assert_eq!(count, 1);
-        assert!(waker_state.flag.load(Ordering::SeqCst));
-        assert_eq!(waker_state.count.load(Ordering::SeqCst), 1);
+        crate::assert_with_log!(count == 1, "event count", 1usize, count);
+        let flag = waker_state.flag.load(Ordering::SeqCst);
+        crate::assert_with_log!(flag, "waker fired", true, flag);
+        let wake_count = waker_state.count.load(Ordering::SeqCst);
+        crate::assert_with_log!(wake_count == 1, "wake count", 1usize, wake_count);
 
         // Check stats
-        assert_eq!(driver.stats().polls, 1);
-        assert_eq!(driver.stats().events_received, 1);
-        assert_eq!(driver.stats().wakers_dispatched, 1);
-        assert_eq!(driver.stats().unknown_tokens, 0);
+        crate::assert_with_log!(
+            driver.stats().polls == 1,
+            "polls",
+            1usize,
+            driver.stats().polls
+        );
+        crate::assert_with_log!(
+            driver.stats().events_received == 1,
+            "events received",
+            1usize,
+            driver.stats().events_received
+        );
+        crate::assert_with_log!(
+            driver.stats().wakers_dispatched == 1,
+            "wakers dispatched",
+            1usize,
+            driver.stats().wakers_dispatched
+        );
+        crate::assert_with_log!(
+            driver.stats().unknown_tokens == 0,
+            "unknown tokens",
+            0usize,
+            driver.stats().unknown_tokens
+        );
+        crate::test_complete!("io_driver_turn_dispatches_wakers");
     }
 
     #[test]
     fn io_driver_turn_handles_unknown_tokens() {
+        init_test("io_driver_turn_handles_unknown_tokens");
         let reactor = Arc::new(LabReactor::new());
         let source = MockSource;
 
@@ -484,14 +756,31 @@ mod tests {
             .turn(Some(Duration::from_millis(10)))
             .expect("turn should succeed");
 
-        assert_eq!(count, 1);
-        assert_eq!(driver.stats().events_received, 1);
-        assert_eq!(driver.stats().wakers_dispatched, 0);
-        assert_eq!(driver.stats().unknown_tokens, 1);
+        crate::assert_with_log!(count == 1, "event count", 1usize, count);
+        crate::assert_with_log!(
+            driver.stats().events_received == 1,
+            "events received",
+            1usize,
+            driver.stats().events_received
+        );
+        crate::assert_with_log!(
+            driver.stats().wakers_dispatched == 0,
+            "wakers dispatched",
+            0usize,
+            driver.stats().wakers_dispatched
+        );
+        crate::assert_with_log!(
+            driver.stats().unknown_tokens == 1,
+            "unknown tokens",
+            1usize,
+            driver.stats().unknown_tokens
+        );
+        crate::test_complete!("io_driver_turn_handles_unknown_tokens");
     }
 
     #[test]
     fn io_driver_wake() {
+        init_test("io_driver_wake");
         let reactor = Arc::new(LabReactor::new());
         let driver = IoDriver::new(reactor.clone());
 
@@ -499,11 +788,14 @@ mod tests {
         driver.wake().expect("wake should succeed");
 
         // Verify the reactor was woken
-        assert!(reactor.check_and_clear_wake());
+        let woke = reactor.check_and_clear_wake();
+        crate::assert_with_log!(woke, "reactor woke", true, woke);
+        crate::test_complete!("io_driver_wake");
     }
 
     #[test]
     fn io_driver_multiple_wakers() {
+        init_test("io_driver_multiple_wakers");
         let reactor = Arc::new(LabReactor::new());
         let source = MockSource;
         let mut driver = IoDriver::new(reactor.clone());
@@ -517,7 +809,12 @@ mod tests {
         let key2 = driver.register_waker(waker2);
         let key3 = driver.register_waker(waker3);
 
-        assert_eq!(driver.waker_count(), 3);
+        crate::assert_with_log!(
+            driver.waker_count() == 3,
+            "waker count",
+            3usize,
+            driver.waker_count()
+        );
 
         // Register sources with reactor
         let token1 = Token::new(key1);
@@ -543,33 +840,81 @@ mod tests {
             .turn(Some(Duration::from_millis(10)))
             .expect("turn should succeed");
 
-        assert_eq!(count, 2);
-        assert!(state1.flag.load(Ordering::SeqCst));
-        assert!(!state2.flag.load(Ordering::SeqCst)); // Not woken
-        assert!(state3.flag.load(Ordering::SeqCst));
+        crate::assert_with_log!(count == 2, "event count", 2usize, count);
+        let flag1 = state1.flag.load(Ordering::SeqCst);
+        let flag2 = state2.flag.load(Ordering::SeqCst);
+        let flag3 = state3.flag.load(Ordering::SeqCst);
+        crate::assert_with_log!(flag1, "waker1 fired", true, flag1);
+        crate::assert_with_log!(!flag2, "waker2 not fired", false, flag2);
+        crate::assert_with_log!(flag3, "waker3 fired", true, flag3);
 
-        assert_eq!(driver.stats().wakers_dispatched, 2);
+        crate::assert_with_log!(
+            driver.stats().wakers_dispatched == 2,
+            "wakers dispatched",
+            2usize,
+            driver.stats().wakers_dispatched
+        );
+        crate::test_complete!("io_driver_multiple_wakers");
     }
 
     #[test]
     fn io_driver_debug() {
+        init_test("io_driver_debug");
         let reactor = Arc::new(LabReactor::new());
         let driver = IoDriver::new(reactor);
 
-        let debug = format!("{:?}", driver);
-        assert!(debug.contains("IoDriver"));
-        assert!(debug.contains("waker_count"));
+        let debug_text = format!("{:?}", driver);
+        crate::assert_with_log!(
+            debug_text.contains("IoDriver"),
+            "debug contains type",
+            true,
+            debug_text.contains("IoDriver")
+        );
+        crate::assert_with_log!(
+            debug_text.contains("waker_count"),
+            "debug contains waker_count",
+            true,
+            debug_text.contains("waker_count")
+        );
+        crate::test_complete!("io_driver_debug");
     }
 
     #[test]
     fn io_stats_default() {
+        init_test("io_stats_default");
         let stats = IoStats::default();
-        assert_eq!(stats.polls, 0);
-        assert_eq!(stats.events_received, 0);
-        assert_eq!(stats.wakers_dispatched, 0);
-        assert_eq!(stats.unknown_tokens, 0);
-        assert_eq!(stats.registrations, 0);
-        assert_eq!(stats.deregistrations, 0);
+        crate::assert_with_log!(stats.polls == 0, "polls", 0usize, stats.polls);
+        crate::assert_with_log!(
+            stats.events_received == 0,
+            "events received",
+            0usize,
+            stats.events_received
+        );
+        crate::assert_with_log!(
+            stats.wakers_dispatched == 0,
+            "wakers dispatched",
+            0usize,
+            stats.wakers_dispatched
+        );
+        crate::assert_with_log!(
+            stats.unknown_tokens == 0,
+            "unknown tokens",
+            0usize,
+            stats.unknown_tokens
+        );
+        crate::assert_with_log!(
+            stats.registrations == 0,
+            "registrations",
+            0usize,
+            stats.registrations
+        );
+        crate::assert_with_log!(
+            stats.deregistrations == 0,
+            "deregistrations",
+            0usize,
+            stats.deregistrations
+        );
+        crate::test_complete!("io_stats_default");
     }
 
     /// Integration test verifying IoDriver works with EpollReactor for real I/O.
@@ -582,6 +927,7 @@ mod tests {
 
         #[test]
         fn io_driver_with_epoll_reactor_dispatches_waker() {
+            super::init_test("io_driver_with_epoll_reactor_dispatches_waker");
             let reactor = Arc::new(EpollReactor::new().expect("create reactor"));
             let mut driver = IoDriver::new(reactor.clone());
 
@@ -595,7 +941,13 @@ mod tests {
                 .expect("register should succeed");
 
             // Waker should not be woken yet
-            assert!(!waker_state.flag.load(Ordering::SeqCst));
+            let initial = waker_state.flag.load(Ordering::SeqCst);
+            crate::assert_with_log!(
+                !initial,
+                "waker not yet woken",
+                false,
+                initial
+            );
 
             // Write data to make sock_read readable
             sock_write.write_all(b"hello").expect("write failed");
@@ -606,16 +958,20 @@ mod tests {
                 .expect("turn should succeed");
 
             // Should have received the readable event and woken the waker
-            assert!(count >= 1);
-            assert!(waker_state.flag.load(Ordering::SeqCst));
-            assert_eq!(waker_state.count.load(Ordering::SeqCst), 1);
+            crate::assert_with_log!(count >= 1, "event count", true, count >= 1);
+            let flag = waker_state.flag.load(Ordering::SeqCst);
+            crate::assert_with_log!(flag, "waker fired", true, flag);
+            let wake_count = waker_state.count.load(Ordering::SeqCst);
+            crate::assert_with_log!(wake_count == 1, "wake count", 1usize, wake_count);
 
             // Cleanup
             driver.deregister(token).expect("deregister should succeed");
+            crate::test_complete!("io_driver_with_epoll_reactor_dispatches_waker");
         }
 
         #[test]
         fn io_driver_with_epoll_reactor_writable() {
+            super::init_test("io_driver_with_epoll_reactor_writable");
             let reactor = Arc::new(EpollReactor::new().expect("create reactor"));
             let mut driver = IoDriver::new(reactor);
 
@@ -633,10 +989,12 @@ mod tests {
                 .turn(Some(Duration::from_millis(100)))
                 .expect("turn should succeed");
 
-            assert!(count >= 1);
-            assert!(waker_state.flag.load(Ordering::SeqCst));
+            crate::assert_with_log!(count >= 1, "event count", true, count >= 1);
+            let flag = waker_state.flag.load(Ordering::SeqCst);
+            crate::assert_with_log!(flag, "waker fired", true, flag);
 
             driver.deregister(token).expect("deregister should succeed");
+            crate::test_complete!("io_driver_with_epoll_reactor_writable");
         }
     }
 }

@@ -108,6 +108,7 @@ impl std::fmt::Debug for StoredTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::task::{Context, Poll, Wake, Waker};
@@ -122,8 +123,14 @@ mod tests {
         Waker::from(Arc::new(NoopWaker))
     }
 
+    fn init_test(test_name: &str) {
+        init_test_logging();
+        crate::test_phase!(test_name);
+    }
+
     #[test]
     fn stored_task_polls_to_completion() {
+        init_test("stored_task_polls_to_completion");
         let completed = Arc::new(AtomicBool::new(false));
         let completed_clone = completed.clone();
 
@@ -136,15 +143,37 @@ mod tests {
         let mut cx = Context::from_waker(&waker);
 
         // Simple async block should complete immediately
+        crate::test_section!("poll");
         let result = task.poll(&mut cx);
-        assert!(matches!(result, Poll::Ready(())));
-        assert!(completed.load(Ordering::SeqCst));
+        let ready = matches!(result, Poll::Ready(()));
+        crate::assert_with_log!(
+            ready,
+            "poll should complete immediately",
+            true,
+            ready
+        );
+        let completed_value = completed.load(Ordering::SeqCst);
+        crate::assert_with_log!(
+            completed_value,
+            "completion flag should be set",
+            true,
+            completed_value
+        );
+        crate::test_complete!("stored_task_polls_to_completion");
     }
 
     #[test]
     fn stored_task_debug() {
+        init_test("stored_task_debug");
         let task = StoredTask::new(async {});
         let debug = format!("{task:?}");
-        assert!(debug.contains("StoredTask"));
+        let contains = debug.contains("StoredTask");
+        crate::assert_with_log!(
+            contains,
+            "debug output should mention StoredTask",
+            true,
+            contains
+        );
+        crate::test_complete!("stored_task_debug");
     }
 }

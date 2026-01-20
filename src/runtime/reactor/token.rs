@@ -361,6 +361,7 @@ impl Default for TokenSlab {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use std::sync::Arc;
     use std::task::Wake;
 
@@ -375,82 +376,156 @@ mod tests {
         Arc::new(NoopWaker).into()
     }
 
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn token_pack_unpack() {
+        init_test("token_pack_unpack");
         let token = SlabToken::new(42, 7);
         let packed = token.to_usize();
         let unpacked = SlabToken::from_usize(packed);
 
-        assert_eq!(token, unpacked);
-        assert_eq!(unpacked.index(), 42);
-        assert_eq!(unpacked.generation(), 7);
+        crate::assert_with_log!(
+            token == unpacked,
+            "token round-trip",
+            token,
+            unpacked
+        );
+        crate::assert_with_log!(
+            unpacked.index() == 42,
+            "index round-trip",
+            42u32,
+            unpacked.index()
+        );
+        crate::assert_with_log!(
+            unpacked.generation() == 7,
+            "generation round-trip",
+            7u32,
+            unpacked.generation()
+        );
+        crate::test_complete!("token_pack_unpack");
     }
 
     #[test]
     fn token_pack_unpack_max_values() {
+        init_test("token_pack_unpack_max_values");
         // Test with maximum values that fit in 32 bits each
         let token = SlabToken::new(u32::MAX - 1, u32::MAX - 1);
         let packed = token.to_usize();
         let unpacked = SlabToken::from_usize(packed);
 
-        assert_eq!(token, unpacked);
+        crate::assert_with_log!(
+            token == unpacked,
+            "max token round-trip",
+            token,
+            unpacked
+        );
+        crate::test_complete!("token_pack_unpack_max_values");
     }
 
     #[test]
     fn slab_insert_and_get() {
+        init_test("slab_insert_and_get");
         let mut slab = TokenSlab::new();
         let waker = test_waker();
 
         let token = slab.insert(waker);
 
-        assert_eq!(slab.len(), 1);
-        assert!(!slab.is_empty());
-        assert!(slab.contains(token));
-        assert!(slab.get(token).is_some());
+        crate::assert_with_log!(slab.len() == 1, "len after insert", 1usize, slab.len());
+        crate::assert_with_log!(
+            !slab.is_empty(),
+            "slab not empty",
+            false,
+            slab.is_empty()
+        );
+        let contains = slab.contains(token);
+        crate::assert_with_log!(contains, "slab contains token", true, contains);
+        let get_some = slab.get(token).is_some();
+        crate::assert_with_log!(get_some, "slab get returns", true, get_some);
+        crate::test_complete!("slab_insert_and_get");
     }
 
     #[test]
     fn slab_remove() {
+        init_test("slab_remove");
         let mut slab = TokenSlab::new();
         let waker = test_waker();
 
         let token = slab.insert(waker);
         let removed = slab.remove(token);
 
-        assert!(removed.is_some());
-        assert_eq!(slab.len(), 0);
-        assert!(slab.is_empty());
-        assert!(!slab.contains(token));
-        assert!(slab.get(token).is_none());
+        crate::assert_with_log!(
+            removed.is_some(),
+            "remove returns some",
+            true,
+            removed.is_some()
+        );
+        crate::assert_with_log!(slab.len() == 0, "len after remove", 0usize, slab.len());
+        crate::assert_with_log!(
+            slab.is_empty(),
+            "slab empty after remove",
+            true,
+            slab.is_empty()
+        );
+        let contains = slab.contains(token);
+        crate::assert_with_log!(!contains, "token removed", false, contains);
+        let get_none = slab.get(token).is_none();
+        crate::assert_with_log!(get_none, "get returns none", true, get_none);
+        crate::test_complete!("slab_remove");
     }
 
     #[test]
     fn slab_generation_prevents_aba() {
+        init_test("slab_generation_prevents_aba");
         let mut slab = TokenSlab::new();
 
         // Insert first waker.
         let token1 = slab.insert(test_waker());
-        assert_eq!(token1.generation(), 0);
+        crate::assert_with_log!(
+            token1.generation() == 0,
+            "initial generation",
+            0u32,
+            token1.generation()
+        );
 
         // Remove it.
         slab.remove(token1);
 
         // Insert second waker (reuses the slot).
         let token2 = slab.insert(test_waker());
-        assert_eq!(token2.index(), token1.index()); // Same slot
-        assert_eq!(token2.generation(), 1); // Different generation
+        crate::assert_with_log!(
+            token2.index() == token1.index(),
+            "slot reused",
+            token1.index(),
+            token2.index()
+        );
+        crate::assert_with_log!(
+            token2.generation() == 1,
+            "generation incremented",
+            1u32,
+            token2.generation()
+        );
 
         // Old token should not work.
-        assert!(!slab.contains(token1));
-        assert!(slab.get(token1).is_none());
+        let contains_old = slab.contains(token1);
+        crate::assert_with_log!(!contains_old, "old token invalid", false, contains_old);
+        let old_get = slab.get(token1).is_none();
+        crate::assert_with_log!(old_get, "old token get none", true, old_get);
 
         // New token should work.
-        assert!(slab.contains(token2));
-        assert!(slab.get(token2).is_some());
+        let contains_new = slab.contains(token2);
+        crate::assert_with_log!(contains_new, "new token valid", true, contains_new);
+        let new_get = slab.get(token2).is_some();
+        crate::assert_with_log!(new_get, "new token get some", true, new_get);
+        crate::test_complete!("slab_generation_prevents_aba");
     }
 
     #[test]
     fn slab_reuses_free_slots() {
+        init_test("slab_reuses_free_slots");
         let mut slab = TokenSlab::new();
 
         // Insert three wakers.
@@ -458,26 +533,42 @@ mod tests {
         let t2 = slab.insert(test_waker());
         let t3 = slab.insert(test_waker());
 
-        assert_eq!(slab.len(), 3);
+        crate::assert_with_log!(slab.len() == 3, "len after inserts", 3usize, slab.len());
 
         // Remove the middle one.
         slab.remove(t2);
-        assert_eq!(slab.len(), 2);
+        crate::assert_with_log!(slab.len() == 2, "len after remove", 2usize, slab.len());
 
         // Insert a new one - should reuse t2's slot.
         let t4 = slab.insert(test_waker());
-        assert_eq!(t4.index(), t2.index());
-        assert_ne!(t4.generation(), t2.generation());
+        crate::assert_with_log!(
+            t4.index() == t2.index(),
+            "reused slot index",
+            t2.index(),
+            t4.index()
+        );
+        crate::assert_with_log!(
+            t4.generation() != t2.generation(),
+            "generation advanced",
+            true,
+            t4.generation() != t2.generation()
+        );
 
         // Old tokens still work.
-        assert!(slab.contains(t1));
-        assert!(slab.contains(t3));
-        assert!(slab.contains(t4));
-        assert!(!slab.contains(t2));
+        let contains_t1 = slab.contains(t1);
+        let contains_t3 = slab.contains(t3);
+        let contains_t4 = slab.contains(t4);
+        let contains_t2 = slab.contains(t2);
+        crate::assert_with_log!(contains_t1, "t1 still valid", true, contains_t1);
+        crate::assert_with_log!(contains_t3, "t3 still valid", true, contains_t3);
+        crate::assert_with_log!(contains_t4, "t4 valid", true, contains_t4);
+        crate::assert_with_log!(!contains_t2, "t2 invalidated", false, contains_t2);
+        crate::test_complete!("slab_reuses_free_slots");
     }
 
     #[test]
     fn slab_multiple_inserts_removes() {
+        init_test("slab_multiple_inserts_removes");
         let mut slab = TokenSlab::new();
         let mut tokens = Vec::new();
 
@@ -485,92 +576,135 @@ mod tests {
         for _ in 0..100 {
             tokens.push(slab.insert(test_waker()));
         }
-        assert_eq!(slab.len(), 100);
+        crate::assert_with_log!(slab.len() == 100, "len after inserts", 100usize, slab.len());
 
         // Remove every other one.
         for i in (0..100).step_by(2) {
             slab.remove(tokens[i]);
         }
-        assert_eq!(slab.len(), 50);
+        crate::assert_with_log!(slab.len() == 50, "len after removes", 50usize, slab.len());
 
         // Insert more.
         for _ in 0..25 {
             tokens.push(slab.insert(test_waker()));
         }
-        assert_eq!(slab.len(), 75);
+        crate::assert_with_log!(slab.len() == 75, "len after reinserts", 75usize, slab.len());
+        crate::test_complete!("slab_multiple_inserts_removes");
     }
 
     #[test]
     fn slab_get_invalid_index() {
+        init_test("slab_get_invalid_index");
         let slab = TokenSlab::new();
         let token = SlabToken::new(999, 0);
 
-        assert!(!slab.contains(token));
-        assert!(slab.get(token).is_none());
+        let contains = slab.contains(token);
+        crate::assert_with_log!(!contains, "invalid token not contained", false, contains);
+        let get_none = slab.get(token).is_none();
+        crate::assert_with_log!(get_none, "invalid token get none", true, get_none);
+        crate::test_complete!("slab_get_invalid_index");
     }
 
     #[test]
     fn slab_remove_invalid_generation() {
+        init_test("slab_remove_invalid_generation");
         let mut slab = TokenSlab::new();
 
         let token = slab.insert(test_waker());
         let stale_token = SlabToken::new(token.index(), token.generation() + 1);
 
         // Remove with wrong generation should fail.
-        assert!(slab.remove(stale_token).is_none());
+        let removed = slab.remove(stale_token).is_none();
+        crate::assert_with_log!(removed, "stale remove fails", true, removed);
         // Original token should still work.
-        assert!(slab.contains(token));
+        let contains = slab.contains(token);
+        crate::assert_with_log!(contains, "original token still valid", true, contains);
+        crate::test_complete!("slab_remove_invalid_generation");
     }
 
     #[test]
     fn slab_double_remove() {
+        init_test("slab_double_remove");
         let mut slab = TokenSlab::new();
 
         let token = slab.insert(test_waker());
         let removed1 = slab.remove(token);
         let removed2 = slab.remove(token);
 
-        assert!(removed1.is_some());
-        assert!(removed2.is_none());
+        crate::assert_with_log!(
+            removed1.is_some(),
+            "first remove succeeds",
+            true,
+            removed1.is_some()
+        );
+        crate::assert_with_log!(
+            removed2.is_none(),
+            "second remove fails",
+            true,
+            removed2.is_none()
+        );
+        crate::test_complete!("slab_double_remove");
     }
 
     #[test]
     fn slab_clear() {
+        init_test("slab_clear");
         let mut slab = TokenSlab::new();
 
         for _ in 0..10 {
             slab.insert(test_waker());
         }
-        assert_eq!(slab.len(), 10);
+        crate::assert_with_log!(slab.len() == 10, "len before clear", 10usize, slab.len());
 
         slab.clear();
-        assert_eq!(slab.len(), 0);
-        assert!(slab.is_empty());
+        crate::assert_with_log!(slab.len() == 0, "len after clear", 0usize, slab.len());
+        crate::assert_with_log!(
+            slab.is_empty(),
+            "slab empty after clear",
+            true,
+            slab.is_empty()
+        );
+        crate::test_complete!("slab_clear");
     }
 
     #[test]
     fn slab_retain() {
+        init_test("slab_retain");
         let mut slab = TokenSlab::new();
 
         let tokens: Vec<_> = (0..10).map(|_| slab.insert(test_waker())).collect();
-        assert_eq!(slab.len(), 10);
+        crate::assert_with_log!(slab.len() == 10, "len before retain", 10usize, slab.len());
 
         // Keep only even indices.
         slab.retain(|token, _| token.index() % 2 == 0);
-        assert_eq!(slab.len(), 5);
+        crate::assert_with_log!(slab.len() == 5, "len after retain", 5usize, slab.len());
 
         // Verify even tokens are retained, odd are removed.
         for (i, token) in tokens.iter().enumerate() {
             if i % 2 == 0 {
-                assert!(slab.contains(*token));
+                let contains = slab.contains(*token);
+                crate::assert_with_log!(
+                    contains,
+                    "even token retained",
+                    true,
+                    contains
+                );
             } else {
-                assert!(!slab.contains(*token));
+                let contains = slab.contains(*token);
+                crate::assert_with_log!(
+                    !contains,
+                    "odd token removed",
+                    false,
+                    contains
+                );
             }
         }
+        crate::test_complete!("slab_retain");
     }
 
     #[test]
     fn slab_iter() {
+        init_test("slab_iter");
         let mut slab = TokenSlab::new();
 
         let tokens: Vec<_> = (0..5).map(|_| slab.insert(test_waker())).collect();
@@ -580,45 +714,91 @@ mod tests {
 
         // Iterate - should see 4 entries.
         let iter_tokens: Vec<_> = slab.iter().map(|(t, _)| t).collect();
-        assert_eq!(iter_tokens.len(), 4);
-        assert!(iter_tokens.contains(&tokens[0]));
-        assert!(iter_tokens.contains(&tokens[1]));
-        assert!(!iter_tokens.contains(&tokens[2]));
-        assert!(iter_tokens.contains(&tokens[3]));
-        assert!(iter_tokens.contains(&tokens[4]));
+        crate::assert_with_log!(
+            iter_tokens.len() == 4,
+            "iter length",
+            4usize,
+            iter_tokens.len()
+        );
+        let contains_0 = iter_tokens.contains(&tokens[0]);
+        let contains_1 = iter_tokens.contains(&tokens[1]);
+        let contains_2 = iter_tokens.contains(&tokens[2]);
+        let contains_3 = iter_tokens.contains(&tokens[3]);
+        let contains_4 = iter_tokens.contains(&tokens[4]);
+        crate::assert_with_log!(contains_0, "iter contains token 0", true, contains_0);
+        crate::assert_with_log!(contains_1, "iter contains token 1", true, contains_1);
+        crate::assert_with_log!(!contains_2, "iter omits removed", false, contains_2);
+        crate::assert_with_log!(contains_3, "iter contains token 3", true, contains_3);
+        crate::assert_with_log!(contains_4, "iter contains token 4", true, contains_4);
+        crate::test_complete!("slab_iter");
     }
 
     #[test]
     fn slab_with_capacity() {
+        init_test("slab_with_capacity");
         let slab = TokenSlab::with_capacity(100);
-        assert!(slab.capacity() >= 100);
-        assert!(slab.is_empty());
+        crate::assert_with_log!(
+            slab.capacity() >= 100,
+            "capacity at least requested",
+            true,
+            slab.capacity() >= 100
+        );
+        crate::assert_with_log!(
+            slab.is_empty(),
+            "slab starts empty",
+            true,
+            slab.is_empty()
+        );
+        crate::test_complete!("slab_with_capacity");
     }
 
     #[test]
     fn token_invalid() {
+        init_test("token_invalid");
         let token = SlabToken::invalid();
-        assert_eq!(token.index(), u32::MAX);
-        assert_eq!(token.generation(), u32::MAX);
+        crate::assert_with_log!(
+            token.index() == u32::MAX,
+            "invalid index",
+            u32::MAX,
+            token.index()
+        );
+        crate::assert_with_log!(
+            token.generation() == u32::MAX,
+            "invalid generation",
+            u32::MAX,
+            token.generation()
+        );
+        crate::test_complete!("token_invalid");
     }
 
     #[test]
     fn slab_get_mut() {
+        init_test("slab_get_mut");
         let mut slab = TokenSlab::new();
 
         let token = slab.insert(test_waker());
 
         // Get mutable reference.
-        assert!(slab.get_mut(token).is_some());
+        let has_mut = slab.get_mut(token).is_some();
+        crate::assert_with_log!(has_mut, "get_mut succeeds", true, has_mut);
 
         // Remove and try again.
         slab.remove(token);
-        assert!(slab.get_mut(token).is_none());
+        let has_mut_after = slab.get_mut(token).is_none();
+        crate::assert_with_log!(has_mut_after, "get_mut after remove", true, has_mut_after);
+        crate::test_complete!("slab_get_mut");
     }
 
     #[test]
     fn token_default() {
+        init_test("token_default");
         let token = SlabToken::default();
-        assert_eq!(token, SlabToken::invalid());
+        crate::assert_with_log!(
+            token == SlabToken::invalid(),
+            "default is invalid",
+            SlabToken::invalid(),
+            token
+        );
+        crate::test_complete!("token_default");
     }
 }

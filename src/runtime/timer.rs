@@ -99,7 +99,13 @@ impl TimerHeap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use crate::util::ArenaIndex;
+
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
 
     fn task(n: u32) -> TaskId {
         TaskId::from_arena(ArenaIndex::new(n, 0))
@@ -107,32 +113,74 @@ mod tests {
 
     #[test]
     fn empty_heap_has_no_deadline() {
+        init_test("empty_heap_has_no_deadline");
         let heap = TimerHeap::new();
-        assert!(heap.is_empty());
-        assert_eq!(heap.peek_deadline(), None);
+        crate::assert_with_log!(
+            heap.is_empty(),
+            "heap starts empty",
+            true,
+            heap.is_empty()
+        );
+        crate::assert_with_log!(
+            heap.peek_deadline() == None::<Time>,
+            "empty heap has no deadline",
+            None::<Time>,
+            heap.peek_deadline()
+        );
+        crate::test_complete!("empty_heap_has_no_deadline");
     }
 
     #[test]
     fn insert_orders_by_deadline() {
+        init_test("insert_orders_by_deadline");
         let mut heap = TimerHeap::new();
         heap.insert(task(1), Time::from_millis(200));
         heap.insert(task(2), Time::from_millis(100));
         heap.insert(task(3), Time::from_millis(150));
 
-        assert_eq!(heap.peek_deadline(), Some(Time::from_millis(100)));
+        crate::assert_with_log!(
+            heap.peek_deadline() == Some(Time::from_millis(100)),
+            "earliest deadline is kept at top",
+            Some(Time::from_millis(100)),
+            heap.peek_deadline()
+        );
+        crate::test_complete!("insert_orders_by_deadline");
     }
 
     #[test]
     fn pop_expired_returns_all_due_tasks() {
+        init_test("pop_expired_returns_all_due_tasks");
         let mut heap = TimerHeap::new();
         heap.insert(task(1), Time::from_millis(100));
         heap.insert(task(2), Time::from_millis(200));
         heap.insert(task(3), Time::from_millis(50));
 
+        crate::test_section!("pop");
         let expired = heap.pop_expired(Time::from_millis(125));
-        assert_eq!(expired.len(), 2);
-        assert!(expired.contains(&task(1)));
-        assert!(expired.contains(&task(3)));
-        assert_eq!(heap.peek_deadline(), Some(Time::from_millis(200)));
+        crate::assert_with_log!(
+            expired.len() == 2,
+            "two tasks expired",
+            2usize,
+            expired.len()
+        );
+        crate::assert_with_log!(
+            expired.contains(&task(1)),
+            "expired contains task 1",
+            true,
+            expired.contains(&task(1))
+        );
+        crate::assert_with_log!(
+            expired.contains(&task(3)),
+            "expired contains task 3",
+            true,
+            expired.contains(&task(3))
+        );
+        crate::assert_with_log!(
+            heap.peek_deadline() == Some(Time::from_millis(200)),
+            "remaining deadline is 200ms",
+            Some(Time::from_millis(200)),
+            heap.peek_deadline()
+        );
+        crate::test_complete!("pop_expired_returns_all_due_tasks");
     }
 }

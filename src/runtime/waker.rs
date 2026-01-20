@@ -78,33 +78,53 @@ impl Wake for TaskWaker {
 mod tests {
     use super::*;
     use crate::util::ArenaIndex;
+    use crate::test_utils::init_test_logging;
 
     fn task(n: u32) -> TaskId {
         TaskId::from_arena(ArenaIndex::new(n, 0))
     }
 
+    fn init_test(test_name: &str) {
+        init_test_logging();
+        crate::test_phase!(test_name);
+    }
+
     #[test]
     fn wake_and_drain() {
+        init_test("wake_and_drain");
         let state = Arc::new(WakerState::new());
         let waker = state.waker_for(task(1));
 
+        crate::test_section!("wake");
         waker.wake_by_ref();
 
+        crate::test_section!("drain");
         let woken = state.drain_woken();
-        assert_eq!(woken, vec![task(1)]);
-        assert!(state.drain_woken().is_empty());
+        crate::assert_with_log!(
+            woken == vec![task(1)],
+            "drain should return the woken task",
+            vec![task(1)],
+            woken
+        );
+        let empty = state.drain_woken().is_empty();
+        crate::assert_with_log!(empty, "second drain should be empty", true, empty);
+        crate::test_complete!("wake_and_drain");
     }
 
     #[test]
     fn dedup_multiple_wakes() {
+        init_test("dedup_multiple_wakes");
         let state = Arc::new(WakerState::new());
         let waker = state.waker_for(task(1));
 
+        crate::test_section!("wake");
         waker.wake_by_ref();
         waker.wake_by_ref();
         waker.wake();
 
+        crate::test_section!("verify");
         let woken = state.drain_woken();
-        assert_eq!(woken.len(), 1);
+        crate::assert_with_log!(woken.len() == 1, "woken list should dedup", 1, woken.len());
+        crate::test_complete!("dedup_multiple_wakes");
     }
 }

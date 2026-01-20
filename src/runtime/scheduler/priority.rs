@@ -197,7 +197,13 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use crate::util::ArenaIndex;
+
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
 
     fn task(n: u32) -> TaskId {
         TaskId::from_arena(ArenaIndex::new(n, 0))
@@ -205,26 +211,48 @@ mod tests {
 
     #[test]
     fn cancel_lane_has_priority() {
+        init_test("cancel_lane_has_priority");
         let mut sched = Scheduler::new();
         sched.schedule(task(1), 100);
         sched.schedule_cancel(task(2), 50);
 
         // Cancel lane should come first despite lower priority
-        assert_eq!(sched.pop(), Some(task(2)));
-        assert_eq!(sched.pop(), Some(task(1)));
+        let first = sched.pop();
+        let second = sched.pop();
+        crate::assert_with_log!(
+            first == Some(task(2)),
+            "cancel lane pops first",
+            Some(task(2)),
+            first
+        );
+        crate::assert_with_log!(
+            second == Some(task(1)),
+            "ready lane pops second",
+            Some(task(1)),
+            second
+        );
+        crate::test_complete!("cancel_lane_has_priority");
     }
 
     #[test]
     fn dedup_prevents_double_schedule() {
+        init_test("dedup_prevents_double_schedule");
         let mut sched = Scheduler::new();
         sched.schedule(task(1), 100);
         sched.schedule(task(1), 100);
 
-        assert_eq!(sched.len(), 1);
+        crate::assert_with_log!(
+            sched.len() == 1,
+            "duplicate schedule is deduped",
+            1usize,
+            sched.len()
+        );
+        crate::test_complete!("dedup_prevents_double_schedule");
     }
 
     #[test]
     fn move_to_cancel_lane_from_ready() {
+        init_test("move_to_cancel_lane_from_ready");
         let mut sched = Scheduler::new();
         sched.schedule(task(1), 50);
         sched.schedule(task(2), 100);
@@ -233,12 +261,26 @@ mod tests {
         sched.move_to_cancel_lane(task(2), 100);
 
         // Task 2 should come first now (cancel lane priority)
-        assert_eq!(sched.pop(), Some(task(2)));
-        assert_eq!(sched.pop(), Some(task(1)));
+        let first = sched.pop();
+        let second = sched.pop();
+        crate::assert_with_log!(
+            first == Some(task(2)),
+            "moved task pops first",
+            Some(task(2)),
+            first
+        );
+        crate::assert_with_log!(
+            second == Some(task(1)),
+            "remaining ready task pops next",
+            Some(task(1)),
+            second
+        );
+        crate::test_complete!("move_to_cancel_lane_from_ready");
     }
 
     #[test]
     fn move_to_cancel_lane_from_timed() {
+        init_test("move_to_cancel_lane_from_timed");
         let mut sched = Scheduler::new();
         sched.schedule(task(1), 50);
         sched.schedule_timed(task(2), Time::from_secs(10));
@@ -247,24 +289,56 @@ mod tests {
         sched.move_to_cancel_lane(task(2), 100);
 
         // Task 2 should come first now (cancel lane priority)
-        assert_eq!(sched.pop(), Some(task(2)));
-        assert_eq!(sched.pop(), Some(task(1)));
+        let first = sched.pop();
+        let second = sched.pop();
+        crate::assert_with_log!(
+            first == Some(task(2)),
+            "moved timed task pops first",
+            Some(task(2)),
+            first
+        );
+        crate::assert_with_log!(
+            second == Some(task(1)),
+            "ready task pops second",
+            Some(task(1)),
+            second
+        );
+        crate::test_complete!("move_to_cancel_lane_from_timed");
     }
 
     #[test]
     fn move_to_cancel_lane_unscheduled_task() {
+        init_test("move_to_cancel_lane_unscheduled_task");
         let mut sched = Scheduler::new();
 
         // Move unscheduled task to cancel lane
         sched.move_to_cancel_lane(task(1), 100);
 
-        assert_eq!(sched.len(), 1);
-        assert!(sched.is_in_cancel_lane(task(1)));
-        assert_eq!(sched.pop(), Some(task(1)));
+        crate::assert_with_log!(
+            sched.len() == 1,
+            "unscheduled task inserted",
+            1usize,
+            sched.len()
+        );
+        crate::assert_with_log!(
+            sched.is_in_cancel_lane(task(1)),
+            "task is in cancel lane",
+            true,
+            sched.is_in_cancel_lane(task(1))
+        );
+        let first = sched.pop();
+        crate::assert_with_log!(
+            first == Some(task(1)),
+            "cancel lane pops task",
+            Some(task(1)),
+            first
+        );
+        crate::test_complete!("move_to_cancel_lane_unscheduled_task");
     }
 
     #[test]
     fn move_to_cancel_lane_updates_priority() {
+        init_test("move_to_cancel_lane_updates_priority");
         let mut sched = Scheduler::new();
         sched.schedule_cancel(task(1), 50);
         sched.schedule_cancel(task(2), 100);
@@ -273,22 +347,48 @@ mod tests {
         sched.move_to_cancel_lane(task(1), 150);
 
         // Task 1 should now come first due to higher priority
-        assert_eq!(sched.pop(), Some(task(1)));
-        assert_eq!(sched.pop(), Some(task(2)));
+        let first = sched.pop();
+        let second = sched.pop();
+        crate::assert_with_log!(
+            first == Some(task(1)),
+            "higher priority task pops first",
+            Some(task(1)),
+            first
+        );
+        crate::assert_with_log!(
+            second == Some(task(2)),
+            "lower priority task pops next",
+            Some(task(2)),
+            second
+        );
+        crate::test_complete!("move_to_cancel_lane_updates_priority");
     }
 
     #[test]
     fn is_in_cancel_lane() {
+        init_test("is_in_cancel_lane");
         let mut sched = Scheduler::new();
         sched.schedule(task(1), 50);
         sched.schedule_cancel(task(2), 100);
 
-        assert!(!sched.is_in_cancel_lane(task(1)));
-        assert!(sched.is_in_cancel_lane(task(2)));
+        crate::assert_with_log!(
+            !sched.is_in_cancel_lane(task(1)),
+            "ready task not in cancel lane",
+            false,
+            sched.is_in_cancel_lane(task(1))
+        );
+        crate::assert_with_log!(
+            sched.is_in_cancel_lane(task(2)),
+            "cancel task is in cancel lane",
+            true,
+            sched.is_in_cancel_lane(task(2))
+        );
+        crate::test_complete!("is_in_cancel_lane");
     }
 
     #[test]
     fn timed_lane_edf_ordering() {
+        init_test("timed_lane_edf_ordering");
         let mut sched = Scheduler::new();
 
         // Schedule task 1 with later deadline (T=100)
@@ -298,29 +398,70 @@ mod tests {
         sched.schedule_timed(task(2), Time::from_secs(10));
 
         // Task 2 should come first (EDF)
-        assert_eq!(sched.pop(), Some(task(2)));
-        assert_eq!(sched.pop(), Some(task(1)));
+        let first = sched.pop();
+        let second = sched.pop();
+        crate::assert_with_log!(
+            first == Some(task(2)),
+            "earlier deadline pops first",
+            Some(task(2)),
+            first
+        );
+        crate::assert_with_log!(
+            second == Some(task(1)),
+            "later deadline pops second",
+            Some(task(1)),
+            second
+        );
+        crate::test_complete!("timed_lane_edf_ordering");
     }
 
     #[test]
     fn timed_lane_priority_over_ready() {
+        init_test("timed_lane_priority_over_ready");
         let mut sched = Scheduler::new();
         sched.schedule(task(1), 255); // Highest priority ready
         sched.schedule_timed(task(2), Time::from_secs(100)); // Timed
 
         // Timed lane should come before ready lane
-        assert_eq!(sched.pop(), Some(task(2)));
-        assert_eq!(sched.pop(), Some(task(1)));
+        let first = sched.pop();
+        let second = sched.pop();
+        crate::assert_with_log!(
+            first == Some(task(2)),
+            "timed lane pops before ready",
+            Some(task(2)),
+            first
+        );
+        crate::assert_with_log!(
+            second == Some(task(1)),
+            "ready lane pops after timed",
+            Some(task(1)),
+            second
+        );
+        crate::test_complete!("timed_lane_priority_over_ready");
     }
 
     #[test]
     fn cancel_lane_priority_over_timed() {
+        init_test("cancel_lane_priority_over_timed");
         let mut sched = Scheduler::new();
         sched.schedule_timed(task(1), Time::from_secs(10)); // Urgent deadline
         sched.schedule_cancel(task(2), 1); // Low priority cancel
 
         // Cancel lane should still come first
-        assert_eq!(sched.pop(), Some(task(2)));
-        assert_eq!(sched.pop(), Some(task(1)));
+        let first = sched.pop();
+        let second = sched.pop();
+        crate::assert_with_log!(
+            first == Some(task(2)),
+            "cancel lane pops before timed",
+            Some(task(2)),
+            first
+        );
+        crate::assert_with_log!(
+            second == Some(task(1)),
+            "timed lane pops after cancel",
+            Some(task(1)),
+            second
+        );
+        crate::test_complete!("cancel_lane_priority_over_timed");
     }
 }
