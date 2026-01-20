@@ -19,13 +19,13 @@ mod tests {
         fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, _id: &tracing::Id, _ctx: Context<'_, S>) {
             if attrs.metadata().name() == "region" {
                 let mut spans = self.spans.lock().unwrap();
-                spans.push(format!("region_new: {:?}", attrs.metadata().fields()));
+                spans.push(format!("region_new: {:?}", attrs));
             }
         }
 
-        fn on_record(&self, _id: &tracing::Id, _values: &tracing::span::Record<'_>, _ctx: Context<'_, S>) {
-             // In a real test we'd check if this is the region span
-             // For now just logging strictly region name in on_new_span is enough to prove it exists
+        fn on_record(&self, _id: &tracing::Id, values: &tracing::span::Record<'_>, _ctx: Context<'_, S>) {
+             let mut spans = self.spans.lock().unwrap();
+             spans.push(format!("region_record: {:?}", values));
         }
     }
 
@@ -44,13 +44,29 @@ mod tests {
             {
                 let spans = spans.lock().unwrap();
                 assert!(!spans.is_empty(), "Should have recorded region span creation");
+                let creation = spans.iter().find(|s| s.contains("region_new")).unwrap();
+                assert!(creation.contains("region_id"));
+                assert!(creation.contains("state"));
             }
 
             // Close the region
             let region_record = state.regions.get_mut(region.arena_index()).expect("region");
             region_record.begin_close(None);
+            
+            // Check for update
+            {
+                let spans = spans.lock().unwrap();
+                let update = spans.iter().find(|s| s.contains("region_record") && s.contains("Closing")).expect("Should record Closing state");
+            }
+
             region_record.begin_finalize();
             region_record.complete_close();
+            
+            // Check for final update
+            {
+                let spans = spans.lock().unwrap();
+                let update = spans.iter().find(|s| s.contains("region_record") && s.contains("Closed")).expect("Should record Closed state");
+            }
         });
     }
 }
