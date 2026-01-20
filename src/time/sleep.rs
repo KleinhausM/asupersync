@@ -332,44 +332,90 @@ pub fn sleep_until(deadline: Time) -> Sleep {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     // =========================================================================
     // Construction Tests
     // =========================================================================
 
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn new_creates_sleep_with_deadline() {
+        init_test("new_creates_sleep_with_deadline");
         let sleep = Sleep::new(Time::from_secs(5));
-        assert_eq!(sleep.deadline(), Time::from_secs(5));
-        assert!(!sleep.was_polled());
+        crate::assert_with_log!(
+            sleep.deadline() == Time::from_secs(5),
+            "deadline",
+            Time::from_secs(5),
+            sleep.deadline()
+        );
+        crate::assert_with_log!(
+            !sleep.was_polled(),
+            "not polled",
+            false,
+            sleep.was_polled()
+        );
+        crate::test_complete!("new_creates_sleep_with_deadline");
     }
 
     #[test]
     fn after_computes_deadline() {
+        init_test("after_computes_deadline");
         let now = Time::from_secs(10);
         let sleep = Sleep::after(now, Duration::from_secs(5));
-        assert_eq!(sleep.deadline(), Time::from_secs(15));
+        crate::assert_with_log!(
+            sleep.deadline() == Time::from_secs(15),
+            "deadline",
+            Time::from_secs(15),
+            sleep.deadline()
+        );
+        crate::test_complete!("after_computes_deadline");
     }
 
     #[test]
     fn after_saturates() {
+        init_test("after_saturates");
         let now = Time::from_nanos(u64::MAX - 1000);
         let sleep = Sleep::after(now, Duration::from_secs(1));
-        assert_eq!(sleep.deadline(), Time::MAX);
+        crate::assert_with_log!(
+            sleep.deadline() == Time::MAX,
+            "deadline",
+            Time::MAX,
+            sleep.deadline()
+        );
+        crate::test_complete!("after_saturates");
     }
 
     #[test]
     fn sleep_function() {
+        init_test("sleep_function");
         let now = Time::from_millis(100);
         let s = sleep(now, Duration::from_millis(50));
-        assert_eq!(s.deadline(), Time::from_millis(150));
+        crate::assert_with_log!(
+            s.deadline() == Time::from_millis(150),
+            "deadline",
+            Time::from_millis(150),
+            s.deadline()
+        );
+        crate::test_complete!("sleep_function");
     }
 
     #[test]
     fn sleep_until_function() {
+        init_test("sleep_until_function");
         let s = sleep_until(Time::from_secs(42));
-        assert_eq!(s.deadline(), Time::from_secs(42));
+        crate::assert_with_log!(
+            s.deadline() == Time::from_secs(42),
+            "deadline",
+            Time::from_secs(42),
+            s.deadline()
+        );
+        crate::test_complete!("sleep_until_function");
     }
 
     // =========================================================================
@@ -378,6 +424,7 @@ mod tests {
 
     #[test]
     fn with_time_getter() {
+        init_test("with_time_getter");
         static CURRENT_TIME: AtomicU64 = AtomicU64::new(0);
 
         fn get_time() -> Time {
@@ -387,11 +434,14 @@ mod tests {
         let sleep = Sleep::with_time_getter(Time::from_secs(5), get_time);
 
         // Time is 0, should be pending
-        assert!(!sleep.is_elapsed(get_time()));
+        let elapsed = sleep.is_elapsed(get_time());
+        crate::assert_with_log!(!elapsed, "not elapsed", false, elapsed);
 
         // Advance time past deadline
         CURRENT_TIME.store(6_000_000_000, Ordering::SeqCst);
-        assert!(sleep.is_elapsed(get_time()));
+        let elapsed = sleep.is_elapsed(get_time());
+        crate::assert_with_log!(elapsed, "elapsed", true, elapsed);
+        crate::test_complete!("with_time_getter");
     }
 
     // =========================================================================
@@ -400,41 +450,71 @@ mod tests {
 
     #[test]
     fn is_elapsed_before_deadline() {
+        init_test("is_elapsed_before_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
-        assert!(!sleep.is_elapsed(Time::from_secs(5)));
+        let elapsed = sleep.is_elapsed(Time::from_secs(5));
+        crate::assert_with_log!(!elapsed, "not elapsed", false, elapsed);
+        crate::test_complete!("is_elapsed_before_deadline");
     }
 
     #[test]
     fn is_elapsed_at_deadline() {
+        init_test("is_elapsed_at_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
-        assert!(sleep.is_elapsed(Time::from_secs(10)));
+        let elapsed = sleep.is_elapsed(Time::from_secs(10));
+        crate::assert_with_log!(elapsed, "elapsed", true, elapsed);
+        crate::test_complete!("is_elapsed_at_deadline");
     }
 
     #[test]
     fn is_elapsed_after_deadline() {
+        init_test("is_elapsed_after_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
-        assert!(sleep.is_elapsed(Time::from_secs(15)));
+        let elapsed = sleep.is_elapsed(Time::from_secs(15));
+        crate::assert_with_log!(elapsed, "elapsed", true, elapsed);
+        crate::test_complete!("is_elapsed_after_deadline");
     }
 
     #[test]
     fn remaining_before_deadline() {
+        init_test("remaining_before_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
         let remaining = sleep.remaining(Time::from_secs(7));
-        assert_eq!(remaining, Duration::from_secs(3));
+        crate::assert_with_log!(
+            remaining == Duration::from_secs(3),
+            "remaining",
+            Duration::from_secs(3),
+            remaining
+        );
+        crate::test_complete!("remaining_before_deadline");
     }
 
     #[test]
     fn remaining_at_deadline() {
+        init_test("remaining_at_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
         let remaining = sleep.remaining(Time::from_secs(10));
-        assert_eq!(remaining, Duration::ZERO);
+        crate::assert_with_log!(
+            remaining == Duration::ZERO,
+            "remaining",
+            Duration::ZERO,
+            remaining
+        );
+        crate::test_complete!("remaining_at_deadline");
     }
 
     #[test]
     fn remaining_after_deadline() {
+        init_test("remaining_after_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
         let remaining = sleep.remaining(Time::from_secs(15));
-        assert_eq!(remaining, Duration::ZERO);
+        crate::assert_with_log!(
+            remaining == Duration::ZERO,
+            "remaining",
+            Duration::ZERO,
+            remaining
+        );
+        crate::test_complete!("remaining_after_deadline");
     }
 
     // =========================================================================
@@ -443,31 +523,44 @@ mod tests {
 
     #[test]
     fn poll_with_time_before_deadline() {
+        init_test("poll_with_time_before_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
         let poll = sleep.poll_with_time(Time::from_secs(5));
-        assert!(poll.is_pending());
-        assert!(sleep.was_polled());
+        crate::assert_with_log!(poll.is_pending(), "pending", true, poll.is_pending());
+        crate::assert_with_log!(
+            sleep.was_polled(),
+            "was polled",
+            true,
+            sleep.was_polled()
+        );
+        crate::test_complete!("poll_with_time_before_deadline");
     }
 
     #[test]
     fn poll_with_time_at_deadline() {
+        init_test("poll_with_time_at_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
         let poll = sleep.poll_with_time(Time::from_secs(10));
-        assert!(poll.is_ready());
+        crate::assert_with_log!(poll.is_ready(), "ready", true, poll.is_ready());
+        crate::test_complete!("poll_with_time_at_deadline");
     }
 
     #[test]
     fn poll_with_time_after_deadline() {
+        init_test("poll_with_time_after_deadline");
         let sleep = Sleep::new(Time::from_secs(10));
         let poll = sleep.poll_with_time(Time::from_secs(15));
-        assert!(poll.is_ready());
+        crate::assert_with_log!(poll.is_ready(), "ready", true, poll.is_ready());
+        crate::test_complete!("poll_with_time_after_deadline");
     }
 
     #[test]
     fn poll_with_time_zero_deadline() {
+        init_test("poll_with_time_zero_deadline");
         let sleep = Sleep::new(Time::ZERO);
         let poll = sleep.poll_with_time(Time::ZERO);
-        assert!(poll.is_ready());
+        crate::assert_with_log!(poll.is_ready(), "ready", true, poll.is_ready());
+        crate::test_complete!("poll_with_time_zero_deadline");
     }
 
     // =========================================================================
@@ -476,23 +569,47 @@ mod tests {
 
     #[test]
     fn reset_changes_deadline() {
+        init_test("reset_changes_deadline");
         let mut sleep = Sleep::new(Time::from_secs(10));
 
         // Poll it
         let _ = sleep.poll_with_time(Time::from_secs(5));
-        assert!(sleep.was_polled());
+        crate::assert_with_log!(
+            sleep.was_polled(),
+            "was polled",
+            true,
+            sleep.was_polled()
+        );
 
         // Reset
         sleep.reset(Time::from_secs(20));
-        assert_eq!(sleep.deadline(), Time::from_secs(20));
-        assert!(!sleep.was_polled()); // Reset clears polled flag
+        crate::assert_with_log!(
+            sleep.deadline() == Time::from_secs(20),
+            "deadline",
+            Time::from_secs(20),
+            sleep.deadline()
+        );
+        crate::assert_with_log!(
+            !sleep.was_polled(),
+            "reset clears polled",
+            false,
+            sleep.was_polled()
+        ); // Reset clears polled flag
+        crate::test_complete!("reset_changes_deadline");
     }
 
     #[test]
     fn reset_after_changes_deadline() {
+        init_test("reset_after_changes_deadline");
         let mut sleep = Sleep::new(Time::from_secs(10));
         sleep.reset_after(Time::from_secs(5), Duration::from_secs(3));
-        assert_eq!(sleep.deadline(), Time::from_secs(8));
+        crate::assert_with_log!(
+            sleep.deadline() == Time::from_secs(8),
+            "deadline",
+            Time::from_secs(8),
+            sleep.deadline()
+        );
+        crate::test_complete!("reset_after_changes_deadline");
     }
 
     // =========================================================================
@@ -501,21 +618,50 @@ mod tests {
 
     #[test]
     fn clone_copies_deadline() {
+        init_test("clone_copies_deadline");
         let original = Sleep::new(Time::from_secs(10));
         let cloned = original.clone();
-        assert_eq!(original.deadline(), Time::from_secs(10));
-        assert_eq!(cloned.deadline(), Time::from_secs(10));
+        crate::assert_with_log!(
+            original.deadline() == Time::from_secs(10),
+            "original deadline",
+            Time::from_secs(10),
+            original.deadline()
+        );
+        crate::assert_with_log!(
+            cloned.deadline() == Time::from_secs(10),
+            "cloned deadline",
+            Time::from_secs(10),
+            cloned.deadline()
+        );
+        crate::test_complete!("clone_copies_deadline");
     }
 
     #[test]
     fn clone_has_fresh_polled_flag() {
+        init_test("clone_has_fresh_polled_flag");
         let original = Sleep::new(Time::from_secs(10));
         let _ = original.poll_with_time(Time::from_secs(5));
-        assert!(original.was_polled());
+        crate::assert_with_log!(
+            original.was_polled(),
+            "original polled",
+            true,
+            original.was_polled()
+        );
 
         let cloned = original.clone();
-        assert!(original.was_polled());
-        assert!(!cloned.was_polled());
+        crate::assert_with_log!(
+            original.was_polled(),
+            "original still polled",
+            true,
+            original.was_polled()
+        );
+        crate::assert_with_log!(
+            !cloned.was_polled(),
+            "cloned not polled",
+            false,
+            cloned.was_polled()
+        );
+        crate::test_complete!("clone_has_fresh_polled_flag");
     }
 
     // =========================================================================
@@ -524,32 +670,43 @@ mod tests {
 
     #[test]
     fn zero_duration_sleep() {
+        init_test("zero_duration_sleep");
         let now = Time::from_secs(10);
         let sleep = sleep(now, Duration::ZERO);
-        assert_eq!(sleep.deadline(), Time::from_secs(10));
+        crate::assert_with_log!(
+            sleep.deadline() == Time::from_secs(10),
+            "deadline",
+            Time::from_secs(10),
+            sleep.deadline()
+        );
 
         // Should be immediately ready
         let poll = sleep.poll_with_time(now);
-        assert!(poll.is_ready());
+        crate::assert_with_log!(poll.is_ready(), "ready", true, poll.is_ready());
+        crate::test_complete!("zero_duration_sleep");
     }
 
     #[test]
     fn max_time_deadline() {
+        init_test("max_time_deadline");
         let sleep = Sleep::new(Time::MAX);
         let poll = sleep.poll_with_time(Time::from_secs(1000));
-        assert!(poll.is_pending());
+        crate::assert_with_log!(poll.is_pending(), "pending", true, poll.is_pending());
 
         // Only ready at MAX
         let poll = sleep.poll_with_time(Time::MAX);
-        assert!(poll.is_ready());
+        crate::assert_with_log!(poll.is_ready(), "ready at max", true, poll.is_ready());
+        crate::test_complete!("max_time_deadline");
     }
 
     #[test]
     fn time_zero_deadline() {
+        init_test("time_zero_deadline");
         let sleep = Sleep::new(Time::ZERO);
 
         // Any non-zero time is past deadline
         let poll = sleep.poll_with_time(Time::from_nanos(1));
-        assert!(poll.is_ready());
+        crate::assert_with_log!(poll.is_ready(), "ready", true, poll.is_ready());
+        crate::test_complete!("time_zero_deadline");
     }
 }

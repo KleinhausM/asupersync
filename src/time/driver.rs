@@ -291,52 +291,115 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     // =========================================================================
     // VirtualClock Tests
     // =========================================================================
 
     #[test]
     fn virtual_clock_starts_at_zero() {
+        init_test("virtual_clock_starts_at_zero");
         let clock = VirtualClock::new();
-        assert_eq!(clock.now(), Time::ZERO);
+        let now = clock.now();
+        crate::assert_with_log!(
+            now == Time::ZERO,
+            "clock starts at zero",
+            Time::ZERO,
+            now
+        );
+        crate::test_complete!("virtual_clock_starts_at_zero");
     }
 
     #[test]
     fn virtual_clock_starting_at() {
+        init_test("virtual_clock_starting_at");
         let clock = VirtualClock::starting_at(Time::from_secs(10));
-        assert_eq!(clock.now(), Time::from_secs(10));
+        let now = clock.now();
+        crate::assert_with_log!(
+            now == Time::from_secs(10),
+            "clock starts at 10s",
+            Time::from_secs(10),
+            now
+        );
+        crate::test_complete!("virtual_clock_starting_at");
     }
 
     #[test]
     fn virtual_clock_advance() {
+        init_test("virtual_clock_advance");
         let clock = VirtualClock::new();
         clock.advance(1_000_000_000); // 1 second
-        assert_eq!(clock.now(), Time::from_secs(1));
+        let now = clock.now();
+        crate::assert_with_log!(
+            now == Time::from_secs(1),
+            "advance 1s",
+            Time::from_secs(1),
+            now
+        );
 
         clock.advance(500_000_000); // 0.5 seconds
-        assert_eq!(clock.now().as_nanos(), 1_500_000_000);
+        let nanos = clock.now().as_nanos();
+        crate::assert_with_log!(
+            nanos == 1_500_000_000,
+            "advance 0.5s",
+            1_500_000_000,
+            nanos
+        );
+        crate::test_complete!("virtual_clock_advance");
     }
 
     #[test]
     fn virtual_clock_advance_to() {
+        init_test("virtual_clock_advance_to");
         let clock = VirtualClock::new();
         clock.advance_to(Time::from_secs(5));
-        assert_eq!(clock.now(), Time::from_secs(5));
+        let now = clock.now();
+        crate::assert_with_log!(
+            now == Time::from_secs(5),
+            "advance_to 5s",
+            Time::from_secs(5),
+            now
+        );
 
         // Advancing to past time is no-op
         clock.advance_to(Time::from_secs(3));
-        assert_eq!(clock.now(), Time::from_secs(5));
+        let now_after = clock.now();
+        crate::assert_with_log!(
+            now_after == Time::from_secs(5),
+            "advance_to past is no-op",
+            Time::from_secs(5),
+            now_after
+        );
+        crate::test_complete!("virtual_clock_advance_to");
     }
 
     #[test]
     fn virtual_clock_set() {
+        init_test("virtual_clock_set");
         let clock = VirtualClock::new();
         clock.set(Time::from_secs(100));
-        assert_eq!(clock.now(), Time::from_secs(100));
+        let now = clock.now();
+        crate::assert_with_log!(
+            now == Time::from_secs(100),
+            "set to 100s",
+            Time::from_secs(100),
+            now
+        );
 
         // Set can go backwards
         clock.set(Time::from_secs(50));
-        assert_eq!(clock.now(), Time::from_secs(50));
+        let now_back = clock.now();
+        crate::assert_with_log!(
+            now_back == Time::from_secs(50),
+            "set backwards to 50s",
+            Time::from_secs(50),
+            now_back
+        );
+        crate::test_complete!("virtual_clock_set");
     }
 
     // =========================================================================
@@ -345,19 +408,30 @@ mod tests {
 
     #[test]
     fn wall_clock_starts_near_zero() {
+        init_test("wall_clock_starts_near_zero");
         let clock = WallClock::new();
         let now = clock.now();
         // Should be very close to zero (within 1ms of creation)
-        assert!(now.as_nanos() < 1_000_000);
+        let max_nanos = 1_000_000;
+        let actual = now.as_nanos();
+        crate::assert_with_log!(
+            actual < max_nanos,
+            "near zero",
+            max_nanos,
+            actual
+        );
+        crate::test_complete!("wall_clock_starts_near_zero");
     }
 
     #[test]
     fn wall_clock_advances() {
+        init_test("wall_clock_advances");
         let clock = WallClock::new();
         let t1 = clock.now();
         std::thread::sleep(std::time::Duration::from_millis(10));
         let t2 = clock.now();
-        assert!(t2 > t1);
+        crate::assert_with_log!(t2 > t1, "clock advances", "t2 > t1", (t1, t2));
+        crate::test_complete!("wall_clock_advances");
     }
 
     // =========================================================================
@@ -366,41 +440,77 @@ mod tests {
 
     #[test]
     fn timer_driver_new() {
+        init_test("timer_driver_new");
         let driver = TimerDriver::new();
-        assert!(driver.is_empty());
-        assert_eq!(driver.pending_count(), 0);
+        crate::assert_with_log!(driver.is_empty(), "driver empty", true, driver.is_empty());
+        crate::assert_with_log!(
+            driver.pending_count() == 0,
+            "pending count",
+            0,
+            driver.pending_count()
+        );
+        crate::test_complete!("timer_driver_new");
     }
 
     #[test]
     fn timer_driver_register() {
+        init_test("timer_driver_register");
         let clock = Arc::new(VirtualClock::new());
         let driver = TimerDriver::with_clock(clock);
 
         let waker = futures_waker();
         let handle = driver.register(Time::from_secs(1), waker);
 
-        assert_eq!(handle.id(), 0);
-        assert_eq!(driver.pending_count(), 1);
-        assert!(!driver.is_empty());
+        crate::assert_with_log!(handle.id() == 0, "handle id", 0, handle.id());
+        crate::assert_with_log!(
+            driver.pending_count() == 1,
+            "pending count",
+            1,
+            driver.pending_count()
+        );
+        crate::assert_with_log!(
+            !driver.is_empty(),
+            "driver not empty",
+            false,
+            driver.is_empty()
+        );
+        crate::test_complete!("timer_driver_register");
     }
 
     #[test]
     fn timer_driver_next_deadline() {
+        init_test("timer_driver_next_deadline");
         let clock = Arc::new(VirtualClock::new());
         let driver = TimerDriver::with_clock(clock);
 
-        assert_eq!(driver.next_deadline(), None);
+        let expected: Option<Time> = None;
+        let actual = driver.next_deadline();
+        crate::assert_with_log!(
+            actual == expected,
+            "empty next_deadline",
+            expected,
+            actual
+        );
 
         driver.register(Time::from_secs(5), futures_waker());
         driver.register(Time::from_secs(3), futures_waker());
         driver.register(Time::from_secs(7), futures_waker());
 
         // Should return earliest deadline
-        assert_eq!(driver.next_deadline(), Some(Time::from_secs(3)));
+        let expected = Some(Time::from_secs(3));
+        let actual = driver.next_deadline();
+        crate::assert_with_log!(
+            actual == expected,
+            "earliest deadline",
+            expected,
+            actual
+        );
+        crate::test_complete!("timer_driver_next_deadline");
     }
 
     #[test]
     fn timer_driver_process_expired() {
+        init_test("timer_driver_process_expired");
         let clock = Arc::new(VirtualClock::new());
         let driver = TimerDriver::with_clock(clock.clone());
 
@@ -411,20 +521,46 @@ mod tests {
         driver.register(Time::from_secs(1), waker);
 
         // Time is 0, no timers should fire
-        assert_eq!(driver.process_timers(), 0);
-        assert!(!woken.load(Ordering::SeqCst));
+        let processed = driver.process_timers();
+        crate::assert_with_log!(
+            processed == 0,
+            "process_timers at t=0",
+            0,
+            processed
+        );
+        let woken_now = woken.load(Ordering::SeqCst);
+        crate::assert_with_log!(
+            !woken_now,
+            "not woken",
+            false,
+            woken_now
+        );
 
         // Advance time past deadline
         clock.advance(2_000_000_000); // 2 seconds
-        assert_eq!(driver.process_timers(), 1);
-        assert!(woken.load(Ordering::SeqCst));
+        let processed = driver.process_timers();
+        crate::assert_with_log!(
+            processed == 1,
+            "process_timers after advance",
+            1,
+            processed
+        );
+        let woken_now = woken.load(Ordering::SeqCst);
+        crate::assert_with_log!(woken_now, "woken", true, woken_now);
 
         // No more timers
-        assert!(driver.is_empty());
+        crate::assert_with_log!(
+            driver.is_empty(),
+            "driver empty",
+            true,
+            driver.is_empty()
+        );
+        crate::test_complete!("timer_driver_process_expired");
     }
 
     #[test]
     fn timer_driver_multiple_timers() {
+        init_test("timer_driver_multiple_timers");
         let clock = Arc::new(VirtualClock::new());
         let driver = TimerDriver::with_clock(clock.clone());
 
@@ -436,23 +572,64 @@ mod tests {
             driver.register(Time::from_secs(i), waker);
         }
 
-        assert_eq!(driver.pending_count(), 5);
+        crate::assert_with_log!(
+            driver.pending_count() == 5,
+            "pending count",
+            5,
+            driver.pending_count()
+        );
 
         // Advance to t=3, should fire 3 timers
         clock.set(Time::from_secs(3));
-        assert_eq!(driver.process_timers(), 3);
-        assert_eq!(count.load(Ordering::SeqCst), 3);
-        assert_eq!(driver.pending_count(), 2);
+        let processed = driver.process_timers();
+        crate::assert_with_log!(
+            processed == 3,
+            "process_timers at t=3",
+            3,
+            processed
+        );
+        let count_now = count.load(Ordering::SeqCst);
+        crate::assert_with_log!(
+            count_now == 3,
+            "count at t=3",
+            3,
+            count_now
+        );
+        crate::assert_with_log!(
+            driver.pending_count() == 2,
+            "pending count after t=3",
+            2,
+            driver.pending_count()
+        );
 
         // Advance to t=10, should fire remaining 2
         clock.set(Time::from_secs(10));
-        assert_eq!(driver.process_timers(), 2);
-        assert_eq!(count.load(Ordering::SeqCst), 5);
-        assert!(driver.is_empty());
+        let processed = driver.process_timers();
+        crate::assert_with_log!(
+            processed == 2,
+            "process_timers at t=10",
+            2,
+            processed
+        );
+        let count_now = count.load(Ordering::SeqCst);
+        crate::assert_with_log!(
+            count_now == 5,
+            "count at t=10",
+            5,
+            count_now
+        );
+        crate::assert_with_log!(
+            driver.is_empty(),
+            "driver empty",
+            true,
+            driver.is_empty()
+        );
+        crate::test_complete!("timer_driver_multiple_timers");
     }
 
     #[test]
     fn timer_driver_update_cancels_old_handle() {
+        init_test("timer_driver_update_cancels_old_handle");
         let clock = Arc::new(VirtualClock::new());
         let driver = TimerDriver::with_clock(clock.clone());
 
@@ -464,36 +641,72 @@ mod tests {
         let _new_handle = driver.update(&handle, Time::from_secs(2), waker2);
 
         clock.set(Time::from_secs(3));
-        assert_eq!(driver.process_timers(), 1);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        let processed = driver.process_timers();
+        crate::assert_with_log!(
+            processed == 1,
+            "process_timers at t=3",
+            1,
+            processed
+        );
+        let count_now = counter.load(Ordering::SeqCst);
+        crate::assert_with_log!(count_now == 1, "counter", 1, count_now);
 
         clock.set(Time::from_secs(10));
-        assert_eq!(driver.process_timers(), 0);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        let processed = driver.process_timers();
+        crate::assert_with_log!(
+            processed == 0,
+            "process_timers at t=10",
+            0,
+            processed
+        );
+        let count_now = counter.load(Ordering::SeqCst);
+        crate::assert_with_log!(count_now == 1, "counter stable", 1, count_now);
+        crate::test_complete!("timer_driver_update_cancels_old_handle");
     }
 
     #[test]
     fn timer_driver_clear() {
+        init_test("timer_driver_clear");
         let clock = Arc::new(VirtualClock::new());
         let driver = TimerDriver::with_clock(clock);
 
         driver.register(Time::from_secs(1), futures_waker());
         driver.register(Time::from_secs(2), futures_waker());
 
-        assert_eq!(driver.pending_count(), 2);
+        crate::assert_with_log!(
+            driver.pending_count() == 2,
+            "pending count",
+            2,
+            driver.pending_count()
+        );
         driver.clear();
-        assert!(driver.is_empty());
+        crate::assert_with_log!(
+            driver.is_empty(),
+            "driver empty",
+            true,
+            driver.is_empty()
+        );
+        crate::test_complete!("timer_driver_clear");
     }
 
     #[test]
     fn timer_driver_now() {
+        init_test("timer_driver_now");
         let clock = Arc::new(VirtualClock::new());
         let driver = TimerDriver::with_clock(clock.clone());
 
-        assert_eq!(driver.now(), Time::ZERO);
+        let now = driver.now();
+        crate::assert_with_log!(now == Time::ZERO, "now at zero", Time::ZERO, now);
 
         clock.advance(1_000_000_000);
-        assert_eq!(driver.now(), Time::from_secs(1));
+        let now = driver.now();
+        crate::assert_with_log!(
+            now == Time::from_secs(1),
+            "now after advance",
+            Time::from_secs(1),
+            now
+        );
+        crate::test_complete!("timer_driver_now");
     }
 
     // =========================================================================
@@ -502,15 +715,24 @@ mod tests {
 
     #[test]
     fn timer_handle_id_and_generation() {
+        init_test("timer_handle_id_and_generation");
         let clock = Arc::new(VirtualClock::new());
         let driver = TimerDriver::with_clock(clock);
 
         let h1 = driver.register(Time::from_secs(1), futures_waker());
         let h2 = driver.register(Time::from_secs(2), futures_waker());
 
-        assert_eq!(h1.id(), 0);
-        assert_eq!(h2.id(), 1);
-        assert_ne!(h1.generation(), h2.generation());
+        crate::assert_with_log!(h1.id() == 0, "h1 id", 0, h1.id());
+        crate::assert_with_log!(h2.id() == 1, "h2 id", 1, h2.id());
+        let gen1 = h1.generation();
+        let gen2 = h2.generation();
+        crate::assert_with_log!(
+            gen1 != gen2,
+            "generation differs",
+            "not equal",
+            (gen1, gen2)
+        );
+        crate::test_complete!("timer_handle_id_and_generation");
     }
 
     // =========================================================================

@@ -212,46 +212,101 @@ pub trait ServiceHandler: Send + Sync {
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn test_method_descriptor_unary() {
+        init_test("test_method_descriptor_unary");
         let desc = MethodDescriptor::unary("SayHello", "/helloworld.Greeter/SayHello");
-        assert!(desc.is_unary());
-        assert!(!desc.client_streaming);
-        assert!(!desc.server_streaming);
+        let unary = desc.is_unary();
+        crate::assert_with_log!(unary, "is_unary", true, unary);
+        crate::assert_with_log!(
+            !desc.client_streaming,
+            "client_streaming",
+            false,
+            desc.client_streaming
+        );
+        crate::assert_with_log!(
+            !desc.server_streaming,
+            "server_streaming",
+            false,
+            desc.server_streaming
+        );
+        crate::test_complete!("test_method_descriptor_unary");
     }
 
     #[test]
     fn test_method_descriptor_server_streaming() {
+        init_test("test_method_descriptor_server_streaming");
         let desc =
             MethodDescriptor::server_streaming("ListFeatures", "/route.RouteGuide/ListFeatures");
-        assert!(!desc.is_unary());
-        assert!(!desc.client_streaming);
-        assert!(desc.server_streaming);
+        let unary = desc.is_unary();
+        crate::assert_with_log!(!unary, "not unary", false, unary);
+        crate::assert_with_log!(
+            !desc.client_streaming,
+            "client_streaming",
+            false,
+            desc.client_streaming
+        );
+        crate::assert_with_log!(
+            desc.server_streaming,
+            "server_streaming",
+            true,
+            desc.server_streaming
+        );
+        crate::test_complete!("test_method_descriptor_server_streaming");
     }
 
     #[test]
     fn test_method_descriptor_bidi() {
+        init_test("test_method_descriptor_bidi");
         let desc = MethodDescriptor::bidi_streaming("RouteChat", "/route.RouteGuide/RouteChat");
-        assert!(desc.client_streaming);
-        assert!(desc.server_streaming);
+        crate::assert_with_log!(
+            desc.client_streaming,
+            "client_streaming",
+            true,
+            desc.client_streaming
+        );
+        crate::assert_with_log!(
+            desc.server_streaming,
+            "server_streaming",
+            true,
+            desc.server_streaming
+        );
+        crate::test_complete!("test_method_descriptor_bidi");
     }
 
     #[test]
     fn test_service_descriptor() {
+        init_test("test_service_descriptor");
         static METHODS: &[MethodDescriptor] = &[MethodDescriptor::unary(
             "SayHello",
             "/helloworld.Greeter/SayHello",
         )];
 
         let desc = ServiceDescriptor::new("Greeter", "helloworld", METHODS);
-        assert_eq!(desc.full_name(), "helloworld.Greeter");
-        assert_eq!(desc.methods.len(), 1);
+        let name = desc.full_name();
+        crate::assert_with_log!(
+            name == "helloworld.Greeter",
+            "full_name",
+            "helloworld.Greeter",
+            name
+        );
+        let len = desc.methods.len();
+        crate::assert_with_log!(len == 1, "methods len", 1, len);
+        crate::test_complete!("test_service_descriptor");
     }
 
     #[test]
     fn test_service_descriptor_no_package() {
+        init_test("test_service_descriptor_no_package");
         static METHODS: &[MethodDescriptor] = &[];
         let desc = ServiceDescriptor::new("Service", "", METHODS);
-        assert_eq!(desc.full_name(), "Service");
+        let name = desc.full_name();
+        crate::assert_with_log!(name == "Service", "full_name", "Service", name);
+        crate::test_complete!("test_service_descriptor_no_package");
     }
 }

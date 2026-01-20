@@ -97,9 +97,15 @@ pub async fn budget_timeout<F: Future + Unpin>(
 mod tests {
     use super::*;
     use crate::cx::Cx;
+    use crate::test_utils::init_test_logging;
     use crate::types::{Budget, RegionId, TaskId};
     use crate::util::ArenaIndex;
     use std::time::Duration;
+
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
 
     fn test_cx(budget: Budget) -> Cx {
         Cx::new(
@@ -111,6 +117,7 @@ mod tests {
 
     #[test]
     fn test_budget_sleep() {
+        init_test("test_budget_sleep");
         let now = Time::from_secs(100);
         let deadline = now.saturating_add_nanos(100_000_000); // 100ms
         let budget = Budget::new().with_deadline(deadline);
@@ -119,7 +126,9 @@ mod tests {
         // Request longer sleep than budget allows
         futures_lite::future::block_on(async {
             let result = budget_sleep(&cx, Duration::from_secs(10), now).await;
-            assert!(result.is_err()); // Should be cut short
+            let is_err = result.is_err();
+            crate::assert_with_log!(is_err, "budget sleep errors", true, is_err);
         });
+        crate::test_complete!("test_budget_sleep");
     }
 }

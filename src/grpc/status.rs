@@ -376,46 +376,97 @@ impl From<std::io::Error> for GrpcError {
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn test_code_from_i32() {
-        assert_eq!(Code::from_i32(0), Code::Ok);
-        assert_eq!(Code::from_i32(1), Code::Cancelled);
-        assert_eq!(Code::from_i32(16), Code::Unauthenticated);
-        assert_eq!(Code::from_i32(99), Code::Unknown);
+        init_test("test_code_from_i32");
+        crate::assert_with_log!(Code::from_i32(0) == Code::Ok, "0", Code::Ok, Code::from_i32(0));
+        crate::assert_with_log!(
+            Code::from_i32(1) == Code::Cancelled,
+            "1",
+            Code::Cancelled,
+            Code::from_i32(1)
+        );
+        crate::assert_with_log!(
+            Code::from_i32(16) == Code::Unauthenticated,
+            "16",
+            Code::Unauthenticated,
+            Code::from_i32(16)
+        );
+        crate::assert_with_log!(
+            Code::from_i32(99) == Code::Unknown,
+            "99",
+            Code::Unknown,
+            Code::from_i32(99)
+        );
+        crate::test_complete!("test_code_from_i32");
     }
 
     #[test]
     fn test_code_as_str() {
-        assert_eq!(Code::Ok.as_str(), "OK");
-        assert_eq!(Code::InvalidArgument.as_str(), "INVALID_ARGUMENT");
+        init_test("test_code_as_str");
+        let ok = Code::Ok.as_str();
+        crate::assert_with_log!(ok == "OK", "OK", "OK", ok);
+        let invalid = Code::InvalidArgument.as_str();
+        crate::assert_with_log!(
+            invalid == "INVALID_ARGUMENT",
+            "INVALID_ARGUMENT",
+            "INVALID_ARGUMENT",
+            invalid
+        );
+        crate::test_complete!("test_code_as_str");
     }
 
     #[test]
     fn test_status_creation() {
+        init_test("test_status_creation");
         let status = Status::new(Code::NotFound, "resource not found");
-        assert_eq!(status.code(), Code::NotFound);
-        assert_eq!(status.message(), "resource not found");
-        assert!(status.details().is_none());
+        let code = status.code();
+        crate::assert_with_log!(code == Code::NotFound, "code", Code::NotFound, code);
+        let message = status.message();
+        crate::assert_with_log!(message == "resource not found", "message", "resource not found", message);
+        let details = status.details();
+        crate::assert_with_log!(details.is_none(), "details none", true, details.is_none());
+        crate::test_complete!("test_status_creation");
     }
 
     #[test]
     fn test_status_ok() {
+        init_test("test_status_ok");
         let status = Status::ok();
-        assert!(status.is_ok());
-        assert_eq!(status.code(), Code::Ok);
+        let ok = status.is_ok();
+        crate::assert_with_log!(ok, "is ok", true, ok);
+        let code = status.code();
+        crate::assert_with_log!(code == Code::Ok, "code", Code::Ok, code);
+        crate::test_complete!("test_status_ok");
     }
 
     #[test]
     fn test_status_with_details() {
+        init_test("test_status_with_details");
         let details = Bytes::from_static(b"detailed error info");
         let status = Status::with_details(Code::Internal, "error", details.clone());
-        assert_eq!(status.details(), Some(&details));
+        let got = status.details();
+        crate::assert_with_log!(got == Some(&details), "details", Some(&details), got);
+        crate::test_complete!("test_status_with_details");
     }
 
     #[test]
     fn test_grpc_error_into_status() {
+        init_test("test_grpc_error_into_status");
         let error = GrpcError::MessageTooLarge;
         let status = error.into_status();
-        assert_eq!(status.code(), Code::ResourceExhausted);
+        let code = status.code();
+        crate::assert_with_log!(
+            code == Code::ResourceExhausted,
+            "code",
+            Code::ResourceExhausted,
+            code
+        );
+        crate::test_complete!("test_grpc_error_into_status");
     }
 }

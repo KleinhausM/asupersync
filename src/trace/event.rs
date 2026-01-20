@@ -38,6 +38,8 @@ pub enum TraceEventKind {
     TimeAdvance,
     /// A task held obligations but stopped being polled (futurelock).
     FuturelockDetected,
+    /// Chaos injection occurred.
+    ChaosInjection,
     /// User-defined trace point.
     UserTrace,
 }
@@ -107,6 +109,15 @@ pub enum TraceData {
     },
     /// User message.
     Message(String),
+    /// Chaos injection data.
+    Chaos {
+        /// Kind of chaos injected (e.g., "cancel", "delay", "budget_exhaust", "wakeup_storm").
+        kind: String,
+        /// The task affected, if any.
+        task: Option<TaskId>,
+        /// Additional detail.
+        detail: String,
+    },
 }
 
 /// A trace event in the runtime.
@@ -375,6 +386,13 @@ impl fmt::Display for TraceEvent {
                 write!(f, "]")?;
             }
             TraceData::Message(msg) => write!(f, " \"{msg}\"")?,
+            TraceData::Chaos { kind, task, detail } => {
+                write!(f, " chaos:{kind}")?;
+                if let Some(t) = task {
+                    write!(f, " task={t}")?;
+                }
+                write!(f, " {detail}")?;
+            }
         }
         Ok(())
     }

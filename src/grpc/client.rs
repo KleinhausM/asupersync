@@ -443,28 +443,59 @@ impl ClientInterceptor for MetadataInterceptor {
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn test_channel_builder() {
+        init_test("test_channel_builder");
         let builder = Channel::builder("http://localhost:50051")
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .max_recv_message_size(8 * 1024 * 1024);
 
-        assert_eq!(builder.config.connect_timeout, Duration::from_secs(10));
-        assert_eq!(builder.config.timeout, Some(Duration::from_secs(30)));
-        assert_eq!(builder.config.max_recv_message_size, 8 * 1024 * 1024);
+        crate::assert_with_log!(
+            builder.config.connect_timeout == Duration::from_secs(10),
+            "connect_timeout",
+            Duration::from_secs(10),
+            builder.config.connect_timeout
+        );
+        crate::assert_with_log!(
+            builder.config.timeout == Some(Duration::from_secs(30)),
+            "timeout",
+            Some(Duration::from_secs(30)),
+            builder.config.timeout
+        );
+        crate::assert_with_log!(
+            builder.config.max_recv_message_size == 8 * 1024 * 1024,
+            "max_recv_message_size",
+            8 * 1024 * 1024,
+            builder.config.max_recv_message_size
+        );
+        crate::test_complete!("test_channel_builder");
     }
 
     #[test]
     fn test_channel_config_default() {
+        init_test("test_channel_config_default");
         let config = ChannelConfig::default();
-        assert_eq!(config.connect_timeout, Duration::from_secs(5));
-        assert!(config.timeout.is_none());
-        assert!(!config.use_tls);
+        crate::assert_with_log!(
+            config.connect_timeout == Duration::from_secs(5),
+            "connect_timeout",
+            Duration::from_secs(5),
+            config.connect_timeout
+        );
+        let timeout_none = config.timeout.is_none();
+        crate::assert_with_log!(timeout_none, "timeout none", true, timeout_none);
+        crate::assert_with_log!(!config.use_tls, "use_tls", false, config.use_tls);
+        crate::test_complete!("test_channel_config_default");
     }
 
     #[test]
     fn test_metadata_interceptor() {
+        init_test("test_metadata_interceptor");
         let interceptor = MetadataInterceptor::new()
             .with_metadata("x-custom-header", "value")
             .with_metadata("x-another", "value2");
@@ -472,7 +503,10 @@ mod tests {
         let mut request = Request::new(Bytes::new());
         interceptor.intercept(&mut request).unwrap();
 
-        assert!(request.metadata().get("x-custom-header").is_some());
-        assert!(request.metadata().get("x-another").is_some());
+        let has_custom = request.metadata().get("x-custom-header").is_some();
+        crate::assert_with_log!(has_custom, "custom header", true, has_custom);
+        let has_another = request.metadata().get("x-another").is_some();
+        crate::assert_with_log!(has_another, "another header", true, has_another);
+        crate::test_complete!("test_metadata_interceptor");
     }
 }

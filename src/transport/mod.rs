@@ -5,6 +5,7 @@
 
 pub mod aggregator;
 pub mod error;
+pub mod mock;
 pub mod router;
 pub mod sink;
 pub mod stream;
@@ -17,6 +18,10 @@ pub use aggregator::{
     TransportPath,
 };
 pub use error::{SinkError, StreamError};
+pub use mock::{
+    mock_channel, MockChannelSink, MockChannelStream, MockLink, MockNetwork, MockSymbolSink,
+    MockSymbolStream, MockTransportConfig, NodeId,
+};
 pub use router::{
     DispatchConfig, DispatchError, DispatchResult, DispatchStrategy, Endpoint, EndpointId,
     EndpointState, LoadBalanceStrategy, LoadBalancer, RouteKey, RouteResult, RoutingEntry,

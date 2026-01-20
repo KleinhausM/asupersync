@@ -358,192 +358,362 @@ impl HealthServiceBuilder {
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn serving_status_from_i32() {
-        assert_eq!(ServingStatus::from_i32(0), Some(ServingStatus::Unknown));
-        assert_eq!(ServingStatus::from_i32(1), Some(ServingStatus::Serving));
-        assert_eq!(ServingStatus::from_i32(2), Some(ServingStatus::NotServing));
-        assert_eq!(
-            ServingStatus::from_i32(3),
-            Some(ServingStatus::ServiceUnknown)
+        init_test("serving_status_from_i32");
+        crate::assert_with_log!(
+            ServingStatus::from_i32(0) == Some(ServingStatus::Unknown),
+            "0",
+            Some(ServingStatus::Unknown),
+            ServingStatus::from_i32(0)
         );
-        assert_eq!(ServingStatus::from_i32(4), None);
+        crate::assert_with_log!(
+            ServingStatus::from_i32(1) == Some(ServingStatus::Serving),
+            "1",
+            Some(ServingStatus::Serving),
+            ServingStatus::from_i32(1)
+        );
+        crate::assert_with_log!(
+            ServingStatus::from_i32(2) == Some(ServingStatus::NotServing),
+            "2",
+            Some(ServingStatus::NotServing),
+            ServingStatus::from_i32(2)
+        );
+        crate::assert_with_log!(
+            ServingStatus::from_i32(3) == Some(ServingStatus::ServiceUnknown),
+            "3",
+            Some(ServingStatus::ServiceUnknown),
+            ServingStatus::from_i32(3)
+        );
+        let none = ServingStatus::from_i32(4).is_none();
+        crate::assert_with_log!(none, "4 none", true, none);
+        crate::test_complete!("serving_status_from_i32");
     }
 
     #[test]
     fn serving_status_is_healthy() {
-        assert!(!ServingStatus::Unknown.is_healthy());
-        assert!(ServingStatus::Serving.is_healthy());
-        assert!(!ServingStatus::NotServing.is_healthy());
-        assert!(!ServingStatus::ServiceUnknown.is_healthy());
+        init_test("serving_status_is_healthy");
+        let unknown = ServingStatus::Unknown.is_healthy();
+        crate::assert_with_log!(!unknown, "unknown healthy", false, unknown);
+        let serving = ServingStatus::Serving.is_healthy();
+        crate::assert_with_log!(serving, "serving healthy", true, serving);
+        let not_serving = ServingStatus::NotServing.is_healthy();
+        crate::assert_with_log!(!not_serving, "not serving healthy", false, not_serving);
+        let service_unknown = ServingStatus::ServiceUnknown.is_healthy();
+        crate::assert_with_log!(
+            !service_unknown,
+            "service unknown healthy",
+            false,
+            service_unknown
+        );
+        crate::test_complete!("serving_status_is_healthy");
     }
 
     #[test]
     fn serving_status_display() {
-        assert_eq!(ServingStatus::Serving.to_string(), "SERVING");
-        assert_eq!(ServingStatus::NotServing.to_string(), "NOT_SERVING");
+        init_test("serving_status_display");
+        let serving = ServingStatus::Serving.to_string();
+        crate::assert_with_log!(serving == "SERVING", "serving", "SERVING", serving);
+        let not_serving = ServingStatus::NotServing.to_string();
+        crate::assert_with_log!(
+            not_serving == "NOT_SERVING",
+            "not serving",
+            "NOT_SERVING",
+            not_serving
+        );
+        crate::test_complete!("serving_status_display");
     }
 
     #[test]
     fn health_service_set_and_get() {
+        init_test("health_service_set_and_get");
         let service = HealthService::new();
 
         service.set_status("test.Service", ServingStatus::Serving);
-        assert_eq!(
-            service.get_status("test.Service"),
-            Some(ServingStatus::Serving)
+        let status = service.get_status("test.Service");
+        crate::assert_with_log!(
+            status == Some(ServingStatus::Serving),
+            "serving",
+            Some(ServingStatus::Serving),
+            status
         );
 
         service.set_status("test.Service", ServingStatus::NotServing);
-        assert_eq!(
-            service.get_status("test.Service"),
-            Some(ServingStatus::NotServing)
+        let status = service.get_status("test.Service");
+        crate::assert_with_log!(
+            status == Some(ServingStatus::NotServing),
+            "not serving",
+            Some(ServingStatus::NotServing),
+            status
         );
+        crate::test_complete!("health_service_set_and_get");
     }
 
     #[test]
     fn health_service_is_serving() {
+        init_test("health_service_is_serving");
         let service = HealthService::new();
 
-        assert!(!service.is_serving("unknown"));
+        let unknown = service.is_serving("unknown");
+        crate::assert_with_log!(!unknown, "unknown not serving", false, unknown);
 
         service.set_status("test", ServingStatus::Serving);
-        assert!(service.is_serving("test"));
+        let serving = service.is_serving("test");
+        crate::assert_with_log!(serving, "test serving", true, serving);
 
         service.set_status("test", ServingStatus::NotServing);
-        assert!(!service.is_serving("test"));
+        let serving = service.is_serving("test");
+        crate::assert_with_log!(!serving, "test not serving", false, serving);
+        crate::test_complete!("health_service_is_serving");
     }
 
     #[test]
     fn health_service_check() {
+        init_test("health_service_check");
         let service = HealthService::new();
         service.set_status("test.Service", ServingStatus::Serving);
 
         let req = HealthCheckRequest::new("test.Service");
         let resp = service.check(&req).unwrap();
-        assert_eq!(resp.status, ServingStatus::Serving);
+        crate::assert_with_log!(
+            resp.status == ServingStatus::Serving,
+            "serving",
+            ServingStatus::Serving,
+            resp.status
+        );
 
         let req = HealthCheckRequest::new("unknown.Service");
         let err = service.check(&req).unwrap_err();
-        assert_eq!(err.code(), super::super::status::Code::NotFound);
+        let code = err.code();
+        crate::assert_with_log!(
+            code == super::super::status::Code::NotFound,
+            "not found",
+            super::super::status::Code::NotFound,
+            code
+        );
+        crate::test_complete!("health_service_check");
     }
 
     #[test]
     fn health_service_server_status() {
+        init_test("health_service_server_status");
         let service = HealthService::new();
 
         // No services registered
         let req = HealthCheckRequest::server();
         let resp = service.check(&req).unwrap();
-        assert_eq!(resp.status, ServingStatus::ServiceUnknown);
+        crate::assert_with_log!(
+            resp.status == ServingStatus::ServiceUnknown,
+            "service unknown",
+            ServingStatus::ServiceUnknown,
+            resp.status
+        );
 
         // Add a healthy service
         service.set_status("test", ServingStatus::Serving);
         let resp = service.check(&req).unwrap();
-        assert_eq!(resp.status, ServingStatus::Serving);
+        crate::assert_with_log!(
+            resp.status == ServingStatus::Serving,
+            "serving",
+            ServingStatus::Serving,
+            resp.status
+        );
 
         // Add an unhealthy service
         service.set_status("test2", ServingStatus::NotServing);
         let resp = service.check(&req).unwrap();
-        assert_eq!(resp.status, ServingStatus::NotServing);
+        crate::assert_with_log!(
+            resp.status == ServingStatus::NotServing,
+            "not serving",
+            ServingStatus::NotServing,
+            resp.status
+        );
 
         // Explicit server status overrides
         service.set_server_status(ServingStatus::Serving);
         let resp = service.check(&req).unwrap();
-        assert_eq!(resp.status, ServingStatus::Serving);
+        crate::assert_with_log!(
+            resp.status == ServingStatus::Serving,
+            "server serving",
+            ServingStatus::Serving,
+            resp.status
+        );
+        crate::test_complete!("health_service_server_status");
     }
 
     #[test]
     fn health_service_clear() {
+        init_test("health_service_clear");
         let service = HealthService::new();
         service.set_status("a", ServingStatus::Serving);
         service.set_status("b", ServingStatus::Serving);
 
         service.clear_status("a");
-        assert!(service.get_status("a").is_none());
-        assert!(service.get_status("b").is_some());
+        let a_none = service.get_status("a").is_none();
+        crate::assert_with_log!(a_none, "a cleared", true, a_none);
+        let b_some = service.get_status("b").is_some();
+        crate::assert_with_log!(b_some, "b still set", true, b_some);
 
         service.clear();
-        assert!(service.get_status("b").is_none());
+        let b_none = service.get_status("b").is_none();
+        crate::assert_with_log!(b_none, "b cleared", true, b_none);
+        crate::test_complete!("health_service_clear");
     }
 
     #[test]
     fn health_service_services() {
+        init_test("health_service_services");
         let service = HealthService::new();
         service.set_status("a", ServingStatus::Serving);
         service.set_status("b", ServingStatus::NotServing);
 
         let services = service.services();
-        assert!(services.contains(&"a".to_string()));
-        assert!(services.contains(&"b".to_string()));
+        let has_a = services.contains(&"a".to_string());
+        crate::assert_with_log!(has_a, "has a", true, has_a);
+        let has_b = services.contains(&"b".to_string());
+        crate::assert_with_log!(has_b, "has b", true, has_b);
+        crate::test_complete!("health_service_services");
     }
 
     #[test]
     fn health_reporter() {
+        init_test("health_reporter");
         let service = HealthService::new();
         {
             let reporter = HealthReporter::new(service.clone(), "my.Service");
             reporter.set_serving();
-            assert_eq!(reporter.status(), ServingStatus::Serving);
-            assert!(service.is_serving("my.Service"));
+            let status = reporter.status();
+            crate::assert_with_log!(
+                status == ServingStatus::Serving,
+                "serving",
+                ServingStatus::Serving,
+                status
+            );
+            let serving = service.is_serving("my.Service");
+            crate::assert_with_log!(serving, "service serving", true, serving);
         }
         // Service status cleared on drop
-        assert!(service.get_status("my.Service").is_none());
+        let none = service.get_status("my.Service").is_none();
+        crate::assert_with_log!(none, "cleared on drop", true, none);
+        crate::test_complete!("health_reporter");
     }
 
     #[test]
     fn health_service_builder() {
+        init_test("health_service_builder");
         let service = HealthServiceBuilder::new()
             .add("explicit", ServingStatus::NotServing)
             .add_serving(["a", "b", "c"])
             .build();
 
-        assert_eq!(
-            service.get_status("explicit"),
-            Some(ServingStatus::NotServing)
+        let explicit = service.get_status("explicit");
+        crate::assert_with_log!(
+            explicit == Some(ServingStatus::NotServing),
+            "explicit",
+            Some(ServingStatus::NotServing),
+            explicit
         );
-        assert_eq!(service.get_status("a"), Some(ServingStatus::Serving));
-        assert_eq!(service.get_status("b"), Some(ServingStatus::Serving));
-        assert_eq!(service.get_status("c"), Some(ServingStatus::Serving));
+        let a = service.get_status("a");
+        crate::assert_with_log!(
+            a == Some(ServingStatus::Serving),
+            "a",
+            Some(ServingStatus::Serving),
+            a
+        );
+        let b = service.get_status("b");
+        crate::assert_with_log!(
+            b == Some(ServingStatus::Serving),
+            "b",
+            Some(ServingStatus::Serving),
+            b
+        );
+        let c = service.get_status("c");
+        crate::assert_with_log!(
+            c == Some(ServingStatus::Serving),
+            "c",
+            Some(ServingStatus::Serving),
+            c
+        );
+        crate::test_complete!("health_service_builder");
     }
 
     #[test]
     fn health_service_named_service() {
-        assert_eq!(HealthService::NAME, "grpc.health.v1.Health");
+        init_test("health_service_named_service");
+        let name = HealthService::NAME;
+        crate::assert_with_log!(
+            name == "grpc.health.v1.Health",
+            "name",
+            "grpc.health.v1.Health",
+            name
+        );
+        crate::test_complete!("health_service_named_service");
     }
 
     #[test]
     fn health_service_descriptor() {
+        init_test("health_service_descriptor");
         let service = HealthService::new();
         let desc = service.descriptor();
-        assert_eq!(desc.name, "Health");
-        assert_eq!(desc.package, "grpc.health.v1");
-        assert_eq!(desc.methods.len(), 2);
+        crate::assert_with_log!(desc.name == "Health", "name", "Health", desc.name);
+        crate::assert_with_log!(
+            desc.package == "grpc.health.v1",
+            "package",
+            "grpc.health.v1",
+            desc.package
+        );
+        let len = desc.methods.len();
+        crate::assert_with_log!(len == 2, "methods len", 2, len);
+        crate::test_complete!("health_service_descriptor");
     }
 
     #[test]
     fn health_service_method_names() {
+        init_test("health_service_method_names");
         let service = HealthService::new();
         let names = service.method_names();
-        assert!(names.contains(&"Check"));
-        assert!(names.contains(&"Watch"));
+        let has_check = names.contains(&"Check");
+        crate::assert_with_log!(has_check, "has Check", true, has_check);
+        let has_watch = names.contains(&"Watch");
+        crate::assert_with_log!(has_watch, "has Watch", true, has_watch);
+        crate::test_complete!("health_service_method_names");
     }
 
     #[test]
     fn health_check_request_constructors() {
+        init_test("health_check_request_constructors");
         let req = HealthCheckRequest::new("my.Service");
-        assert_eq!(req.service, "my.Service");
+        crate::assert_with_log!(
+            req.service == "my.Service",
+            "service",
+            "my.Service",
+            req.service
+        );
 
         let req = HealthCheckRequest::server();
-        assert_eq!(req.service, "");
+        crate::assert_with_log!(req.service == "", "service", "", req.service);
+        crate::test_complete!("health_check_request_constructors");
     }
 
     #[test]
     fn health_service_clone() {
+        init_test("health_service_clone");
         let service1 = HealthService::new();
         let service2 = service1.clone();
 
         service1.set_status("test", ServingStatus::Serving);
-        assert_eq!(service2.get_status("test"), Some(ServingStatus::Serving));
+        let status = service2.get_status("test");
+        crate::assert_with_log!(
+            status == Some(ServingStatus::Serving),
+            "serving",
+            Some(ServingStatus::Serving),
+            status
+        );
+        crate::test_complete!("health_service_clone");
     }
 }

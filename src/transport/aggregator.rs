@@ -1137,27 +1137,44 @@ mod tests {
         )
     }
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     // Test 1: Path state predicates
     #[test]
     fn test_path_state() {
-        assert!(PathState::Active.is_usable());
-        assert!(PathState::Degraded.is_usable());
-        assert!(!PathState::Unavailable.is_usable());
-        assert!(!PathState::Closed.is_usable());
+        init_test("test_path_state");
+        let active = PathState::Active.is_usable();
+        crate::assert_with_log!(active, "active usable", true, active);
+        let degraded = PathState::Degraded.is_usable();
+        crate::assert_with_log!(degraded, "degraded usable", true, degraded);
+        let unavailable = PathState::Unavailable.is_usable();
+        crate::assert_with_log!(!unavailable, "unavailable not usable", false, unavailable);
+        let closed = PathState::Closed.is_usable();
+        crate::assert_with_log!(!closed, "closed not usable", false, closed);
+        crate::test_complete!("test_path_state");
     }
 
     // Test 2: Path characteristics quality score
     #[test]
     fn test_quality_score() {
+        init_test("test_quality_score");
         let high = PathCharacteristics::high_quality();
         let backup = PathCharacteristics::backup();
 
-        assert!(high.quality_score() > backup.quality_score());
+        let high_score = high.quality_score();
+        let backup_score = backup.quality_score();
+        let higher = high_score > backup_score;
+        crate::assert_with_log!(higher, "high > backup quality", true, higher);
+        crate::test_complete!("test_quality_score");
     }
 
     // Test 3: Path statistics
     #[test]
     fn test_path_statistics() {
+        init_test("test_path_statistics");
         let path = test_path(1);
 
         path.record_receipt(Time::from_secs(1));
@@ -1165,15 +1182,31 @@ mod tests {
         path.record_duplicate();
         path.record_loss();
 
-        assert_eq!(path.symbols_received.load(Ordering::Relaxed), 2);
-        assert_eq!(path.duplicates_received.load(Ordering::Relaxed), 1);
-        assert!(path.duplicate_rate() > 0.0);
-        assert!(path.effective_loss_rate() > 0.0);
+        let received = path.symbols_received.load(Ordering::Relaxed);
+        crate::assert_with_log!(received == 2, "symbols_received", 2, received);
+        let duplicates = path.duplicates_received.load(Ordering::Relaxed);
+        crate::assert_with_log!(duplicates == 1, "duplicates_received", 1, duplicates);
+        let duplicate_rate = path.duplicate_rate();
+        crate::assert_with_log!(
+            duplicate_rate > 0.0,
+            "duplicate_rate > 0",
+            true,
+            duplicate_rate > 0.0
+        );
+        let loss_rate = path.effective_loss_rate();
+        crate::assert_with_log!(
+            loss_rate > 0.0,
+            "effective_loss_rate > 0",
+            true,
+            loss_rate > 0.0
+        );
+        crate::test_complete!("test_path_statistics");
     }
 
     // Test 4: PathSet selection - UseAll
     #[test]
     fn test_path_set_use_all() {
+        init_test("test_path_set_use_all");
         let set = PathSet::new(PathSelectionPolicy::UseAll);
 
         set.register(test_path(1));
@@ -1181,12 +1214,15 @@ mod tests {
         set.register(test_path(3));
 
         let selected = set.select_paths();
-        assert_eq!(selected.len(), 3);
+        let len = selected.len();
+        crate::assert_with_log!(len == 3, "selected len", 3, len);
+        crate::test_complete!("test_path_set_use_all");
     }
 
     // Test 5: PathSet selection - BestQuality
     #[test]
     fn test_path_set_best_quality() {
+        init_test("test_path_set_best_quality");
         let set = PathSet::new(PathSelectionPolicy::BestQuality { count: 2 });
 
         set.register(test_path(1).with_characteristics(PathCharacteristics::high_quality()));
@@ -1194,17 +1230,20 @@ mod tests {
         set.register(test_path(3).with_characteristics(PathCharacteristics::default()));
 
         let selected = set.select_paths();
-        assert_eq!(selected.len(), 2);
+        let len = selected.len();
+        crate::assert_with_log!(len == 2, "selected len", 2, len);
         // First should be high quality
-        assert!(
-            selected[0].characteristics.quality_score()
-                > selected[1].characteristics.quality_score()
-        );
+        let first_score = selected[0].characteristics.quality_score();
+        let second_score = selected[1].characteristics.quality_score();
+        let ordered = first_score > second_score;
+        crate::assert_with_log!(ordered, "quality order", true, ordered);
+        crate::test_complete!("test_path_set_best_quality");
     }
 
     // Test 6: Deduplicator basic operation
     #[test]
     fn test_deduplicator_basic() {
+        init_test("test_deduplicator_basic");
         let dedup = SymbolDeduplicator::new(DeduplicatorConfig::default());
 
         let symbol = Symbol::new_for_test(1, 0, 0, &[1, 2, 3]);
@@ -1212,19 +1251,28 @@ mod tests {
         let now = Time::ZERO;
 
         // First time - not duplicate
-        assert!(dedup.check_and_record(&symbol, path, now));
+        let first = dedup.check_and_record(&symbol, path, now);
+        crate::assert_with_log!(first, "first record", true, first);
 
         // Second time - duplicate
-        assert!(!dedup.check_and_record(&symbol, path, now));
+        let second = dedup.check_and_record(&symbol, path, now);
+        crate::assert_with_log!(!second, "second duplicate", false, second);
 
         let stats = dedup.stats();
-        assert_eq!(stats.unique_symbols, 1);
-        assert_eq!(stats.duplicates_detected, 1);
+        crate::assert_with_log!(stats.unique_symbols == 1, "unique_symbols", 1, stats.unique_symbols);
+        crate::assert_with_log!(
+            stats.duplicates_detected == 1,
+            "duplicates_detected",
+            1,
+            stats.duplicates_detected
+        );
+        crate::test_complete!("test_deduplicator_basic");
     }
 
     // Test 7: Deduplicator tracks first path
     #[test]
     fn test_deduplicator_tracks_path() {
+        init_test("test_deduplicator_tracks_path");
         let config = DeduplicatorConfig {
             track_path: true,
             ..Default::default()
@@ -1239,12 +1287,14 @@ mod tests {
         dedup.check_and_record(&symbol, path2, Time::ZERO); // Duplicate
 
         let first = dedup.first_path(symbol.object_id(), symbol.id());
-        assert_eq!(first, Some(path1));
+        crate::assert_with_log!(first == Some(path1), "first path", Some(path1), first);
+        crate::test_complete!("test_deduplicator_tracks_path");
     }
 
     // Test 8: Reorderer in-order delivery
     #[test]
     fn test_reorderer_in_order() {
+        init_test("test_reorderer_in_order");
         let config = ReordererConfig {
             immediate_delivery: false,
             ..Default::default()
@@ -1263,18 +1313,33 @@ mod tests {
         let ready1 = reorderer.process(s1, path, now);
         let ready2 = reorderer.process(s2, path, now);
 
-        assert_eq!(ready0.len(), 1);
-        assert_eq!(ready1.len(), 1);
-        assert_eq!(ready2.len(), 1);
+        let len0 = ready0.len();
+        crate::assert_with_log!(len0 == 1, "ready0 len", 1, len0);
+        let len1 = ready1.len();
+        crate::assert_with_log!(len1 == 1, "ready1 len", 1, len1);
+        let len2 = ready2.len();
+        crate::assert_with_log!(len2 == 1, "ready2 len", 1, len2);
 
         let stats = reorderer.stats();
-        assert_eq!(stats.in_order_deliveries, 3);
-        assert_eq!(stats.reordered_deliveries, 0);
+        crate::assert_with_log!(
+            stats.in_order_deliveries == 3,
+            "in_order_deliveries",
+            3,
+            stats.in_order_deliveries
+        );
+        crate::assert_with_log!(
+            stats.reordered_deliveries == 0,
+            "reordered_deliveries",
+            0,
+            stats.reordered_deliveries
+        );
+        crate::test_complete!("test_reorderer_in_order");
     }
 
     // Test 9: Reorderer out-of-order buffering
     #[test]
     fn test_reorderer_out_of_order() {
+        init_test("test_reorderer_out_of_order");
         let config = ReordererConfig {
             immediate_delivery: false,
             ..Default::default()
@@ -1290,22 +1355,37 @@ mod tests {
         let s1 = Symbol::new_for_test(1, 0, 1, &[1]);
 
         let ready0 = reorderer.process(s0, path, now);
-        assert_eq!(ready0.len(), 1); // s0 delivered
+        let len0 = ready0.len();
+        crate::assert_with_log!(len0 == 1, "ready0 len", 1, len0); // s0 delivered
 
         let ready2 = reorderer.process(s2, path, now);
-        assert_eq!(ready2.len(), 0); // s2 buffered, waiting for s1
+        let len2 = ready2.len();
+        crate::assert_with_log!(len2 == 0, "ready2 len", 0, len2); // s2 buffered, waiting for s1
 
         let ready1 = reorderer.process(s1, path, now);
-        assert_eq!(ready1.len(), 2); // s1 and s2 delivered
+        let len1 = ready1.len();
+        crate::assert_with_log!(len1 == 2, "ready1 len", 2, len1); // s1 and s2 delivered
 
         let stats = reorderer.stats();
-        assert_eq!(stats.in_order_deliveries, 2);
-        assert_eq!(stats.reordered_deliveries, 1);
+        crate::assert_with_log!(
+            stats.in_order_deliveries == 2,
+            "in_order_deliveries",
+            2,
+            stats.in_order_deliveries
+        );
+        crate::assert_with_log!(
+            stats.reordered_deliveries == 1,
+            "reordered_deliveries",
+            1,
+            stats.reordered_deliveries
+        );
+        crate::test_complete!("test_reorderer_out_of_order");
     }
 
     // Test 10: Reorderer timeout flush
     #[test]
     fn test_reorderer_timeout() {
+        init_test("test_reorderer_timeout");
         let config = ReordererConfig {
             immediate_delivery: false,
             max_wait_time: Time::from_millis(100),
@@ -1324,16 +1404,20 @@ mod tests {
 
         // Before timeout
         let flushed = reorderer.flush_timeouts(Time::from_millis(50));
-        assert_eq!(flushed.len(), 0);
+        let len_before = flushed.len();
+        crate::assert_with_log!(len_before == 0, "flushed before len", 0, len_before);
 
         // After timeout
         let flushed = reorderer.flush_timeouts(Time::from_millis(200));
-        assert_eq!(flushed.len(), 1); // s2 flushed
+        let len_after = flushed.len();
+        crate::assert_with_log!(len_after == 1, "flushed after len", 1, len_after); // s2 flushed
+        crate::test_complete!("test_reorderer_timeout");
     }
 
     // Test 11: MultipathAggregator basic flow
     #[test]
     fn test_aggregator_basic() {
+        init_test("test_aggregator_basic");
         let config = AggregatorConfig::default();
         let aggregator = MultipathAggregator::new(config);
 
@@ -1346,17 +1430,30 @@ mod tests {
         let symbol = Symbol::new_for_test(1, 0, 0, &[1, 2, 3]);
 
         let result = aggregator.process(symbol.clone(), path, Time::ZERO);
-        assert!(!result.was_duplicate);
+        crate::assert_with_log!(
+            !result.was_duplicate,
+            "first not duplicate",
+            false,
+            result.was_duplicate
+        );
 
         // Duplicate
         let result2 = aggregator.process(symbol, path, Time::ZERO);
-        assert!(result2.was_duplicate);
-        assert!(result2.ready.is_empty());
+        crate::assert_with_log!(
+            result2.was_duplicate,
+            "duplicate flagged",
+            true,
+            result2.was_duplicate
+        );
+        let ready_empty = result2.ready.is_empty();
+        crate::assert_with_log!(ready_empty, "ready empty", true, ready_empty);
+        crate::test_complete!("test_aggregator_basic");
     }
 
     // Test 12: MultipathAggregator object completion
     #[test]
     fn test_aggregator_object_complete() {
+        init_test("test_aggregator_object_complete");
         let config = AggregatorConfig::default();
         let aggregator = MultipathAggregator::new(config);
 
@@ -1376,12 +1473,19 @@ mod tests {
 
         // Same symbol is now "new" again
         let result = aggregator.process(symbol, path, Time::ZERO);
-        assert!(!result.was_duplicate);
+        crate::assert_with_log!(
+            !result.was_duplicate,
+            "post-complete not duplicate",
+            false,
+            result.was_duplicate
+        );
+        crate::test_complete!("test_aggregator_object_complete");
     }
 
     // Test 13: PathSet aggregate stats
     #[test]
     fn test_path_set_stats() {
+        init_test("test_path_set_stats");
         let set = PathSet::new(PathSelectionPolicy::UseAll);
 
         let p1 = set.create_path(
@@ -1409,14 +1513,26 @@ mod tests {
         }
 
         let stats = set.stats();
-        assert_eq!(stats.path_count, 2);
-        assert_eq!(stats.total_received, 300);
-        assert_eq!(stats.aggregate_bandwidth_bps, 3_000_000);
+        crate::assert_with_log!(stats.path_count == 2, "path_count", 2, stats.path_count);
+        crate::assert_with_log!(
+            stats.total_received == 300,
+            "total_received",
+            300,
+            stats.total_received
+        );
+        crate::assert_with_log!(
+            stats.aggregate_bandwidth_bps == 3_000_000,
+            "aggregate_bandwidth_bps",
+            3_000_000,
+            stats.aggregate_bandwidth_bps
+        );
+        crate::test_complete!("test_path_set_stats");
     }
 
     // Test 14: Immediate delivery mode
     #[test]
     fn test_immediate_delivery() {
+        init_test("test_immediate_delivery");
         let config = ReordererConfig {
             immediate_delivery: true,
             ..Default::default()
@@ -1427,12 +1543,15 @@ mod tests {
         let s5 = Symbol::new_for_test(1, 0, 5, &[5]);
         let ready = reorderer.process(s5, PathId(1), Time::ZERO);
 
-        assert_eq!(ready.len(), 1);
+        let len = ready.len();
+        crate::assert_with_log!(len == 1, "ready len", 1, len);
+        crate::test_complete!("test_immediate_delivery");
     }
 
     // Test 15: Aggregator stats
     #[test]
     fn test_aggregator_stats() {
+        init_test("test_aggregator_stats");
         let config = AggregatorConfig::default();
         let aggregator = MultipathAggregator::new(config);
 
@@ -1448,7 +1567,18 @@ mod tests {
         }
 
         let stats = aggregator.stats();
-        assert_eq!(stats.total_processed, 10);
-        assert_eq!(stats.paths.path_count, 1);
+        crate::assert_with_log!(
+            stats.total_processed == 10,
+            "total_processed",
+            10,
+            stats.total_processed
+        );
+        crate::assert_with_log!(
+            stats.paths.path_count == 1,
+            "path_count",
+            1,
+            stats.paths.path_count
+        );
+        crate::test_complete!("test_aggregator_stats");
     }
 }

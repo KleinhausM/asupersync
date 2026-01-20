@@ -517,46 +517,66 @@ mod tests {
     use super::*;
     use crate::grpc::Code;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn interceptor_layer_empty() {
+        init_test("interceptor_layer_empty");
         let layer = InterceptorLayer::new();
-        assert!(layer.is_empty());
-        assert_eq!(layer.len(), 0);
+        let empty = layer.is_empty();
+        crate::assert_with_log!(empty, "empty", true, empty);
+        let len = layer.len();
+        crate::assert_with_log!(len == 0, "len", 0, len);
+        crate::test_complete!("interceptor_layer_empty");
     }
 
     #[test]
     fn interceptor_layer_chain() {
+        init_test("interceptor_layer_chain");
         let layer = InterceptorLayer::new()
             .layer(trace_interceptor())
             .layer(logging_interceptor());
 
-        assert!(!layer.is_empty());
-        assert_eq!(layer.len(), 2);
+        let empty = layer.is_empty();
+        crate::assert_with_log!(!empty, "not empty", false, empty);
+        let len = layer.len();
+        crate::assert_with_log!(len == 2, "len", 2, len);
+        crate::test_complete!("interceptor_layer_chain");
     }
 
     #[test]
     fn interceptor_layer_request() {
+        init_test("interceptor_layer_request");
         let layer = InterceptorLayer::new().layer(trace_interceptor());
 
         let mut request = Request::new(Bytes::new());
         layer.intercept_request(&mut request).unwrap();
 
-        assert!(request.metadata().get("x-request-id").is_some());
+        let has_id = request.metadata().get("x-request-id").is_some();
+        crate::assert_with_log!(has_id, "request id", true, has_id);
+        crate::test_complete!("interceptor_layer_request");
     }
 
     #[test]
     fn bearer_auth_interceptor() {
+        init_test("bearer_auth_interceptor");
         let interceptor = auth_bearer_interceptor("my-token");
 
         let mut request = Request::new(Bytes::new());
         interceptor.intercept_request(&mut request).unwrap();
 
         let auth = request.metadata().get("authorization").unwrap();
-        assert!(matches!(auth, MetadataValue::Ascii(s) if s == "Bearer my-token"));
+        let ok = matches!(auth, MetadataValue::Ascii(s) if s == "Bearer my-token");
+        crate::assert_with_log!(ok, "auth header", true, ok);
+        crate::test_complete!("bearer_auth_interceptor");
     }
 
     #[test]
     fn bearer_auth_validator_success() {
+        init_test("bearer_auth_validator_success");
         let interceptor = auth_validator(|token| token == "valid-token");
 
         let mut request = Request::new(Bytes::new());
@@ -564,11 +584,14 @@ mod tests {
             .metadata_mut()
             .insert("authorization", "Bearer valid-token");
 
-        assert!(interceptor.intercept_request(&mut request).is_ok());
+        let ok = interceptor.intercept_request(&mut request).is_ok();
+        crate::assert_with_log!(ok, "intercept ok", true, ok);
+        crate::test_complete!("bearer_auth_validator_success");
     }
 
     #[test]
     fn bearer_auth_validator_invalid() {
+        init_test("bearer_auth_validator_invalid");
         let interceptor = auth_validator(|token| token == "valid-token");
 
         let mut request = Request::new(Bytes::new());
@@ -577,20 +600,36 @@ mod tests {
             .insert("authorization", "Bearer invalid-token");
 
         let err = interceptor.intercept_request(&mut request).unwrap_err();
-        assert_eq!(err.code(), Code::Unauthenticated);
+        let code = err.code();
+        crate::assert_with_log!(
+            code == Code::Unauthenticated,
+            "code",
+            Code::Unauthenticated,
+            code
+        );
+        crate::test_complete!("bearer_auth_validator_invalid");
     }
 
     #[test]
     fn bearer_auth_validator_missing() {
+        init_test("bearer_auth_validator_missing");
         let interceptor = auth_validator(|_| true);
 
         let mut request = Request::new(Bytes::new());
         let err = interceptor.intercept_request(&mut request).unwrap_err();
-        assert_eq!(err.code(), Code::Unauthenticated);
+        let code = err.code();
+        crate::assert_with_log!(
+            code == Code::Unauthenticated,
+            "code",
+            Code::Unauthenticated,
+            code
+        );
+        crate::test_complete!("bearer_auth_validator_missing");
     }
 
     #[test]
     fn metadata_propagator_marks_keys() {
+        init_test("metadata_propagator_marks_keys");
         let interceptor = metadata_propagator(["x-request-id", "x-trace-id"]);
 
         let mut request = Request::new(Bytes::new());
@@ -600,66 +639,92 @@ mod tests {
         interceptor.intercept_request(&mut request).unwrap();
 
         // Check that propagation keys are marked
-        assert!(request.metadata().get("x-propagate-keys").is_some());
+        let has_keys = request.metadata().get("x-propagate-keys").is_some();
+        crate::assert_with_log!(has_keys, "propagate keys", true, has_keys);
+        crate::test_complete!("metadata_propagator_marks_keys");
     }
 
     #[test]
     fn rate_limiter_allows_under_limit() {
+        init_test("rate_limiter_allows_under_limit");
         let interceptor = rate_limiter(10);
 
         for _ in 0..10 {
             let mut request = Request::new(Bytes::new());
-            assert!(interceptor.intercept_request(&mut request).is_ok());
+            let ok = interceptor.intercept_request(&mut request).is_ok();
+            crate::assert_with_log!(ok, "intercept ok", true, ok);
         }
 
-        assert_eq!(interceptor.current_count(), 10);
+        let count = interceptor.current_count();
+        crate::assert_with_log!(count == 10, "count", 10, count);
+        crate::test_complete!("rate_limiter_allows_under_limit");
     }
 
     #[test]
     fn rate_limiter_rejects_over_limit() {
+        init_test("rate_limiter_rejects_over_limit");
         let interceptor = rate_limiter(2);
 
         let mut request = Request::new(Bytes::new());
-        assert!(interceptor.intercept_request(&mut request).is_ok());
+        let ok = interceptor.intercept_request(&mut request).is_ok();
+        crate::assert_with_log!(ok, "first ok", true, ok);
 
         let mut request = Request::new(Bytes::new());
-        assert!(interceptor.intercept_request(&mut request).is_ok());
+        let ok = interceptor.intercept_request(&mut request).is_ok();
+        crate::assert_with_log!(ok, "second ok", true, ok);
 
         let mut request = Request::new(Bytes::new());
         let err = interceptor.intercept_request(&mut request).unwrap_err();
-        assert_eq!(err.code(), Code::ResourceExhausted);
+        let code = err.code();
+        crate::assert_with_log!(
+            code == Code::ResourceExhausted,
+            "code",
+            Code::ResourceExhausted,
+            code
+        );
+        crate::test_complete!("rate_limiter_rejects_over_limit");
     }
 
     #[test]
     fn rate_limiter_reset() {
+        init_test("rate_limiter_reset");
         let interceptor = rate_limiter(1);
 
         let mut request = Request::new(Bytes::new());
-        assert!(interceptor.intercept_request(&mut request).is_ok());
+        let ok = interceptor.intercept_request(&mut request).is_ok();
+        crate::assert_with_log!(ok, "first ok", true, ok);
 
         let mut request = Request::new(Bytes::new());
-        assert!(interceptor.intercept_request(&mut request).is_err());
+        let err = interceptor.intercept_request(&mut request).is_err();
+        crate::assert_with_log!(err, "second err", true, err);
 
         interceptor.reset();
-        assert_eq!(interceptor.current_count(), 0);
+        let count = interceptor.current_count();
+        crate::assert_with_log!(count == 0, "count", 0, count);
 
         let mut request = Request::new(Bytes::new());
-        assert!(interceptor.intercept_request(&mut request).is_ok());
+        let ok = interceptor.intercept_request(&mut request).is_ok();
+        crate::assert_with_log!(ok, "after reset ok", true, ok);
+        crate::test_complete!("rate_limiter_reset");
     }
 
     #[test]
     fn timeout_interceptor_adds_header() {
+        init_test("timeout_interceptor_adds_header");
         let interceptor = timeout_interceptor(5000);
 
         let mut request = Request::new(Bytes::new());
         interceptor.intercept_request(&mut request).unwrap();
 
         let timeout = request.metadata().get("grpc-timeout").unwrap();
-        assert!(matches!(timeout, MetadataValue::Ascii(s) if s == "5000m"));
+        let ok = matches!(timeout, MetadataValue::Ascii(s) if s == "5000m");
+        crate::assert_with_log!(ok, "timeout header", true, ok);
+        crate::test_complete!("timeout_interceptor_adds_header");
     }
 
     #[test]
     fn timeout_interceptor_preserves_existing() {
+        init_test("timeout_interceptor_preserves_existing");
         let interceptor = timeout_interceptor(5000);
 
         let mut request = Request::new(Bytes::new());
@@ -668,11 +733,14 @@ mod tests {
         interceptor.intercept_request(&mut request).unwrap();
 
         let timeout = request.metadata().get("grpc-timeout").unwrap();
-        assert!(matches!(timeout, MetadataValue::Ascii(s) if s == "1000m"));
+        let ok = matches!(timeout, MetadataValue::Ascii(s) if s == "1000m");
+        crate::assert_with_log!(ok, "timeout header", true, ok);
+        crate::test_complete!("timeout_interceptor_preserves_existing");
     }
 
     #[test]
     fn fn_interceptor_custom() {
+        init_test("fn_interceptor_custom");
         let interceptor = fn_interceptor(|request: &mut Request<Bytes>| {
             request.metadata_mut().insert("x-custom", "value");
             Ok(())
@@ -682,37 +750,48 @@ mod tests {
         interceptor.intercept_request(&mut request).unwrap();
 
         let value = request.metadata().get("x-custom").unwrap();
-        assert!(matches!(value, MetadataValue::Ascii(s) if s == "value"));
+        let ok = matches!(value, MetadataValue::Ascii(s) if s == "value");
+        crate::assert_with_log!(ok, "custom header", true, ok);
+        crate::test_complete!("fn_interceptor_custom");
     }
 
     #[test]
     fn logging_interceptor_marks_request() {
+        init_test("logging_interceptor_marks_request");
         let interceptor = logging_interceptor();
 
         let mut request = Request::new(Bytes::new());
         interceptor.intercept_request(&mut request).unwrap();
 
-        assert!(request.metadata().get("x-logged").is_some());
+        let logged = request.metadata().get("x-logged").is_some();
+        crate::assert_with_log!(logged, "logged header", true, logged);
+        crate::test_complete!("logging_interceptor_marks_request");
     }
 
     #[test]
     fn logging_interceptor_marks_response() {
+        init_test("logging_interceptor_marks_response");
         let interceptor = logging_interceptor();
 
         let mut response = Response::new(Bytes::new());
         interceptor.intercept_response(&mut response).unwrap();
 
-        assert!(response.metadata().get("x-logged").is_some());
+        let logged = response.metadata().get("x-logged").is_some();
+        crate::assert_with_log!(logged, "logged header", true, logged);
+        crate::test_complete!("logging_interceptor_marks_response");
     }
 
     #[test]
     fn tracing_interceptor_generates_request_id() {
+        init_test("tracing_interceptor_generates_request_id");
         let interceptor = trace_interceptor();
 
         let mut request = Request::new(Bytes::new());
         interceptor.intercept_request(&mut request).unwrap();
 
         let id = request.metadata().get("x-request-id").unwrap();
-        assert!(matches!(id, MetadataValue::Ascii(s) if s.starts_with("req-")));
+        let ok = matches!(id, MetadataValue::Ascii(s) if s.starts_with("req-"));
+        crate::assert_with_log!(ok, "request id", true, ok);
+        crate::test_complete!("tracing_interceptor_generates_request_id");
     }
 }

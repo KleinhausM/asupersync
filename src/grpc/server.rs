@@ -333,6 +333,11 @@ mod tests {
     use super::*;
     use crate::grpc::service::ServiceDescriptor;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     struct TestService;
 
     impl NamedService for TestService {
@@ -352,46 +357,65 @@ mod tests {
 
     #[test]
     fn test_server_builder() {
+        init_test("test_server_builder");
         let server = Server::builder()
             .max_recv_message_size(1024 * 1024)
             .max_concurrent_streams(50)
             .add_service(TestService)
             .build();
 
-        assert_eq!(server.config().max_recv_message_size, 1024 * 1024);
-        assert_eq!(server.config().max_concurrent_streams, 50);
-        assert!(server.get_service("test.TestService").is_some());
+        let max_recv = server.config().max_recv_message_size;
+        crate::assert_with_log!(max_recv == 1024 * 1024, "max_recv", 1024 * 1024, max_recv);
+        let max_streams = server.config().max_concurrent_streams;
+        crate::assert_with_log!(max_streams == 50, "max_streams", 50, max_streams);
+        let has_service = server.get_service("test.TestService").is_some();
+        crate::assert_with_log!(has_service, "service exists", true, has_service);
+        crate::test_complete!("test_server_builder");
     }
 
     #[test]
     fn test_server_service_names() {
+        init_test("test_server_service_names");
         let server = Server::builder().add_service(TestService).build();
 
         let names = server.service_names();
-        assert!(names.contains(&"test.TestService"));
+        let contains = names.contains(&"test.TestService");
+        crate::assert_with_log!(contains, "contains service name", true, contains);
+        crate::test_complete!("test_server_service_names");
     }
 
     #[test]
     fn test_call_context() {
+        init_test("test_call_context");
         let ctx = CallContext::new();
-        assert!(ctx.metadata().is_empty());
-        assert!(ctx.deadline().is_none());
-        assert!(ctx.peer_addr().is_none());
-        assert!(!ctx.is_expired());
+        let meta_empty = ctx.metadata().is_empty();
+        crate::assert_with_log!(meta_empty, "metadata empty", true, meta_empty);
+        let deadline_none = ctx.deadline().is_none();
+        crate::assert_with_log!(deadline_none, "deadline none", true, deadline_none);
+        let peer_none = ctx.peer_addr().is_none();
+        crate::assert_with_log!(peer_none, "peer none", true, peer_none);
+        let expired = ctx.is_expired();
+        crate::assert_with_log!(!expired, "not expired", false, expired);
+        crate::test_complete!("test_call_context");
     }
 
     #[test]
     fn test_noop_interceptor() {
+        init_test("test_noop_interceptor");
         let interceptor = NoopInterceptor;
         let mut request = Request::new(Bytes::new());
-        assert!(interceptor.intercept_request(&mut request).is_ok());
+        let ok = interceptor.intercept_request(&mut request).is_ok();
+        crate::assert_with_log!(ok, "request ok", true, ok);
 
         let mut response = Response::new(Bytes::new());
-        assert!(interceptor.intercept_response(&mut response).is_ok());
+        let ok = interceptor.intercept_response(&mut response).is_ok();
+        crate::assert_with_log!(ok, "response ok", true, ok);
+        crate::test_complete!("test_noop_interceptor");
     }
 
     #[test]
     fn test_auth_interceptor() {
+        init_test("test_auth_interceptor");
         let interceptor = AuthInterceptor::new(|metadata| {
             if metadata.get("authorization").is_some() {
                 Ok(())
@@ -402,12 +426,15 @@ mod tests {
 
         // Request without auth
         let mut request = Request::new(Bytes::new());
-        assert!(interceptor.intercept_request(&mut request).is_err());
+        let err = interceptor.intercept_request(&mut request).is_err();
+        crate::assert_with_log!(err, "missing auth err", true, err);
 
         // Request with auth
         request
             .metadata_mut()
             .insert("authorization", "Bearer token");
-        assert!(interceptor.intercept_request(&mut request).is_ok());
+        let ok = interceptor.intercept_request(&mut request).is_ok();
+        crate::assert_with_log!(ok, "auth ok", true, ok);
+        crate::test_complete!("test_auth_interceptor");
     }
 }

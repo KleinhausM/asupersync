@@ -459,42 +459,66 @@ mod tests {
     use std::sync::Arc;
     use std::task::Wake;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn wheel_register_and_fire() {
+        init_test("wheel_register_and_fire");
         let mut wheel = TimerWheel::new();
         let counter = Arc::new(AtomicU64::new(0));
         let waker = counter_waker(counter.clone());
 
         wheel.register(Time::from_millis(5), waker);
 
-        assert!(wheel.collect_expired(Time::from_millis(2)).is_empty());
+        let early = wheel.collect_expired(Time::from_millis(2));
+        crate::assert_with_log!(early.is_empty(), "no early fire", true, early.len());
         let wakers = wheel.collect_expired(Time::from_millis(5));
-        assert_eq!(wakers.len(), 1);
+        crate::assert_with_log!(
+            wakers.len() == 1,
+            "fires at deadline",
+            1,
+            wakers.len()
+        );
 
         for waker in wakers {
             waker.wake();
         }
 
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        assert!(wheel.is_empty());
+        let count = counter.load(Ordering::SeqCst);
+        crate::assert_with_log!(count == 1, "counter", 1, count);
+        crate::assert_with_log!(
+            wheel.is_empty(),
+            "wheel empty",
+            true,
+            wheel.is_empty()
+        );
+        crate::test_complete!("wheel_register_and_fire");
     }
 
     #[test]
     fn wheel_cancel_prevents_fire() {
+        init_test("wheel_cancel_prevents_fire");
         let mut wheel = TimerWheel::new();
         let counter = Arc::new(AtomicU64::new(0));
         let waker = counter_waker(counter.clone());
 
         let handle = wheel.register(Time::from_millis(5), waker);
-        assert!(wheel.cancel(&handle));
+        let cancelled = wheel.cancel(&handle);
+        crate::assert_with_log!(cancelled, "cancelled", true, cancelled);
 
         let wakers = wheel.collect_expired(Time::from_millis(10));
-        assert!(wakers.is_empty());
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        crate::assert_with_log!(wakers.is_empty(), "no fire", true, wakers.len());
+        let count = counter.load(Ordering::SeqCst);
+        crate::assert_with_log!(count == 0, "counter", 0, count);
+        crate::test_complete!("wheel_cancel_prevents_fire");
     }
 
     #[test]
     fn wheel_overflow_promotes_when_in_range() {
+        init_test("wheel_overflow_promotes_when_in_range");
         let mut wheel = TimerWheel::new();
         let waker = counter_waker(Arc::new(AtomicU64::new(0)));
 
@@ -502,7 +526,13 @@ mod tests {
         wheel.register(far, waker);
 
         let wakers = wheel.collect_expired(far);
-        assert_eq!(wakers.len(), 1);
+        crate::assert_with_log!(
+            wakers.len() == 1,
+            "fires after overflow promotion",
+            1,
+            wakers.len()
+        );
+        crate::test_complete!("wheel_overflow_promotes_when_in_range");
     }
 
     struct CounterWaker {
@@ -525,6 +555,7 @@ mod tests {
 
     #[test]
     fn wheel_advance_large_jump() {
+        init_test("wheel_advance_large_jump");
         let mut wheel = TimerWheel::new();
         let counter = Arc::new(AtomicU64::new(0));
         let waker = counter_waker(counter.clone());
@@ -537,11 +568,23 @@ mod tests {
         let wakers = wheel.collect_expired(one_hour);
 
         // Should fire
-        assert_eq!(wakers.len(), 1);
+        crate::assert_with_log!(
+            wakers.len() == 1,
+            "fires after large jump",
+            1,
+            wakers.len()
+        );
         for waker in wakers {
             waker.wake();
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        assert!(wheel.is_empty());
+        let count = counter.load(Ordering::SeqCst);
+        crate::assert_with_log!(count == 1, "counter", 1, count);
+        crate::assert_with_log!(
+            wheel.is_empty(),
+            "wheel empty",
+            true,
+            wheel.is_empty()
+        );
+        crate::test_complete!("wheel_advance_large_jump");
     }
 }

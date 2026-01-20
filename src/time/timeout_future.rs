@@ -253,6 +253,7 @@ pub fn timeout_at<F>(deadline: Time, future: F) -> TimeoutFuture<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_logging;
     use std::future::{pending, ready};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::task::Waker;
@@ -261,30 +262,63 @@ mod tests {
     // Construction Tests
     // =========================================================================
 
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn new_creates_timeout() {
+        init_test("new_creates_timeout");
         let future = ready(42);
         let timeout = TimeoutFuture::new(future, Time::from_secs(5));
-        assert_eq!(timeout.deadline(), Time::from_secs(5));
+        crate::assert_with_log!(
+            timeout.deadline() == Time::from_secs(5),
+            "deadline",
+            Time::from_secs(5),
+            timeout.deadline()
+        );
+        crate::test_complete!("new_creates_timeout");
     }
 
     #[test]
     fn after_computes_deadline() {
+        init_test("after_computes_deadline");
         let future = ready(42);
         let timeout = TimeoutFuture::after(Time::from_secs(10), Duration::from_secs(5), future);
-        assert_eq!(timeout.deadline(), Time::from_secs(15));
+        crate::assert_with_log!(
+            timeout.deadline() == Time::from_secs(15),
+            "deadline",
+            Time::from_secs(15),
+            timeout.deadline()
+        );
+        crate::test_complete!("after_computes_deadline");
     }
 
     #[test]
     fn timeout_function() {
+        init_test("timeout_function");
         let t = timeout(Time::from_secs(10), Duration::from_secs(3), ready(42));
-        assert_eq!(t.deadline(), Time::from_secs(13));
+        crate::assert_with_log!(
+            t.deadline() == Time::from_secs(13),
+            "deadline",
+            Time::from_secs(13),
+            t.deadline()
+        );
+        crate::test_complete!("timeout_function");
     }
 
     #[test]
     fn timeout_at_function() {
+        init_test("timeout_at_function");
         let t = timeout_at(Time::from_secs(42), ready(123));
-        assert_eq!(t.deadline(), Time::from_secs(42));
+        crate::assert_with_log!(
+            t.deadline() == Time::from_secs(42),
+            "deadline",
+            Time::from_secs(42),
+            t.deadline()
+        );
+        crate::test_complete!("timeout_at_function");
     }
 
     // =========================================================================
@@ -293,45 +327,82 @@ mod tests {
 
     #[test]
     fn remaining_before_deadline() {
+        init_test("remaining_before_deadline");
         let t = TimeoutFuture::new(ready(42), Time::from_secs(10));
         let remaining = t.remaining(Time::from_secs(7));
-        assert_eq!(remaining, Duration::from_secs(3));
+        crate::assert_with_log!(
+            remaining == Duration::from_secs(3),
+            "remaining",
+            Duration::from_secs(3),
+            remaining
+        );
+        crate::test_complete!("remaining_before_deadline");
     }
 
     #[test]
     fn remaining_after_deadline() {
+        init_test("remaining_after_deadline");
         let t = TimeoutFuture::new(ready(42), Time::from_secs(10));
         let remaining = t.remaining(Time::from_secs(15));
-        assert_eq!(remaining, Duration::ZERO);
+        crate::assert_with_log!(
+            remaining == Duration::ZERO,
+            "remaining",
+            Duration::ZERO,
+            remaining
+        );
+        crate::test_complete!("remaining_after_deadline");
     }
 
     #[test]
     fn is_elapsed() {
+        init_test("is_elapsed");
         let t = TimeoutFuture::new(ready(42), Time::from_secs(10));
-        assert!(!t.is_elapsed(Time::from_secs(5)));
-        assert!(t.is_elapsed(Time::from_secs(10)));
-        assert!(t.is_elapsed(Time::from_secs(15)));
+        crate::assert_with_log!(
+            !t.is_elapsed(Time::from_secs(5)),
+            "not elapsed at t=5",
+            false,
+            t.is_elapsed(Time::from_secs(5))
+        );
+        crate::assert_with_log!(
+            t.is_elapsed(Time::from_secs(10)),
+            "elapsed at t=10",
+            true,
+            t.is_elapsed(Time::from_secs(10))
+        );
+        crate::assert_with_log!(
+            t.is_elapsed(Time::from_secs(15)),
+            "elapsed at t=15",
+            true,
+            t.is_elapsed(Time::from_secs(15))
+        );
+        crate::test_complete!("is_elapsed");
     }
 
     #[test]
     fn inner() {
+        init_test("inner");
         let future = ready(42);
         let t = TimeoutFuture::new(future, Time::from_secs(5));
         let _ = t.inner(); // Just check it compiles
+        crate::test_complete!("inner");
     }
 
     #[test]
     fn inner_mut() {
+        init_test("inner_mut");
         let future = ready(42);
         let mut t = TimeoutFuture::new(future, Time::from_secs(5));
         let _inner = t.inner_mut(); // Just check it compiles
+        crate::test_complete!("inner_mut");
     }
 
     #[test]
     fn into_inner() {
+        init_test("into_inner");
         let future = ready(42);
         let t = TimeoutFuture::new(future, Time::from_secs(5));
         let _inner = t.into_inner();
+        crate::test_complete!("into_inner");
     }
 
     // =========================================================================
@@ -340,16 +411,30 @@ mod tests {
 
     #[test]
     fn reset_changes_deadline() {
+        init_test("reset_changes_deadline");
         let mut t = TimeoutFuture::new(ready(42), Time::from_secs(5));
         t.reset(Time::from_secs(10));
-        assert_eq!(t.deadline(), Time::from_secs(10));
+        crate::assert_with_log!(
+            t.deadline() == Time::from_secs(10),
+            "deadline",
+            Time::from_secs(10),
+            t.deadline()
+        );
+        crate::test_complete!("reset_changes_deadline");
     }
 
     #[test]
     fn reset_after_changes_deadline() {
+        init_test("reset_after_changes_deadline");
         let mut t = TimeoutFuture::new(ready(42), Time::from_secs(5));
         t.reset_after(Time::from_secs(3), Duration::from_secs(7));
-        assert_eq!(t.deadline(), Time::from_secs(10));
+        crate::assert_with_log!(
+            t.deadline() == Time::from_secs(10),
+            "deadline",
+            Time::from_secs(10),
+            t.deadline()
+        );
+        crate::test_complete!("reset_after_changes_deadline");
     }
 
     // =========================================================================
@@ -358,61 +443,80 @@ mod tests {
 
     #[test]
     fn poll_with_time_future_completes() {
+        init_test("poll_with_time_future_completes");
         let mut t = TimeoutFuture::new(ready(42), Time::from_secs(10));
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
         // Time is before deadline, future is ready
         let result = t.poll_with_time(Time::from_secs(5), &mut cx);
-        assert!(matches!(result, Poll::Ready(Ok(42))));
+        let ready = matches!(result, Poll::Ready(Ok(42)));
+        crate::assert_with_log!(ready, "ready ok", true, ready);
+        crate::test_complete!("poll_with_time_future_completes");
     }
 
     #[test]
     fn poll_with_time_timeout_elapsed() {
+        init_test("poll_with_time_timeout_elapsed");
         let mut t = TimeoutFuture::new(pending::<i32>(), Time::from_secs(10));
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
         // Time is past deadline
         let result = t.poll_with_time(Time::from_secs(15), &mut cx);
-        assert!(matches!(result, Poll::Ready(Err(_))));
+        let elapsed = matches!(result, Poll::Ready(Err(_)));
+        crate::assert_with_log!(elapsed, "elapsed", true, elapsed);
 
         if let Poll::Ready(Err(elapsed)) = result {
-            assert_eq!(elapsed.deadline(), Time::from_secs(10));
+            crate::assert_with_log!(
+                elapsed.deadline() == Time::from_secs(10),
+                "deadline",
+                Time::from_secs(10),
+                elapsed.deadline()
+            );
         }
+        crate::test_complete!("poll_with_time_timeout_elapsed");
     }
 
     #[test]
     fn poll_with_time_pending() {
+        init_test("poll_with_time_pending");
         let mut t = TimeoutFuture::new(pending::<i32>(), Time::from_secs(10));
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
         // Time is before deadline, future is pending
         let result = t.poll_with_time(Time::from_secs(5), &mut cx);
-        assert!(result.is_pending());
+        crate::assert_with_log!(result.is_pending(), "pending", true, result.is_pending());
+        crate::test_complete!("poll_with_time_pending");
     }
 
     #[test]
     fn poll_with_time_at_exact_deadline() {
+        init_test("poll_with_time_at_exact_deadline");
         let mut t = TimeoutFuture::new(pending::<i32>(), Time::from_secs(10));
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
         // Time is exactly at deadline
         let result = t.poll_with_time(Time::from_secs(10), &mut cx);
-        assert!(matches!(result, Poll::Ready(Err(_))));
+        let elapsed = matches!(result, Poll::Ready(Err(_)));
+        crate::assert_with_log!(elapsed, "elapsed at deadline", true, elapsed);
+        crate::test_complete!("poll_with_time_at_exact_deadline");
     }
 
     #[test]
     fn poll_with_time_zero_deadline() {
+        init_test("poll_with_time_zero_deadline");
         let mut t = TimeoutFuture::new(pending::<i32>(), Time::ZERO);
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
         // Even at time zero, deadline is reached
         let result = t.poll_with_time(Time::ZERO, &mut cx);
-        assert!(matches!(result, Poll::Ready(Err(_))));
+        let elapsed = matches!(result, Poll::Ready(Err(_)));
+        crate::assert_with_log!(elapsed, "elapsed at zero", true, elapsed);
+        crate::test_complete!("poll_with_time_zero_deadline");
     }
 
     // =========================================================================
@@ -421,10 +525,22 @@ mod tests {
 
     #[test]
     fn clone_copies_deadline_and_future() {
+        init_test("clone_copies_deadline_and_future");
         let t = TimeoutFuture::new(ready(42), Time::from_secs(10));
         let t2 = t.clone();
-        assert_eq!(t.deadline(), Time::from_secs(10));
-        assert_eq!(t2.deadline(), Time::from_secs(10));
+        crate::assert_with_log!(
+            t.deadline() == Time::from_secs(10),
+            "t deadline",
+            Time::from_secs(10),
+            t.deadline()
+        );
+        crate::assert_with_log!(
+            t2.deadline() == Time::from_secs(10),
+            "t2 deadline",
+            Time::from_secs(10),
+            t2.deadline()
+        );
+        crate::test_complete!("clone_copies_deadline_and_future");
     }
 
     // =========================================================================
@@ -433,6 +549,7 @@ mod tests {
 
     #[test]
     fn simulated_timeout_scenario() {
+        init_test("simulated_timeout_scenario");
         // Simulate a scenario where we poll multiple times as time advances
         static CURRENT_TIME: AtomicU64 = AtomicU64::new(0);
 
@@ -442,27 +559,33 @@ mod tests {
 
         // t=0: pending
         let now = Time::from_nanos(CURRENT_TIME.load(Ordering::SeqCst));
-        assert!(t.poll_with_time(now, &mut cx).is_pending());
+        let pending = t.poll_with_time(now, &mut cx).is_pending();
+        crate::assert_with_log!(pending, "pending at t=0", true, pending);
 
         // t=2: still pending
         CURRENT_TIME.store(2_000_000_000, Ordering::SeqCst);
         let now = Time::from_nanos(CURRENT_TIME.load(Ordering::SeqCst));
-        assert!(t.poll_with_time(now, &mut cx).is_pending());
+        let pending = t.poll_with_time(now, &mut cx).is_pending();
+        crate::assert_with_log!(pending, "pending at t=2", true, pending);
 
         // t=4: still pending
         CURRENT_TIME.store(4_000_000_000, Ordering::SeqCst);
         let now = Time::from_nanos(CURRENT_TIME.load(Ordering::SeqCst));
-        assert!(t.poll_with_time(now, &mut cx).is_pending());
+        let pending = t.poll_with_time(now, &mut cx).is_pending();
+        crate::assert_with_log!(pending, "pending at t=4", true, pending);
 
         // t=5: timeout!
         CURRENT_TIME.store(5_000_000_000, Ordering::SeqCst);
         let now = Time::from_nanos(CURRENT_TIME.load(Ordering::SeqCst));
         let result = t.poll_with_time(now, &mut cx);
-        assert!(matches!(result, Poll::Ready(Err(_))));
+        let elapsed = matches!(result, Poll::Ready(Err(_)));
+        crate::assert_with_log!(elapsed, "elapsed at t=5", true, elapsed);
+        crate::test_complete!("simulated_timeout_scenario");
     }
 
     #[test]
     fn simulated_success_scenario() {
+        init_test("simulated_success_scenario");
         // Future that completes on the 3rd poll
         struct CountingFuture {
             count: u32,
@@ -493,14 +616,18 @@ mod tests {
         let mut cx = Context::from_waker(&waker);
 
         // Poll 1: pending
-        assert!(t.poll_with_time(Time::from_secs(1), &mut cx).is_pending());
+        let pending = t.poll_with_time(Time::from_secs(1), &mut cx).is_pending();
+        crate::assert_with_log!(pending, "pending at t=1", true, pending);
 
         // Poll 2: pending
-        assert!(t.poll_with_time(Time::from_secs(2), &mut cx).is_pending());
+        let pending = t.poll_with_time(Time::from_secs(2), &mut cx).is_pending();
+        crate::assert_with_log!(pending, "pending at t=2", true, pending);
 
         // Poll 3: ready!
         let result = t.poll_with_time(Time::from_secs(3), &mut cx);
-        assert!(matches!(result, Poll::Ready(Ok("done"))));
+        let ready = matches!(result, Poll::Ready(Ok("done")));
+        crate::assert_with_log!(ready, "ready at t=3", true, ready);
+        crate::test_complete!("simulated_success_scenario");
     }
 
     // =========================================================================

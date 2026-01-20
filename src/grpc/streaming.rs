@@ -435,66 +435,98 @@ impl<T> Default for RequestSink<T> {
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn test_request_creation() {
+        init_test("test_request_creation");
         let request = Request::new("hello");
-        assert_eq!(request.get_ref(), &"hello");
-        assert!(request.metadata().is_empty());
+        let value = request.get_ref();
+        crate::assert_with_log!(value == &"hello", "get_ref", &"hello", value);
+        let empty = request.metadata().is_empty();
+        crate::assert_with_log!(empty, "metadata empty", true, empty);
+        crate::test_complete!("test_request_creation");
     }
 
     #[test]
     fn test_request_with_metadata() {
+        init_test("test_request_with_metadata");
         let mut metadata = Metadata::new();
         metadata.insert("x-custom", "value");
 
         let request = Request::with_metadata("hello", metadata);
-        assert!(request.metadata().get("x-custom").is_some());
+        let has = request.metadata().get("x-custom").is_some();
+        crate::assert_with_log!(has, "custom metadata", true, has);
+        crate::test_complete!("test_request_with_metadata");
     }
 
     #[test]
     fn test_request_into_inner() {
+        init_test("test_request_into_inner");
         let request = Request::new(42);
-        assert_eq!(request.into_inner(), 42);
+        let value = request.into_inner();
+        crate::assert_with_log!(value == 42, "into_inner", 42, value);
+        crate::test_complete!("test_request_into_inner");
     }
 
     #[test]
     fn test_request_map() {
+        init_test("test_request_map");
         let request = Request::new(42);
         let mapped = request.map(|n| n * 2);
-        assert_eq!(mapped.into_inner(), 84);
+        let value = mapped.into_inner();
+        crate::assert_with_log!(value == 84, "mapped", 84, value);
+        crate::test_complete!("test_request_map");
     }
 
     #[test]
     fn test_response_creation() {
+        init_test("test_response_creation");
         let response = Response::new("world");
-        assert_eq!(response.get_ref(), &"world");
+        let value = response.get_ref();
+        crate::assert_with_log!(value == &"world", "get_ref", &"world", value);
+        crate::test_complete!("test_response_creation");
     }
 
     #[test]
     fn test_metadata_operations() {
+        init_test("test_metadata_operations");
         let mut metadata = Metadata::new();
-        assert!(metadata.is_empty());
+        let empty = metadata.is_empty();
+        crate::assert_with_log!(empty, "empty", true, empty);
 
         metadata.insert("key1", "value1");
         metadata.insert("key2", "value2");
 
-        assert_eq!(metadata.len(), 2);
-        assert!(!metadata.is_empty());
+        let len = metadata.len();
+        crate::assert_with_log!(len == 2, "len", 2, len);
+        let empty = metadata.is_empty();
+        crate::assert_with_log!(!empty, "not empty", false, empty);
 
         match metadata.get("key1") {
-            Some(MetadataValue::Ascii(v)) => assert_eq!(v, "value1"),
+            Some(MetadataValue::Ascii(v)) => {
+                crate::assert_with_log!(v == "value1", "value1", "value1", v);
+            }
             _ => panic!("expected ascii value"),
         }
+        crate::test_complete!("test_metadata_operations");
     }
 
     #[test]
     fn test_metadata_binary() {
+        init_test("test_metadata_binary");
         let mut metadata = Metadata::new();
         metadata.insert_bin("data-bin", Bytes::from_static(b"\x00\x01\x02"));
 
         match metadata.get("data-bin") {
-            Some(MetadataValue::Binary(v)) => assert_eq!(v.as_ref(), &[0, 1, 2]),
+            Some(MetadataValue::Binary(v)) => {
+                crate::assert_with_log!(v.as_ref() == &[0, 1, 2], "binary", &[0, 1, 2], v.as_ref());
+            }
             _ => panic!("expected binary value"),
         }
+        crate::test_complete!("test_metadata_binary");
     }
 }

@@ -279,8 +279,14 @@ impl Codec for IdentityCodec {
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn test_grpc_codec_roundtrip() {
+        init_test("test_grpc_codec_roundtrip");
         let mut codec = GrpcCodec::new();
         let mut buf = BytesMut::new();
 
@@ -288,31 +294,40 @@ mod tests {
         codec.encode(original.clone(), &mut buf).unwrap();
 
         let decoded = codec.decode(&mut buf).unwrap().unwrap();
-        assert!(!decoded.compressed);
-        assert_eq!(decoded.data, original.data);
+        let compressed = decoded.compressed;
+        crate::assert_with_log!(!compressed, "not compressed", false, compressed);
+        crate::assert_with_log!(decoded.data == original.data, "data", original.data, decoded.data);
+        crate::test_complete!("test_grpc_codec_roundtrip");
     }
 
     #[test]
     fn test_grpc_codec_message_too_large() {
+        init_test("test_grpc_codec_message_too_large");
         let mut codec = GrpcCodec::with_max_size(10);
         let mut buf = BytesMut::new();
 
         let large_message = GrpcMessage::new(Bytes::from(vec![0u8; 100]));
         let result = codec.encode(large_message, &mut buf);
-        assert!(matches!(result, Err(GrpcError::MessageTooLarge)));
+        let ok = matches!(result, Err(GrpcError::MessageTooLarge));
+        crate::assert_with_log!(ok, "message too large", true, ok);
+        crate::test_complete!("test_grpc_codec_message_too_large");
     }
 
     #[test]
     fn test_grpc_codec_partial_header() {
+        init_test("test_grpc_codec_partial_header");
         let mut codec = GrpcCodec::new();
         let mut buf = BytesMut::from(&[0u8, 0, 0][..]);
 
         let result = codec.decode(&mut buf).unwrap();
-        assert!(result.is_none());
+        let none = result.is_none();
+        crate::assert_with_log!(none, "none", true, none);
+        crate::test_complete!("test_grpc_codec_partial_header");
     }
 
     #[test]
     fn test_grpc_codec_partial_body() {
+        init_test("test_grpc_codec_partial_body");
         let mut codec = GrpcCodec::new();
         let mut buf = BytesMut::new();
 
@@ -322,23 +337,28 @@ mod tests {
         buf.extend_from_slice(&[1, 2, 3, 4, 5]); // only 5 bytes
 
         let result = codec.decode(&mut buf).unwrap();
-        assert!(result.is_none());
+        let none = result.is_none();
+        crate::assert_with_log!(none, "none", true, none);
+        crate::test_complete!("test_grpc_codec_partial_body");
     }
 
     #[test]
     fn test_identity_codec() {
+        init_test("test_identity_codec");
         let mut codec = IdentityCodec;
         let data = Bytes::from_static(b"test data");
 
         let encoded = codec.encode(&data).unwrap();
-        assert_eq!(encoded, data);
+        crate::assert_with_log!(encoded == data, "encoded", data, encoded);
 
         let decoded = codec.decode(&encoded).unwrap();
-        assert_eq!(decoded, data);
+        crate::assert_with_log!(decoded == data, "decoded", data, decoded);
+        crate::test_complete!("test_identity_codec");
     }
 
     #[test]
     fn test_framed_codec_roundtrip() {
+        init_test("test_framed_codec_roundtrip");
         let mut codec = FramedCodec::new(IdentityCodec);
         let mut buf = BytesMut::new();
 
@@ -346,6 +366,7 @@ mod tests {
         codec.encode_message(&original, &mut buf).unwrap();
 
         let decoded = codec.decode_message(&mut buf).unwrap().unwrap();
-        assert_eq!(decoded, original);
+        crate::assert_with_log!(decoded == original, "decoded", original, decoded);
+        crate::test_complete!("test_framed_codec_roundtrip");
     }
 }
