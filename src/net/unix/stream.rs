@@ -360,6 +360,80 @@ impl std::os::unix::io::AsRawFd for UnixStream {
     }
 }
 
+// Platform-specific peer credential implementations
+
+/// Linux implementation using SO_PEERCRED.
+#[cfg(target_os = "linux")]
+fn peer_cred_impl(stream: &net::UnixStream) -> io::Result<UCred> {
+    use std::os::unix::io::AsRawFd;
+
+    // ucred structure from Linux
+    #[repr(C)]
+    struct LinuxUcred {
+        pid: i32,
+        uid: u32,
+        gid: u32,
+    }
+
+    let fd = stream.as_raw_fd();
+    let mut ucred = LinuxUcred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<LinuxUcred>() as libc::socklen_t;
+
+    // SAFETY: getsockopt is a well-defined syscall, and we're passing
+    // correct buffer size and type for SO_PEERCRED option.
+    let ret = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut ucred as *mut LinuxUcred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+
+    if ret == 0 {
+        Ok(UCred {
+            uid: ucred.uid,
+            gid: ucred.gid,
+            pid: Some(ucred.pid),
+        })
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// macOS/BSD implementation using getpeereid.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd"
+))]
+fn peer_cred_impl(stream: &net::UnixStream) -> io::Result<UCred> {
+    use std::os::unix::io::AsRawFd;
+
+    let fd = stream.as_raw_fd();
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+
+    // SAFETY: getpeereid is a well-defined syscall on BSD systems.
+    let ret = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+
+    if ret == 0 {
+        Ok(UCred {
+            uid: uid as u32,
+            gid: gid as u32,
+            pid: None, // Not available via getpeereid
+        })
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,5 +534,43 @@ mod tests {
             crate::assert_with_log!(result.is_err(), "result err", true, result.is_err());
         });
         crate::test_complete!("test_connect_abstract");
+    }
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
+    #[test]
+    fn test_peer_cred() {
+        init_test("test_peer_cred");
+        let (s1, s2) = UnixStream::pair().expect("pair failed");
+
+        // Both sides should be able to get peer credentials
+        let cred1 = s1.peer_cred().expect("peer_cred s1 failed");
+        let cred2 = s2.peer_cred().expect("peer_cred s2 failed");
+
+        // Both should report the same process (ourselves)
+        let our_uid = unsafe { libc::getuid() } as u32;
+        let our_gid = unsafe { libc::getgid() } as u32;
+
+        crate::assert_with_log!(cred1.uid == our_uid, "s1 uid", our_uid, cred1.uid);
+        crate::assert_with_log!(cred1.gid == our_gid, "s1 gid", our_gid, cred1.gid);
+        crate::assert_with_log!(cred2.uid == our_uid, "s2 uid", our_uid, cred2.uid);
+        crate::assert_with_log!(cred2.gid == our_gid, "s2 gid", our_gid, cred2.gid);
+
+        // On Linux, pid should be available and match our process
+        #[cfg(target_os = "linux")]
+        {
+            let our_pid = std::process::id() as i32;
+            let pid1 = cred1.pid.expect("pid should be available on Linux");
+            let pid2 = cred2.pid.expect("pid should be available on Linux");
+            crate::assert_with_log!(pid1 == our_pid, "s1 pid", our_pid, pid1);
+            crate::assert_with_log!(pid2 == our_pid, "s2 pid", our_pid, pid2);
+        }
+
+        crate::test_complete!("test_peer_cred");
     }
 }

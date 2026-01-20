@@ -51,4 +51,4 @@ pub mod stream;
 pub use datagram::UnixDatagram;
 pub use listener::{Incoming, UnixListener};
 pub use split::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, ReuniteError, WriteHalf};
-pub use stream::UnixStream;
+pub use stream::{UCred, UnixStream};
