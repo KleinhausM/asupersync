@@ -331,7 +331,12 @@ pub enum JoinAllError<E> {
     /// At least one branch was cancelled.
     Cancelled(CancelReason),
     /// At least one branch panicked.
-    Panicked(PanicPayload),
+    Panicked {
+        /// The panic payload.
+        payload: PanicPayload,
+        /// Index of the first branch that panicked.
+        index: usize,
+    },
 }
 
 impl<E: fmt::Display> fmt::Display for JoinAllError<E> {
@@ -346,7 +351,7 @@ impl<E: fmt::Display> fmt::Display for JoinAllError<E> {
                 "branch {index} failed: {error} ({total_failures} total failures)"
             ),
             Self::Cancelled(r) => write!(f, "branch cancelled: {r}"),
-            Self::Panicked(p) => write!(f, "branch panicked: {p}"),
+            Self::Panicked { payload, index } => write!(f, "branch {index} panicked: {payload}"),
         }
     }
 }
@@ -367,12 +372,14 @@ pub fn join_all_outcomes<T, E: Clone>(
     let mut first_error: Option<E> = None;
     let mut strongest_cancel: Option<CancelReason> = None;
     let mut panic_payload: Option<PanicPayload> = None;
+    let mut panic_index: Option<usize> = None;
 
     for (i, outcome) in outcomes.into_iter().enumerate() {
         match outcome {
             Outcome::Panicked(p) => {
                 if panic_payload.is_none() {
                     panic_payload = Some(p);
+                    panic_index = Some(i);
                 }
             }
             Outcome::Cancelled(r) => match &mut strongest_cancel {
@@ -399,7 +406,10 @@ pub fn join_all_outcomes<T, E: Clone>(
                 AggregateDecision::Cancelled,
             )
         },
-        AggregateDecision::Panicked,
+        |p| AggregateDecision::Panicked {
+            payload: p,
+            first_panic_index: panic_index.expect("panic index missing"),
+        },
     );
 
     (decision, successes)
@@ -493,7 +503,10 @@ pub fn join_all_to_result<T, E: Clone>(
             })
         }
         AggregateDecision::Cancelled(r) => Err(JoinAllError::Cancelled(r)),
-        AggregateDecision::Panicked(p) => Err(JoinAllError::Panicked(p)),
+        AggregateDecision::Panicked { payload, first_panic_index } => Err(JoinAllError::Panicked {
+            payload,
+            index: first_panic_index,
+        }),
     }
 }
 
@@ -636,7 +649,10 @@ mod tests {
         ];
         let (decision, successes) = join_all_outcomes(outcomes);
 
-        assert!(matches!(decision, AggregateDecision::Panicked(_)));
+        match decision {
+            AggregateDecision::Panicked { payload: _, first_panic_index } => assert_eq!(first_panic_index, 1),
+            _ => panic!("Expected Panicked decision"),
+        }
         // All successful values collected (join waits for all branches)
         assert_eq!(successes.len(), 2);
         assert_eq!(successes[0], (0, 1));
@@ -883,7 +899,13 @@ mod tests {
         let result = make_join_all_result(outcomes);
         let err = join_all_to_result(result);
 
-        assert!(matches!(err, Err(JoinAllError::Panicked(_))));
+        match err {
+            Err(JoinAllError::Panicked { payload, index }) => {
+                assert_eq!(payload.message(), "boom");
+                assert_eq!(index, 1);
+            }
+            _ => panic!("Expected Panicked error"),
+        }
     }
 
     #[test]
@@ -911,8 +933,12 @@ mod tests {
         let err: JoinAllError<&str> = JoinAllError::Cancelled(CancelReason::timeout());
         assert!(err.to_string().contains("cancelled"));
 
-        let err: JoinAllError<&str> = JoinAllError::Panicked(PanicPayload::new("boom"));
-        assert!(err.to_string().contains("panicked"));
+        let err: JoinAllError<&str> = JoinAllError::Panicked {
+            payload: PanicPayload::new("boom"),
+            index: 4,
+        };
+        assert!(err.to_string().contains("branch 4 panicked"));
+        assert!(err.to_string().contains("boom"));
     }
 
     #[test]
@@ -936,7 +962,10 @@ mod tests {
             Outcome::Ok(3),
         ];
         let result = make_join_all_result(outcomes);
-        assert!(matches!(result.decision, AggregateDecision::Panicked(_)));
+        match result.decision {
+            AggregateDecision::Panicked { payload: _, first_panic_index } => assert_eq!(first_panic_index, 1),
+            _ => panic!("Expected Panicked decision"),
+        }
     }
 
     #[test]

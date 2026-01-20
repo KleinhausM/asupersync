@@ -194,7 +194,12 @@ pub enum MapReduceError<E> {
     /// At least one task was cancelled.
     Cancelled(CancelReason),
     /// At least one task panicked.
-    Panicked(PanicPayload),
+    Panicked {
+        /// The panic payload.
+        payload: PanicPayload,
+        /// Index of the first task that panicked.
+        index: usize,
+    },
     /// No tasks were provided (empty input).
     Empty,
 }
@@ -205,6 +210,15 @@ impl<E> MapReduceError<E> {
     pub const fn error_index(&self) -> Option<usize> {
         match self {
             Self::Error { index, .. } => Some(*index),
+            _ => None,
+        }
+    }
+
+    /// Returns the panic index if this was a panic.
+    #[must_use]
+    pub const fn panic_index(&self) -> Option<usize> {
+        match self {
+            Self::Panicked { index, .. } => Some(*index),
             _ => None,
         }
     }
@@ -224,7 +238,7 @@ impl<E> MapReduceError<E> {
     /// Returns true if a task panicked.
     #[must_use]
     pub const fn is_panicked(&self) -> bool {
-        matches!(self, Self::Panicked(_))
+        matches!(self, Self::Panicked { .. })
     }
 
     /// Returns true if the input was empty.
@@ -247,7 +261,7 @@ impl<E: fmt::Display> fmt::Display for MapReduceError<E> {
                 "map-reduce task {index} failed: {error} ({total_failures} failures, {success_count} successes)"
             ),
             Self::Cancelled(r) => write!(f, "map-reduce cancelled: {r}"),
-            Self::Panicked(p) => write!(f, "map-reduce panicked: {p}"),
+            Self::Panicked { payload, index } => write!(f, "map-reduce task {index} panicked: {payload}"),
             Self::Empty => write!(f, "map-reduce requires at least one input"),
         }
     }
@@ -288,6 +302,7 @@ where
     let mut strongest_cancel: Option<CancelReason> = None;
 
     let mut panic_payload: Option<PanicPayload> = None;
+    let mut panic_index: Option<usize> = None;
 
     // Collect outcomes
     for (i, outcome) in outcomes.into_iter().enumerate() {
@@ -296,6 +311,7 @@ where
                 // Panic is the strongest - record it but keep collecting successes
                 if panic_payload.is_none() {
                     panic_payload = Some(p);
+                    panic_index = Some(i);
                 }
             }
             Outcome::Cancelled(r) => match &mut strongest_cancel {
@@ -323,7 +339,10 @@ where
                 AggregateDecision::Cancelled,
             )
         },
-        AggregateDecision::Panicked,
+        |p| AggregateDecision::Panicked {
+            payload: p,
+            first_panic_index: panic_index.expect("panic index missing"),
+        },
     );
 
     // Sort successes by index to ensure input-order reduction
@@ -434,7 +453,10 @@ pub fn map_reduce_to_result<T, E: Clone>(
             })
         }
         AggregateDecision::Cancelled(r) => Err(MapReduceError::Cancelled(r)),
-        AggregateDecision::Panicked(p) => Err(MapReduceError::Panicked(p)),
+        AggregateDecision::Panicked { payload, first_panic_index } => Err(MapReduceError::Panicked {
+            payload,
+            index: first_panic_index,
+        }),
     }
 }
 
@@ -536,9 +558,13 @@ mod tests {
         assert!(err.is_cancelled());
         assert_eq!(err.error_index(), None);
 
-        let err: MapReduceError<&str> = MapReduceError::Panicked(PanicPayload::new("boom"));
+        let err: MapReduceError<&str> = MapReduceError::Panicked {
+            payload: PanicPayload::new("boom"),
+            index: 3,
+        };
         assert!(!err.is_error());
         assert!(err.is_panicked());
+        assert_eq!(err.panic_index(), Some(3));
 
         let err: MapReduceError<&str> = MapReduceError::Empty;
         assert!(err.is_empty());
@@ -557,6 +583,13 @@ mod tests {
         assert!(msg.contains("test error"));
         assert!(msg.contains("2 failures"));
         assert!(msg.contains("5 successes"));
+
+        let err: MapReduceError<&str> = MapReduceError::Panicked {
+            payload: PanicPayload::new("boom"),
+            index: 1,
+        };
+        assert!(err.to_string().contains("task 1 panicked"));
+        assert!(err.to_string().contains("boom"));
 
         let err: MapReduceError<&str> = MapReduceError::Empty;
         assert!(err.to_string().contains("at least one input"));
@@ -623,7 +656,10 @@ mod tests {
 
         let (decision, reduced, successes) = map_reduce_outcomes(outcomes, |a, b| a + b);
 
-        assert!(matches!(decision, AggregateDecision::Panicked(_)));
+        match decision {
+            AggregateDecision::Panicked { payload: _, first_panic_index } => assert_eq!(first_panic_index, 1),
+            _ => panic!("Expected Panicked decision"),
+        }
         // All successful values collected and reduced (join semantics: all branches complete)
         assert_eq!(successes.len(), 2);
         assert_eq!(reduced, Some(4)); // 1 + 3 = 4
@@ -729,7 +765,10 @@ mod tests {
         let result = make_map_reduce_result(outcomes, |a, b| a + b);
 
         let value = map_reduce_to_result(result);
-        assert!(matches!(value, Err(MapReduceError::Panicked(_))));
+        match value {
+            Err(MapReduceError::Panicked { payload: _, index }) => assert_eq!(index, 0),
+            _ => panic!("Expected Panicked error"),
+        }
     }
 
     #[test]

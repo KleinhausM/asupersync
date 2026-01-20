@@ -26,12 +26,16 @@
 //! - LAW-JOIN-COMM: outcome aggregation is commutative
 //! - LAW-TIMEOUT-MIN: nested timeouts collapse to min
 
+#[macro_use]
+mod common;
+
 use asupersync::combinator::join::{join2_outcomes, join_all_outcomes};
 use asupersync::combinator::race::{race2_outcomes, RaceWinner};
 use asupersync::combinator::timeout::effective_deadline;
 use asupersync::types::cancel::{CancelKind, CancelReason};
 use asupersync::types::outcome::{join_outcomes, PanicPayload};
 use asupersync::types::{Budget, Outcome, Severity, Time};
+use common::*;
 use proptest::prelude::*;
 
 // ============================================================================
@@ -112,6 +116,8 @@ proptest! {
     /// The severity of join(a, b) equals the severity of join(b, a).
     #[test]
     fn outcome_join_commutative_severity(a in arb_outcome(), b in arb_outcome()) {
+        init_test_logging();
+        test_phase!("outcome_join_commutative_severity");
         let ab = join_outcomes(a.clone(), b.clone());
         let ba = join_outcomes(b, a);
         prop_assert_eq!(ab.severity(), ba.severity());
@@ -122,6 +128,8 @@ proptest! {
     /// The result of join(a, b) has severity >= max(a.severity(), b.severity()).
     #[test]
     fn outcome_join_takes_worse(a in arb_outcome(), b in arb_outcome()) {
+        init_test_logging();
+        test_phase!("outcome_join_takes_worse");
         let result = join_outcomes(a.clone(), b.clone());
         let max_input = a.severity().max(b.severity());
         prop_assert!(result.severity() >= max_input);
@@ -132,6 +140,8 @@ proptest! {
     /// join(a, a) has the same severity as a.
     #[test]
     fn outcome_join_idempotent(a in arb_outcome()) {
+        init_test_logging();
+        test_phase!("outcome_join_idempotent");
         let result = join_outcomes(a.clone(), a.clone());
         prop_assert_eq!(result.severity(), a.severity());
     }
@@ -141,6 +151,8 @@ proptest! {
     /// join(Ok, x) has severity >= x.severity() for all x.
     #[test]
     fn outcome_ok_is_minimal(x in arb_outcome(), v in any::<i32>()) {
+        init_test_logging();
+        test_phase!("outcome_ok_is_minimal");
         let ok: Outcome<i32, i32> = Outcome::Ok(v);
         let result = join_outcomes(ok, x.clone());
         prop_assert!(result.severity() >= x.severity());
@@ -151,6 +163,8 @@ proptest! {
     /// join(Panicked, x) has severity == 3 (Panicked) for all x.
     #[test]
     fn outcome_panicked_is_maximal(x in arb_outcome()) {
+        init_test_logging();
+        test_phase!("outcome_panicked_is_maximal");
         let panicked: Outcome<i32, i32> = Outcome::Panicked(PanicPayload::new("test"));
         let result = join_outcomes(panicked, x);
         prop_assert_eq!(result.severity(), Severity::Panicked);
@@ -169,6 +183,8 @@ proptest! {
     /// (a.combine(b)).combine(c) == a.combine(b.combine(c))
     #[test]
     fn budget_combine_associative(a in arb_budget(), b in arb_budget(), c in arb_budget()) {
+        init_test_logging();
+        test_phase!("budget_combine_associative");
         let left = a.combine(b).combine(c);
         let right = a.combine(b.combine(c));
         prop_assert_eq!(left, right);
@@ -179,6 +195,8 @@ proptest! {
     /// a.combine(b) == b.combine(a)
     #[test]
     fn budget_combine_commutative(a in arb_budget(), b in arb_budget()) {
+        init_test_logging();
+        test_phase!("budget_combine_commutative");
         let ab = a.combine(b);
         let ba = b.combine(a);
         prop_assert_eq!(ab, ba);
@@ -190,6 +208,8 @@ proptest! {
     /// Note: priority uses max, so this holds when a.priority >= INFINITE.priority
     #[test]
     fn budget_infinite_is_identity_for_deadline_and_quotas(a in arb_budget()) {
+        init_test_logging();
+        test_phase!("budget_infinite_is_identity_for_deadline_and_quotas");
         let result = a.combine(Budget::INFINITE);
 
         // Deadline: min with None (INFINITE) = a's deadline
@@ -210,6 +230,8 @@ proptest! {
     /// The combined deadline is the minimum of the two.
     #[test]
     fn budget_deadline_is_min(d1 in arb_deadline(), d2 in arb_deadline()) {
+        init_test_logging();
+        test_phase!("budget_deadline_is_min");
         let b1 = d1.map_or_else(Budget::new, |t| Budget::new().with_deadline(t));
         let b2 = d2.map_or_else(Budget::new, |t| Budget::new().with_deadline(t));
 
@@ -228,6 +250,8 @@ proptest! {
     /// LAW: Poll quota combination is min
     #[test]
     fn budget_poll_quota_is_min(q1 in 0u32..=u32::MAX, q2 in 0u32..=u32::MAX) {
+        init_test_logging();
+        test_phase!("budget_poll_quota_is_min");
         let b1 = Budget::new().with_poll_quota(q1);
         let b2 = Budget::new().with_poll_quota(q2);
         let combined = b1.combine(b2);
@@ -237,6 +261,8 @@ proptest! {
     /// LAW: Priority combination is max (higher wins)
     #[test]
     fn budget_priority_is_max(p1 in 0u8..=255u8, p2 in 0u8..=255u8) {
+        init_test_logging();
+        test_phase!("budget_priority_is_max");
         let b1 = Budget::new().with_priority(p1);
         let b2 = Budget::new().with_priority(p2);
         let combined = b1.combine(b2);
@@ -256,6 +282,8 @@ proptest! {
     /// a.strengthen(a) leaves a unchanged (returns false).
     #[test]
     fn cancel_reason_strengthen_idempotent(kind in arb_cancel_kind()) {
+        init_test_logging();
+        test_phase!("cancel_reason_strengthen_idempotent");
         let reason = CancelReason::new(kind);
         let mut a = reason.clone();
         let changed = a.strengthen(&reason);
@@ -275,6 +303,8 @@ proptest! {
         k2 in arb_cancel_kind(),
         k3 in arb_cancel_kind()
     ) {
+        init_test_logging();
+        test_phase!("cancel_reason_strengthen_associative");
         let r1 = CancelReason::new(k1);
         let r2 = CancelReason::new(k2);
         let r3 = CancelReason::new(k3);
@@ -298,6 +328,8 @@ proptest! {
     /// After a.strengthen(b), a.kind.severity() >= original severity.
     #[test]
     fn cancel_reason_strengthen_monotone(k1 in arb_cancel_kind(), k2 in arb_cancel_kind()) {
+        init_test_logging();
+        test_phase!("cancel_reason_strengthen_monotone");
         let mut a = CancelReason::new(k1);
         let original_severity = a.kind.severity();
         let b = CancelReason::new(k2);
@@ -313,6 +345,8 @@ proptest! {
     /// but different PartialOrd ordering.
     #[test]
     fn cancel_reason_strengthen_takes_max(k1 in arb_cancel_kind(), k2 in arb_cancel_kind()) {
+        init_test_logging();
+        test_phase!("cancel_reason_strengthen_takes_max");
         let mut a = CancelReason::new(k1);
         let b = CancelReason::new(k2);
         a.strengthen(&b);
@@ -341,6 +375,8 @@ proptest! {
         d1_nanos in 0u64..=u64::MAX/2,
         d2_nanos in 0u64..=u64::MAX/2
     ) {
+        init_test_logging();
+        test_phase!("timeout_min_composition");
         let d1 = Time::from_nanos(d1_nanos);
         let d2 = Time::from_nanos(d2_nanos);
 
@@ -357,6 +393,8 @@ proptest! {
     /// effective_deadline(requested, None) == requested
     #[test]
     fn timeout_none_is_identity(d_nanos in 0u64..=u64::MAX/2) {
+        init_test_logging();
+        test_phase!("timeout_none_is_identity");
         let d = Time::from_nanos(d_nanos);
 
         // None existing deadline means the requested deadline is used
@@ -371,6 +409,8 @@ proptest! {
         d1_nanos in 0u64..=u64::MAX/2,
         d2_nanos in 0u64..=u64::MAX/2
     ) {
+        init_test_logging();
+        test_phase!("timeout_effective_commutative");
         let d1 = Time::from_nanos(d1_nanos);
         let d2 = Time::from_nanos(d2_nanos);
 
@@ -388,6 +428,8 @@ proptest! {
         requested_nanos in 0u64..=u64::MAX/2,
         existing_nanos in 0u64..=u64::MAX/2
     ) {
+        init_test_logging();
+        test_phase!("timeout_effective_tightens");
         let requested = Time::from_nanos(requested_nanos);
         let existing = Time::from_nanos(existing_nanos);
 
@@ -410,6 +452,8 @@ proptest! {
     /// join2(a, b) and join2(b, a) have the same aggregate severity.
     #[test]
     fn join2_outcomes_commutative_severity(a in arb_outcome(), b in arb_outcome()) {
+        init_test_logging();
+        test_phase!("join2_outcomes_commutative_severity");
         let (result_ab, _, _) = join2_outcomes(a.clone(), b.clone());
         let (result_ba, _, _) = join2_outcomes(b, a);
 
@@ -425,6 +469,8 @@ proptest! {
         b in arb_outcome(),
         c in arb_outcome()
     ) {
+        init_test_logging();
+        test_phase!("join2_outcomes_associative_severity");
         let (ab, _, _) = join2_outcomes(a.clone(), b.clone());
         let (abc, _, _) = join2_outcomes(ab, c.clone());
 
@@ -439,6 +485,8 @@ proptest! {
     /// The aggregate decision reflects the worst outcome.
     #[test]
     fn join_all_takes_worst_severity(outcomes in proptest::collection::vec(arb_outcome(), 1..10)) {
+        init_test_logging();
+        test_phase!("join_all_takes_worst_severity");
         let max_severity = outcomes.iter().map(Outcome::severity).max().unwrap_or(Severity::Ok);
         let (decision, _) = join_all_outcomes(outcomes);
 
@@ -447,7 +495,7 @@ proptest! {
             asupersync::types::policy::AggregateDecision::AllOk => Severity::Ok,
             asupersync::types::policy::AggregateDecision::FirstError(_) => Severity::Err,
             asupersync::types::policy::AggregateDecision::Cancelled(_) => Severity::Cancelled,
-            asupersync::types::policy::AggregateDecision::Panicked(_) => Severity::Panicked,
+            asupersync::types::policy::AggregateDecision::Panicked { .. } => Severity::Panicked,
         };
 
         prop_assert_eq!(decision_severity, max_severity);
@@ -470,6 +518,8 @@ proptest! {
         b in arb_outcome(),
         winner in arb_race_winner()
     ) {
+        init_test_logging();
+        test_phase!("race_commutative_severity");
         let (winner_ab, _, loser_ab) = race2_outcomes(winner, a.clone(), b.clone());
         let flipped = match winner {
             RaceWinner::First => RaceWinner::Second,
@@ -486,6 +536,8 @@ proptest! {
     /// Model `never` as the always-losing branch with RaceLost cancellation.
     #[test]
     fn race_never_identity(outcome in arb_outcome(), first_is_real in any::<bool>()) {
+        init_test_logging();
+        test_phase!("race_never_identity");
         let never = Outcome::Cancelled(CancelReason::race_loser());
 
         let (winner, _, loser) = if first_is_real {
@@ -508,6 +560,8 @@ proptest! {
         b in arb_outcome(),
         c in arb_outcome()
     ) {
+        init_test_logging();
+        test_phase!("race_join_dist_severity");
         let (join_ab, _, _) = join2_outcomes(a.clone(), b.clone());
         let (join_ac, _, _) = join2_outcomes(a.clone(), c.clone());
 
@@ -541,6 +595,8 @@ proptest! {
     /// For any two times, exactly one of <, =, > holds.
     #[test]
     fn time_total_order(t1 in arb_time(), t2 in arb_time()) {
+        init_test_logging();
+        test_phase!("time_total_order");
         let lt = t1 < t2;
         let eq = t1 == t2;
         let gt = t1 > t2;
@@ -559,6 +615,8 @@ proptest! {
         b_delta in 0u64..=u64::MAX/3,
         c_delta in 0u64..=u64::MAX/3
     ) {
+        init_test_logging();
+        test_phase!("time_transitive");
         let a = Time::from_nanos(a_nanos);
         let b = Time::from_nanos(a_nanos.saturating_add(b_delta));
         let c = Time::from_nanos(a_nanos.saturating_add(b_delta).saturating_add(c_delta));
@@ -572,6 +630,8 @@ proptest! {
     /// LAW: min is associative
     #[test]
     fn time_min_associative(t1 in arb_time(), t2 in arb_time(), t3 in arb_time()) {
+        init_test_logging();
+        test_phase!("time_min_associative");
         let left = t1.min(t2).min(t3);
         let right = t1.min(t2.min(t3));
         prop_assert_eq!(left, right);
@@ -580,12 +640,16 @@ proptest! {
     /// LAW: min is commutative
     #[test]
     fn time_min_commutative(t1 in arb_time(), t2 in arb_time()) {
+        init_test_logging();
+        test_phase!("time_min_commutative");
         prop_assert_eq!(t1.min(t2), t2.min(t1));
     }
 
     /// LAW: min is idempotent
     #[test]
     fn time_min_idempotent(t in arb_time()) {
+        init_test_logging();
+        test_phase!("time_min_idempotent");
         prop_assert_eq!(t.min(t), t);
     }
 }
@@ -596,32 +660,77 @@ proptest! {
 
 #[test]
 fn severity_lattice_ordering() {
+    init_test_logging();
+    test_phase!("severity_lattice_ordering");
     // Ok < Err < Cancelled < Panicked
     let ok: Outcome<(), ()> = Outcome::Ok(());
     let err: Outcome<(), ()> = Outcome::Err(());
     let cancelled: Outcome<(), ()> = Outcome::Cancelled(CancelReason::timeout());
     let panicked: Outcome<(), ()> = Outcome::Panicked(PanicPayload::new("test"));
 
-    assert!(ok.severity() < err.severity());
-    assert!(err.severity() < cancelled.severity());
-    assert!(cancelled.severity() < panicked.severity());
+    assert_with_log!(
+        ok.severity() < err.severity(),
+        "Ok should be below Err",
+        true,
+        ok.severity() < err.severity()
+    );
+    assert_with_log!(
+        err.severity() < cancelled.severity(),
+        "Err should be below Cancelled",
+        true,
+        err.severity() < cancelled.severity()
+    );
+    assert_with_log!(
+        cancelled.severity() < panicked.severity(),
+        "Cancelled should be below Panicked",
+        true,
+        cancelled.severity() < panicked.severity()
+    );
+    test_complete!("severity_lattice_ordering");
 }
 
 #[test]
 fn cancel_kind_severity_ordering() {
+    init_test_logging();
+    test_phase!("cancel_kind_severity_ordering");
     // User < Timeout < FailFast/RaceLost < ParentCancelled < Shutdown
-    assert!(CancelKind::User.severity() < CancelKind::Timeout.severity());
-    assert!(CancelKind::Timeout.severity() < CancelKind::FailFast.severity());
-    assert_eq!(
+    assert_with_log!(
+        CancelKind::User.severity() < CancelKind::Timeout.severity(),
+        "User should be below Timeout",
+        true,
+        CancelKind::User.severity() < CancelKind::Timeout.severity()
+    );
+    assert_with_log!(
+        CancelKind::Timeout.severity() < CancelKind::FailFast.severity(),
+        "Timeout should be below FailFast",
+        true,
+        CancelKind::Timeout.severity() < CancelKind::FailFast.severity()
+    );
+    assert_with_log!(
+        CancelKind::FailFast.severity() == CancelKind::RaceLost.severity(),
+        "FailFast and RaceLost should have equal severity",
         CancelKind::FailFast.severity(),
         CancelKind::RaceLost.severity()
     );
-    assert!(CancelKind::RaceLost.severity() < CancelKind::ParentCancelled.severity());
-    assert!(CancelKind::ParentCancelled.severity() < CancelKind::Shutdown.severity());
+    assert_with_log!(
+        CancelKind::RaceLost.severity() < CancelKind::ParentCancelled.severity(),
+        "RaceLost should be below ParentCancelled",
+        true,
+        CancelKind::RaceLost.severity() < CancelKind::ParentCancelled.severity()
+    );
+    assert_with_log!(
+        CancelKind::ParentCancelled.severity() < CancelKind::Shutdown.severity(),
+        "ParentCancelled should be below Shutdown",
+        true,
+        CancelKind::ParentCancelled.severity() < CancelKind::Shutdown.severity()
+    );
+    test_complete!("cancel_kind_severity_ordering");
 }
 
 #[test]
 fn budget_zero_is_absorbing_for_quotas() {
+    init_test_logging();
+    test_phase!("budget_zero_is_absorbing_for_quotas");
     // ZERO combined with anything should give zero quotas
     let any_budget = Budget::new()
         .with_poll_quota(100)
@@ -631,7 +740,18 @@ fn budget_zero_is_absorbing_for_quotas() {
     let combined = any_budget.combine(Budget::ZERO);
 
     // Poll quota should be min(100, 0) = 0
-    assert_eq!(combined.poll_quota, 0);
+    assert_with_log!(
+        combined.poll_quota == 0,
+        "poll_quota should be zero",
+        0,
+        combined.poll_quota
+    );
     // Cost quota should be min(Some(1000), Some(0)) = Some(0)
-    assert_eq!(combined.cost_quota, Some(0));
+    assert_with_log!(
+        combined.cost_quota == Some(0),
+        "cost_quota should be zero",
+        Some(0),
+        combined.cost_quota
+    );
+    test_complete!("budget_zero_is_absorbing_for_quotas");
 }

@@ -204,18 +204,29 @@ pub enum RaceAllError<E> {
         winner_index: usize,
     },
     /// The winner was cancelled.
-    Cancelled(CancelReason),
+    Cancelled {
+        /// The cancel reason.
+        reason: CancelReason,
+        /// Index of the winning branch that was cancelled.
+        winner_index: usize,
+    },
     /// The winner panicked.
-    Panicked(PanicPayload),
+    Panicked {
+        /// The panic payload.
+        payload: PanicPayload,
+        /// Index of the winning branch that panicked.
+        winner_index: usize,
+    },
 }
 
 impl<E> RaceAllError<E> {
-    /// Returns the winner index if the error was an application error.
+    /// Returns the winner index for any error variant.
     #[must_use]
-    pub const fn winner_index(&self) -> Option<usize> {
+    pub const fn winner_index(&self) -> usize {
         match self {
-            Self::Error { winner_index, .. } => Some(*winner_index),
-            _ => None,
+            Self::Error { winner_index, .. } => *winner_index,
+            Self::Cancelled { winner_index, .. } => *winner_index,
+            Self::Panicked { winner_index, .. } => *winner_index,
         }
     }
 
@@ -228,13 +239,13 @@ impl<E> RaceAllError<E> {
     /// Returns true if the winner was cancelled.
     #[must_use]
     pub const fn is_cancelled(&self) -> bool {
-        matches!(self, Self::Cancelled(_))
+        matches!(self, Self::Cancelled { .. })
     }
 
     /// Returns true if the winner panicked.
     #[must_use]
     pub const fn is_panicked(&self) -> bool {
-        matches!(self, Self::Panicked(_))
+        matches!(self, Self::Panicked { .. })
     }
 }
 
@@ -250,8 +261,24 @@ impl<E: fmt::Display> fmt::Display for RaceAllError<E> {
                     "race winner at index {winner_index} failed with error: {error}"
                 )
             }
-            Self::Cancelled(r) => write!(f, "race winner was cancelled: {r}"),
-            Self::Panicked(p) => write!(f, "race winner panicked: {p}"),
+            Self::Cancelled {
+                reason,
+                winner_index,
+            } => {
+                write!(
+                    f,
+                    "race winner at index {winner_index} was cancelled: {reason}"
+                )
+            }
+            Self::Panicked {
+                payload,
+                winner_index,
+            } => {
+                write!(
+                    f,
+                    "race winner at index {winner_index} panicked: {payload}"
+                )
+            }
         }
     }
 }
@@ -468,8 +495,14 @@ pub fn race_all_to_result<T, E>(result: RaceAllResult<T, E>) -> Result<T, RaceAl
             error: e,
             winner_index: result.winner_index,
         }),
-        Outcome::Cancelled(r) => Err(RaceAllError::Cancelled(r)),
-        Outcome::Panicked(p) => Err(RaceAllError::Panicked(p)),
+        Outcome::Cancelled(r) => Err(RaceAllError::Cancelled {
+            reason: r,
+            winner_index: result.winner_index,
+        }),
+        Outcome::Panicked(p) => Err(RaceAllError::Panicked {
+            payload: p,
+            winner_index: result.winner_index,
+        }),
     }
 }
 
@@ -800,19 +833,25 @@ mod tests {
         assert!(err.is_error());
         assert!(!err.is_cancelled());
         assert!(!err.is_panicked());
-        assert_eq!(err.winner_index(), Some(2));
+        assert_eq!(err.winner_index(), 2);
 
-        let err: RaceAllError<&str> = RaceAllError::Cancelled(CancelReason::timeout());
+        let err: RaceAllError<&str> = RaceAllError::Cancelled {
+            reason: CancelReason::timeout(),
+            winner_index: 1,
+        };
         assert!(!err.is_error());
         assert!(err.is_cancelled());
         assert!(!err.is_panicked());
-        assert_eq!(err.winner_index(), None);
+        assert_eq!(err.winner_index(), 1);
 
-        let err: RaceAllError<&str> = RaceAllError::Panicked(PanicPayload::new("boom"));
+        let err: RaceAllError<&str> = RaceAllError::Panicked {
+            payload: PanicPayload::new("boom"),
+            winner_index: 0,
+        };
         assert!(!err.is_error());
         assert!(!err.is_cancelled());
         assert!(err.is_panicked());
-        assert_eq!(err.winner_index(), None);
+        assert_eq!(err.winner_index(), 0);
     }
 
     #[test]
@@ -825,11 +864,19 @@ mod tests {
         assert!(msg.contains("index 3"));
         assert!(msg.contains("test error"));
 
-        let err: RaceAllError<&str> = RaceAllError::Cancelled(CancelReason::timeout());
+        let err: RaceAllError<&str> = RaceAllError::Cancelled {
+            reason: CancelReason::timeout(),
+            winner_index: 1,
+        };
         assert!(err.to_string().contains("cancelled"));
+        assert!(err.to_string().contains("index 1"));
 
-        let err: RaceAllError<&str> = RaceAllError::Panicked(PanicPayload::new("crash"));
+        let err: RaceAllError<&str> = RaceAllError::Panicked {
+            payload: PanicPayload::new("crash"),
+            winner_index: 0,
+        };
         assert!(err.to_string().contains("panicked"));
+        assert!(err.to_string().contains("index 0"));
     }
 
     // ========== make_race_all_result tests ==========
@@ -875,7 +922,12 @@ mod tests {
         ];
 
         let result = make_race_all_result(0, outcomes);
-        assert!(matches!(result, Err(RaceAllError::Cancelled(_))));
+        assert!(matches!(result, Err(RaceAllError::Cancelled { .. })));
+        if let Err(RaceAllError::Cancelled { winner_index, .. }) = result {
+            assert_eq!(winner_index, 0);
+        } else {
+            panic!("Expected Cancelled");
+        }
     }
 
     #[test]
@@ -886,7 +938,12 @@ mod tests {
         ];
 
         let result = make_race_all_result(0, outcomes);
-        assert!(matches!(result, Err(RaceAllError::Panicked(_))));
+        assert!(matches!(result, Err(RaceAllError::Panicked { .. })));
+        if let Err(RaceAllError::Panicked { winner_index, .. }) = result {
+            assert_eq!(winner_index, 0);
+        } else {
+            panic!("Expected Panicked");
+        }
     }
 
     #[test]
@@ -898,7 +955,10 @@ mod tests {
         );
 
         let value = race_all_to_result(result);
-        assert!(matches!(value, Err(RaceAllError::Cancelled(_))));
+        assert!(matches!(value, Err(RaceAllError::Cancelled { .. })));
+        if let Err(RaceAllError::Cancelled { winner_index, .. }) = value {
+            assert_eq!(winner_index, 0);
+        }
     }
 
     #[test]
@@ -910,7 +970,10 @@ mod tests {
         );
 
         let value = race_all_to_result(result);
-        assert!(matches!(value, Err(RaceAllError::Panicked(_))));
+        assert!(matches!(value, Err(RaceAllError::Panicked { .. })));
+        if let Err(RaceAllError::Panicked { winner_index, .. }) = value {
+            assert_eq!(winner_index, 1);
+        }
     }
 
     #[test]

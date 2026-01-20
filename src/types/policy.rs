@@ -29,7 +29,12 @@ pub enum AggregateDecision<E> {
     /// At least one child was cancelled.
     Cancelled(CancelReason),
     /// At least one child panicked.
-    Panicked(PanicPayload),
+    Panicked {
+        /// The panic payload.
+        payload: PanicPayload,
+        /// Index of the first child that panicked.
+        first_panic_index: usize,
+    },
 }
 
 /// Policy for region outcome handling.
@@ -81,9 +86,14 @@ impl Policy for FailFast {
         outcomes: &[Outcome<T, Self::Error>],
     ) -> AggregateDecision<Self::Error> {
         let mut strongest_cancel: Option<CancelReason> = None;
-        for outcome in outcomes {
+        for (i, outcome) in outcomes.iter().enumerate() {
             match outcome {
-                Outcome::Panicked(p) => return AggregateDecision::Panicked(p.clone()),
+                Outcome::Panicked(p) => {
+                    return AggregateDecision::Panicked {
+                        payload: p.clone(),
+                        first_panic_index: i,
+                    }
+                }
                 Outcome::Cancelled(r) => match &mut strongest_cancel {
                     None => strongest_cancel = Some(r.clone()),
                     Some(existing) => {
@@ -124,9 +134,14 @@ impl Policy for CollectAll {
     ) -> AggregateDecision<Self::Error> {
         let mut first_error: Option<Self::Error> = None;
         let mut strongest_cancel: Option<CancelReason> = None;
-        for outcome in outcomes {
+        for (i, outcome) in outcomes.iter().enumerate() {
             match outcome {
-                Outcome::Panicked(p) => return AggregateDecision::Panicked(p.clone()),
+                Outcome::Panicked(p) => {
+                    return AggregateDecision::Panicked {
+                        payload: p.clone(),
+                        first_panic_index: i,
+                    }
+                }
                 Outcome::Cancelled(r) => match &mut strongest_cancel {
                     None => strongest_cancel = Some(r.clone()),
                     Some(existing) => {
@@ -215,7 +230,10 @@ mod tests {
             other => panic!("expected Cancelled, got {other:?}"),
         }
         match policy.aggregate_outcomes(&[cancelled, panicked]) {
-            AggregateDecision::Panicked(p) => assert_eq!(p.message(), "boom"),
+            AggregateDecision::Panicked { payload: p, first_panic_index: idx } => {
+                assert_eq!(p.message(), "boom");
+                assert_eq!(idx, 1);
+            }
             other => panic!("expected Panicked, got {other:?}"),
         }
     }
