@@ -89,23 +89,38 @@ pub mod prelude {
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn prelude_exports_work() {
+        init_test("prelude_exports_work");
         // Verify prelude exports compile
         let _ = ExitCode::SUCCESS;
         let _ = OutputFormat::Human;
         let _ = ColorChoice::Auto;
+        crate::test_complete!("prelude_exports_work");
     }
 
     #[test]
     fn error_integration() {
+        init_test("error_integration");
         // Test that error module integrates with exit codes
         let error = errors::invalid_argument("test", "invalid");
-        assert_eq!(error.exit_code, ExitCode::USER_ERROR);
+        crate::assert_with_log!(
+            error.exit_code == ExitCode::USER_ERROR,
+            "exit_code",
+            ExitCode::USER_ERROR,
+            error.exit_code
+        );
+        crate::test_complete!("error_integration");
     }
 
     #[test]
     fn output_integration() {
+        init_test("output_integration");
         use serde::Serialize;
         use std::io::Cursor;
 
@@ -124,20 +139,26 @@ mod tests {
         let mut output = Output::with_writer(OutputFormat::Json, cursor);
         let data = TestData { value: 42 };
         output.write(&data).unwrap();
+        crate::test_complete!("output_integration");
     }
 
     #[test]
     fn signal_integration() {
+        init_test("signal_integration");
         let handler = SignalHandler::new();
         let token = handler.cancellation_token();
 
-        assert!(!token.is_cancelled());
+        let cancelled = token.is_cancelled();
+        crate::assert_with_log!(!cancelled, "token not cancelled", false, cancelled);
         handler.record_signal();
-        assert!(token.is_cancelled());
+        let cancelled = token.is_cancelled();
+        crate::assert_with_log!(cancelled, "token cancelled", true, cancelled);
+        crate::test_complete!("signal_integration");
     }
 
     #[test]
     fn completion_integration() {
+        init_test("completion_integration");
         struct TestCmd;
 
         impl Completable for TestCmd {
@@ -161,6 +182,8 @@ mod tests {
         let mut buf = Vec::new();
         generate_completions(Shell::Bash, &TestCmd, &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("test"));
+        let contains = output.contains("test");
+        crate::assert_with_log!(contains, "contains test", true, contains);
+        crate::test_complete!("completion_integration");
     }
 }

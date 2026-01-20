@@ -3,9 +3,9 @@
 //! Measures the cost of tracing instrumentation on hot paths.
 //! Run with and without `tracing-integration` feature to compare.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use asupersync::runtime::RuntimeState;
 use asupersync::types::Budget;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_region_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("tracing_overhead");

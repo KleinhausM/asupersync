@@ -301,32 +301,54 @@ mod tests {
         }
     }
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn output_format_default_is_human() {
-        assert!(matches!(OutputFormat::default(), OutputFormat::Human));
+        init_test("output_format_default_is_human");
+        let is_human = matches!(OutputFormat::default(), OutputFormat::Human);
+        crate::assert_with_log!(is_human, "default is human", true, is_human);
+        crate::test_complete!("output_format_default_is_human");
     }
 
     #[test]
     fn output_format_is_json() {
-        assert!(OutputFormat::Json.is_json());
-        assert!(OutputFormat::StreamJson.is_json());
-        assert!(OutputFormat::JsonPretty.is_json());
-        assert!(!OutputFormat::Human.is_json());
-        assert!(!OutputFormat::Tsv.is_json());
+        init_test("output_format_is_json");
+        let json = OutputFormat::Json.is_json();
+        crate::assert_with_log!(json, "json", true, json);
+        let stream = OutputFormat::StreamJson.is_json();
+        crate::assert_with_log!(stream, "stream json", true, stream);
+        let pretty = OutputFormat::JsonPretty.is_json();
+        crate::assert_with_log!(pretty, "json pretty", true, pretty);
+        let human = OutputFormat::Human.is_json();
+        crate::assert_with_log!(!human, "human not json", false, human);
+        let tsv = OutputFormat::Tsv.is_json();
+        crate::assert_with_log!(!tsv, "tsv not json", false, tsv);
+        crate::test_complete!("output_format_is_json");
     }
 
     #[test]
     fn color_choice_never_returns_false() {
-        assert!(!ColorChoice::Never.should_colorize());
+        init_test("color_choice_never_returns_false");
+        let should = ColorChoice::Never.should_colorize();
+        crate::assert_with_log!(!should, "never colorize", false, should);
+        crate::test_complete!("color_choice_never_returns_false");
     }
 
     #[test]
     fn color_choice_always_returns_true() {
-        assert!(ColorChoice::Always.should_colorize());
+        init_test("color_choice_always_returns_true");
+        let should = ColorChoice::Always.should_colorize();
+        crate::assert_with_log!(should, "always colorize", true, should);
+        crate::test_complete!("color_choice_always_returns_true");
     }
 
     #[test]
     fn json_output_parses() {
+        init_test("json_output_parses");
         let item = TestItem {
             id: 42,
             name: "test".into(),
@@ -335,12 +357,24 @@ mod tests {
         let json = serde_json::to_string(&item).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed["id"], 42);
-        assert_eq!(parsed["name"], "test");
+        crate::assert_with_log!(
+            parsed["id"] == 42,
+            "id",
+            42,
+            parsed["id"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["name"] == "test",
+            "name",
+            "test",
+            parsed["name"].clone()
+        );
+        crate::test_complete!("json_output_parses");
     }
 
     #[test]
     fn output_writer_json_format() {
+        init_test("output_writer_json_format");
         use std::io::Cursor;
 
         let cursor = Cursor::new(Vec::new());
@@ -351,10 +385,12 @@ mod tests {
             name: "one".into(),
         };
         output.write(&item).unwrap();
+        crate::test_complete!("output_writer_json_format");
     }
 
     #[test]
     fn output_writer_human_format() {
+        init_test("output_writer_human_format");
         use std::io::Cursor;
 
         let cursor = Cursor::new(Vec::new());
@@ -365,10 +401,12 @@ mod tests {
             name: "one".into(),
         };
         output.write(&item).unwrap();
+        crate::test_complete!("output_writer_human_format");
     }
 
     #[test]
     fn output_writer_tsv_format() {
+        init_test("output_writer_tsv_format");
         use std::io::Cursor;
 
         let cursor = Cursor::new(Vec::new());
@@ -379,10 +417,12 @@ mod tests {
             name: "one".into(),
         };
         output.write(&item).unwrap();
+        crate::test_complete!("output_writer_tsv_format");
     }
 
     #[test]
     fn output_writer_list_json_is_array() {
+        init_test("output_writer_list_json_is_array");
         use std::io::Cursor;
 
         let cursor = Cursor::new(Vec::new());
@@ -399,5 +439,6 @@ mod tests {
             },
         ];
         output.write_list(&items).unwrap();
+        crate::test_complete!("output_writer_list_json_is_array");
     }
 }

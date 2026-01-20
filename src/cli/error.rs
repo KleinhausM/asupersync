@@ -283,8 +283,14 @@ pub mod errors {
 mod tests {
     use super::{errors, CliError, ExitCode};
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn error_serializes_to_json() {
+        init_test("error_serializes_to_json");
         let error = CliError::new("test_error", "Test Error")
             .detail("Something went wrong")
             .suggestion("Try again")
@@ -294,102 +300,209 @@ mod tests {
         let json = serde_json::to_string(&error).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed["type"], "test_error");
-        assert_eq!(parsed["title"], "Test Error");
-        assert_eq!(parsed["detail"], "Something went wrong");
-        assert_eq!(parsed["suggestion"], "Try again");
-        assert_eq!(parsed["context"]["file"], "test.rs");
-        assert_eq!(parsed["exit_code"], 1);
+        crate::assert_with_log!(
+            parsed["type"] == "test_error",
+            "type",
+            "test_error",
+            parsed["type"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["title"] == "Test Error",
+            "title",
+            "Test Error",
+            parsed["title"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["detail"] == "Something went wrong",
+            "detail",
+            "Something went wrong",
+            parsed["detail"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["suggestion"] == "Try again",
+            "suggestion",
+            "Try again",
+            parsed["suggestion"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["context"]["file"] == "test.rs",
+            "context file",
+            "test.rs",
+            parsed["context"]["file"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["exit_code"] == 1,
+            "exit_code",
+            1,
+            parsed["exit_code"].clone()
+        );
+        crate::test_complete!("error_serializes_to_json");
     }
 
     #[test]
     fn error_human_format_includes_all_parts() {
+        init_test("error_human_format_includes_all_parts");
         let error = CliError::new("test_error", "Test Error")
             .detail("Details here")
             .suggestion("Try this");
 
         let human = error.human_format(false);
 
-        assert!(human.contains("Error: Test Error"));
-        assert!(human.contains("Details here"));
-        assert!(human.contains("Suggestion: Try this"));
+        let has_title = human.contains("Error: Test Error");
+        crate::assert_with_log!(has_title, "title", true, has_title);
+        let has_details = human.contains("Details here");
+        crate::assert_with_log!(has_details, "details", true, has_details);
+        let has_suggestion = human.contains("Suggestion: Try this");
+        crate::assert_with_log!(has_suggestion, "suggestion", true, has_suggestion);
+        crate::test_complete!("error_human_format_includes_all_parts");
     }
 
     #[test]
     fn error_human_format_no_ansi_when_disabled() {
+        init_test("error_human_format_no_ansi_when_disabled");
         let error = CliError::new("test", "Test");
         let human = error.human_format(false);
 
-        assert!(!human.contains("\x1b["));
+        let has_ansi = human.contains("\x1b[");
+        crate::assert_with_log!(!has_ansi, "no ansi", false, has_ansi);
+        crate::test_complete!("error_human_format_no_ansi_when_disabled");
     }
 
     #[test]
     fn error_human_format_has_ansi_when_enabled() {
+        init_test("error_human_format_has_ansi_when_enabled");
         let error = CliError::new("test", "Test");
         let human = error.human_format(true);
 
-        assert!(human.contains("\x1b["));
+        let has_ansi = human.contains("\x1b[");
+        crate::assert_with_log!(has_ansi, "has ansi", true, has_ansi);
+        crate::test_complete!("error_human_format_has_ansi_when_enabled");
     }
 
     #[test]
     fn error_implements_display() {
+        init_test("error_implements_display");
         let error = CliError::new("test_type", "Test Title");
         let display = format!("{error}");
 
-        assert!(display.contains("test_type"));
-        assert!(display.contains("Test Title"));
+        let has_type = display.contains("test_type");
+        crate::assert_with_log!(has_type, "type", true, has_type);
+        let has_title = display.contains("Test Title");
+        crate::assert_with_log!(has_title, "title", true, has_title);
+        crate::test_complete!("error_implements_display");
     }
 
     #[test]
     fn standard_errors_have_correct_exit_codes() {
-        assert_eq!(
-            errors::invalid_argument("foo", "bad").exit_code,
-            ExitCode::USER_ERROR
+        init_test("standard_errors_have_correct_exit_codes");
+        let invalid = errors::invalid_argument("foo", "bad").exit_code;
+        crate::assert_with_log!(
+            invalid == ExitCode::USER_ERROR,
+            "invalid_argument",
+            ExitCode::USER_ERROR,
+            invalid
         );
-        assert_eq!(
-            errors::file_not_found("/path").exit_code,
-            ExitCode::USER_ERROR
+        let not_found = errors::file_not_found("/path").exit_code;
+        crate::assert_with_log!(
+            not_found == ExitCode::USER_ERROR,
+            "file_not_found",
+            ExitCode::USER_ERROR,
+            not_found
         );
-        assert_eq!(
-            errors::permission_denied("/path").exit_code,
-            ExitCode::USER_ERROR
+        let permission = errors::permission_denied("/path").exit_code;
+        crate::assert_with_log!(
+            permission == ExitCode::USER_ERROR,
+            "permission_denied",
+            ExitCode::USER_ERROR,
+            permission
         );
-        assert_eq!(errors::cancelled().exit_code, ExitCode::CANCELLED);
-        assert_eq!(
-            errors::internal("bug").exit_code,
-            ExitCode::INTERNAL_ERROR
+        let cancelled = errors::cancelled().exit_code;
+        crate::assert_with_log!(
+            cancelled == ExitCode::CANCELLED,
+            "cancelled",
+            ExitCode::CANCELLED,
+            cancelled
         );
-        assert_eq!(
-            errors::test_failure("test", "reason").exit_code,
-            ExitCode::TEST_FAILURE
+        let internal = errors::internal("bug").exit_code;
+        crate::assert_with_log!(
+            internal == ExitCode::INTERNAL_ERROR,
+            "internal",
+            ExitCode::INTERNAL_ERROR,
+            internal
         );
-        assert_eq!(
-            errors::oracle_violation("oracle", "details").exit_code,
-            ExitCode::ORACLE_VIOLATION
+        let test_failure = errors::test_failure("test", "reason").exit_code;
+        crate::assert_with_log!(
+            test_failure == ExitCode::TEST_FAILURE,
+            "test_failure",
+            ExitCode::TEST_FAILURE,
+            test_failure
         );
+        let oracle = errors::oracle_violation("oracle", "details").exit_code;
+        crate::assert_with_log!(
+            oracle == ExitCode::ORACLE_VIOLATION,
+            "oracle_violation",
+            ExitCode::ORACLE_VIOLATION,
+            oracle
+        );
+        crate::test_complete!("standard_errors_have_correct_exit_codes");
     }
 
     #[test]
     fn error_context_accepts_various_types() {
+        init_test("error_context_accepts_various_types");
         let error = CliError::new("test", "Test")
             .context("string", "value")
             .context("number", 42)
             .context("bool", true)
             .context("array", vec![1, 2, 3]);
 
-        assert_eq!(error.context.len(), 4);
-        assert_eq!(error.context["string"], "value");
-        assert_eq!(error.context["number"], 42);
-        assert_eq!(error.context["bool"], true);
+        let len = error.context.len();
+        crate::assert_with_log!(len == 4, "context len", 4, len);
+        crate::assert_with_log!(
+            error.context["string"] == "value",
+            "string",
+            "value",
+            error.context["string"].clone()
+        );
+        crate::assert_with_log!(
+            error.context["number"] == 42,
+            "number",
+            42,
+            error.context["number"].clone()
+        );
+        crate::assert_with_log!(
+            error.context["bool"] == true,
+            "bool",
+            true,
+            error.context["bool"].clone()
+        );
+        crate::test_complete!("error_context_accepts_various_types");
     }
 
     #[test]
     fn error_deserializes_from_json() {
+        init_test("error_deserializes_from_json");
         let json = r#"{"type":"test","title":"Test","exit_code":1}"#;
         let error: CliError = serde_json::from_str(json).unwrap();
 
-        assert_eq!(error.error_type, "test");
-        assert_eq!(error.title, "Test");
-        assert_eq!(error.exit_code, 1);
+        crate::assert_with_log!(
+            error.error_type == "test",
+            "type",
+            "test",
+            error.error_type
+        );
+        crate::assert_with_log!(
+            error.title == "Test",
+            "title",
+            "Test",
+            error.title
+        );
+        crate::assert_with_log!(
+            error.exit_code == 1,
+            "exit_code",
+            1,
+            error.exit_code
+        );
+        crate::test_complete!("error_deserializes_from_json");
     }
 }

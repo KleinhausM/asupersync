@@ -395,23 +395,55 @@ impl ProgressReporter {
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn progress_event_percentage() {
+        init_test("progress_event_percentage");
         let event = ProgressEvent::update(50, 100, "test");
-        assert_eq!(event.percentage(), Some(50.0));
+        let percentage = event.percentage();
+        crate::assert_with_log!(
+            percentage == Some(50.0),
+            "percentage 50",
+            Some(50.0),
+            percentage
+        );
 
         let event = ProgressEvent::update(25, 100, "test");
-        assert_eq!(event.percentage(), Some(25.0));
+        let percentage = event.percentage();
+        crate::assert_with_log!(
+            percentage == Some(25.0),
+            "percentage 25",
+            Some(25.0),
+            percentage
+        );
 
         let event = ProgressEvent::started("test");
-        assert_eq!(event.percentage(), None);
+        let percentage: Option<f64> = event.percentage();
+        crate::assert_with_log!(
+            percentage.is_none(),
+            "percentage none",
+            "None",
+            format!("{:?}", percentage)
+        );
 
         let event = ProgressEvent::update(0, 0, "test");
-        assert_eq!(event.percentage(), None);
+        let percentage: Option<f64> = event.percentage();
+        crate::assert_with_log!(
+            percentage.is_none(),
+            "percentage none for 0/0",
+            "None",
+            format!("{:?}", percentage)
+        );
+        crate::test_complete!("progress_event_percentage");
     }
 
     #[test]
     fn progress_event_serializes() {
+        init_test("progress_event_serializes");
         let event = ProgressEvent::update(5, 10, "Processing")
             .operation("sync")
             .elapsed(Duration::from_millis(1500));
@@ -419,16 +451,48 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed["kind"], "update");
-        assert_eq!(parsed["current"], 5);
-        assert_eq!(parsed["total"], 10);
-        assert_eq!(parsed["message"], "Processing");
-        assert_eq!(parsed["operation"], "sync");
-        assert_eq!(parsed["elapsed_ms"], 1500);
+        crate::assert_with_log!(
+            parsed["kind"] == "update",
+            "kind",
+            "update",
+            parsed["kind"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["current"] == 5,
+            "current",
+            5,
+            parsed["current"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["total"] == 10,
+            "total",
+            10,
+            parsed["total"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["message"] == "Processing",
+            "message",
+            "Processing",
+            parsed["message"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["operation"] == "sync",
+            "operation",
+            "sync",
+            parsed["operation"].clone()
+        );
+        crate::assert_with_log!(
+            parsed["elapsed_ms"] == 1500,
+            "elapsed_ms",
+            1500,
+            parsed["elapsed_ms"].clone()
+        );
+        crate::test_complete!("progress_event_serializes");
     }
 
     #[test]
     fn progress_reporter_json_output() {
+        init_test("progress_reporter_json_output");
         use std::io::Cursor;
 
         let cursor = Cursor::new(Vec::new());
@@ -436,21 +500,42 @@ mod tests {
             ProgressReporter::with_writer(OutputFormat::Json, cursor).operation("test");
 
         reporter.start("Starting").unwrap();
+        crate::test_complete!("progress_reporter_json_output");
     }
 
     #[test]
     fn progress_reporter_tracks_elapsed() {
+        init_test("progress_reporter_tracks_elapsed");
         let reporter = ProgressReporter::new(OutputFormat::Human);
         std::thread::sleep(Duration::from_millis(10));
-        assert!(reporter.elapsed().as_millis() >= 10);
+        let elapsed = reporter.elapsed().as_millis();
+        crate::assert_with_log!(
+            elapsed >= 10,
+            "elapsed >= 10ms",
+            ">= 10ms",
+            elapsed
+        );
+        crate::test_complete!("progress_reporter_tracks_elapsed");
     }
 
     #[test]
     fn progress_kind_serializes_snake_case() {
+        init_test("progress_kind_serializes_snake_case");
         let json = serde_json::to_string(&ProgressKind::Started).unwrap();
-        assert_eq!(json, "\"started\"");
+        crate::assert_with_log!(
+            json == "\"started\"",
+            "started json",
+            "\"started\"",
+            json
+        );
 
         let json = serde_json::to_string(&ProgressKind::Completed).unwrap();
-        assert_eq!(json, "\"completed\"");
+        crate::assert_with_log!(
+            json == "\"completed\"",
+            "completed json",
+            "\"completed\"",
+            json
+        );
+        crate::test_complete!("progress_kind_serializes_snake_case");
     }
 }

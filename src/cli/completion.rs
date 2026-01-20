@@ -399,43 +399,92 @@ fn generate_elvish_completions<W: Write, C: Completable>(
 mod tests {
     use super::*;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn shell_names() {
-        assert_eq!(Shell::Bash.name(), "bash");
-        assert_eq!(Shell::Zsh.name(), "zsh");
-        assert_eq!(Shell::Fish.name(), "fish");
-        assert_eq!(Shell::PowerShell.name(), "powershell");
-        assert_eq!(Shell::Elvish.name(), "elvish");
+        init_test("shell_names");
+        let bash = Shell::Bash.name();
+        crate::assert_with_log!(bash == "bash", "bash name", "bash", bash);
+        let zsh = Shell::Zsh.name();
+        crate::assert_with_log!(zsh == "zsh", "zsh name", "zsh", zsh);
+        let fish = Shell::Fish.name();
+        crate::assert_with_log!(fish == "fish", "fish name", "fish", fish);
+        let pwsh = Shell::PowerShell.name();
+        crate::assert_with_log!(
+            pwsh == "powershell",
+            "powershell name",
+            "powershell",
+            pwsh
+        );
+        let elvish = Shell::Elvish.name();
+        crate::assert_with_log!(elvish == "elvish", "elvish name", "elvish", elvish);
+        crate::test_complete!("shell_names");
     }
 
     #[test]
     fn shell_parse_valid() {
-        assert_eq!(Shell::parse("bash").unwrap(), Shell::Bash);
-        assert_eq!(Shell::parse("ZSH").unwrap(), Shell::Zsh);
-        assert_eq!(Shell::parse("fish").unwrap(), Shell::Fish);
-        assert_eq!(Shell::parse("powershell").unwrap(), Shell::PowerShell);
-        assert_eq!(Shell::parse("pwsh").unwrap(), Shell::PowerShell);
-        assert_eq!(Shell::parse("elvish").unwrap(), Shell::Elvish);
+        init_test("shell_parse_valid");
+        let bash = Shell::parse("bash").unwrap();
+        crate::assert_with_log!(bash == Shell::Bash, "parse bash", Shell::Bash, bash);
+        let zsh = Shell::parse("ZSH").unwrap();
+        crate::assert_with_log!(zsh == Shell::Zsh, "parse zsh", Shell::Zsh, zsh);
+        let fish = Shell::parse("fish").unwrap();
+        crate::assert_with_log!(fish == Shell::Fish, "parse fish", Shell::Fish, fish);
+        let pwsh = Shell::parse("powershell").unwrap();
+        crate::assert_with_log!(
+            pwsh == Shell::PowerShell,
+            "parse powershell",
+            Shell::PowerShell,
+            pwsh
+        );
+        let pwsh_short = Shell::parse("pwsh").unwrap();
+        crate::assert_with_log!(
+            pwsh_short == Shell::PowerShell,
+            "parse pwsh",
+            Shell::PowerShell,
+            pwsh_short
+        );
+        let elvish = Shell::parse("elvish").unwrap();
+        crate::assert_with_log!(elvish == Shell::Elvish, "parse elvish", Shell::Elvish, elvish);
+        crate::test_complete!("shell_parse_valid");
     }
 
     #[test]
     fn shell_parse_invalid() {
+        init_test("shell_parse_invalid");
         let err = Shell::parse("cmd").unwrap_err();
-        assert!(err.contains("Unknown shell"));
+        let contains = err.contains("Unknown shell");
+        crate::assert_with_log!(contains, "unknown shell", true, contains);
+        crate::test_complete!("shell_parse_invalid");
     }
 
     #[test]
     fn install_instructions_contain_command() {
+        init_test("install_instructions_contain_command");
         let instructions = Shell::Bash.install_instructions("mytool");
-        assert!(instructions.contains("mytool"));
-        assert!(instructions.contains("completions bash"));
+        let has_tool = instructions.contains("mytool");
+        crate::assert_with_log!(has_tool, "contains tool", true, has_tool);
+        let has_cmd = instructions.contains("completions bash");
+        crate::assert_with_log!(has_cmd, "contains completions", true, has_cmd);
+        crate::test_complete!("install_instructions_contain_command");
     }
 
     #[test]
     fn completion_item_builder() {
+        init_test("completion_item_builder");
         let item = CompletionItem::new("--help").description("Show help");
-        assert_eq!(item.value, "--help");
-        assert_eq!(item.description, Some("Show help".to_string()));
+        crate::assert_with_log!(item.value == "--help", "value", "--help", item.value);
+        crate::assert_with_log!(
+            item.description == Some("Show help".to_string()),
+            "description",
+            Some("Show help".to_string()),
+            item.description.clone()
+        );
+        crate::test_complete!("completion_item_builder");
     }
 
     struct TestCompletable;
@@ -466,34 +515,49 @@ mod tests {
 
     #[test]
     fn generate_bash_completions_works() {
+        init_test("generate_bash_completions_works");
         let mut buf = Vec::new();
         generate_completions(Shell::Bash, &TestCompletable, &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
-        assert!(output.contains("_testcmd_completions"));
-        assert!(output.contains("complete -F"));
-        assert!(output.contains("run"));
-        assert!(output.contains("--help"));
+        let has_completions = output.contains("_testcmd_completions");
+        crate::assert_with_log!(has_completions, "has completions", true, has_completions);
+        let has_complete = output.contains("complete -F");
+        crate::assert_with_log!(has_complete, "has complete -F", true, has_complete);
+        let has_run = output.contains("run");
+        crate::assert_with_log!(has_run, "has run", true, has_run);
+        let has_help = output.contains("--help");
+        crate::assert_with_log!(has_help, "has --help", true, has_help);
+        crate::test_complete!("generate_bash_completions_works");
     }
 
     #[test]
     fn generate_zsh_completions_works() {
+        init_test("generate_zsh_completions_works");
         let mut buf = Vec::new();
         generate_completions(Shell::Zsh, &TestCompletable, &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
-        assert!(output.contains("compdef testcmd"));
-        assert!(output.contains("_testcmd"));
-        assert!(output.contains("run:Run the program"));
+        let has_compdef = output.contains("compdef testcmd");
+        crate::assert_with_log!(has_compdef, "has compdef", true, has_compdef);
+        let has_cmd = output.contains("_testcmd");
+        crate::assert_with_log!(has_cmd, "has _testcmd", true, has_cmd);
+        let has_run = output.contains("run:Run the program");
+        crate::assert_with_log!(has_run, "has run", true, has_run);
+        crate::test_complete!("generate_zsh_completions_works");
     }
 
     #[test]
     fn generate_fish_completions_works() {
+        init_test("generate_fish_completions_works");
         let mut buf = Vec::new();
         generate_completions(Shell::Fish, &TestCompletable, &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
-        assert!(output.contains("complete -c testcmd"));
-        assert!(output.contains("-a 'run'"));
+        let has_complete = output.contains("complete -c testcmd");
+        crate::assert_with_log!(has_complete, "has complete -c", true, has_complete);
+        let has_run = output.contains("-a 'run'");
+        crate::assert_with_log!(has_run, "has run", true, has_run);
+        crate::test_complete!("generate_fish_completions_works");
     }
 }
