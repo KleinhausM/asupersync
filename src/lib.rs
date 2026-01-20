@@ -76,6 +76,9 @@ pub mod service;
 pub mod signal;
 pub mod stream;
 pub mod sync;
+pub mod test_logging;
+#[cfg(test)]
+pub mod test_utils;
 pub mod time;
 pub mod trace;
 pub mod tracing_compat;
