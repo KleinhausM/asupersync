@@ -41,9 +41,10 @@ pub mod runner;
 pub mod tests;
 
 pub use bench::{
-    default_benchmarks, run_benchmark_comparison, BenchCategory, BenchComparisonResult,
-    BenchComparisonSummary, BenchConfig, BenchOutput, BenchRunResult, BenchRunSummary, BenchRunner,
-    Benchmark, Comparison, ComparisonConfidence, Stats, StatsError,
+    default_benchmarks, run_benchmark_comparison, BenchAllocSnapshot, BenchAllocStats, BenchCategory,
+    BenchComparisonResult, BenchComparisonSummary, BenchConfig, BenchOutput, BenchRunResult,
+    BenchRunSummary, BenchRunner, BenchThresholds, Benchmark, Comparison, ComparisonConfidence,
+    RegressionCheck, RegressionConfig, RegressionMetric, Stats, StatsError,
 };
 pub use logging::{LogCollector, LogConfig, LogEntry, LogLevel};
 pub use runner::{
@@ -244,6 +245,11 @@ pub trait RuntimeInterface: Sized {
     // ---- Block On ----
     /// Block on a future until it completes.
     fn block_on<F: Future>(&self, future: F) -> F::Output;
+
+    /// Snapshot allocation counters for benchmarking (if supported).
+    fn bench_alloc_snapshot(&self) -> Option<crate::bench::runner::BenchAllocSnapshot> {
+        None
+    }
 
     // ---- Time ----
     /// Sleep for a duration.

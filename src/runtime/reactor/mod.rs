@@ -103,6 +103,15 @@ pub mod token;
 #[cfg(target_os = "linux")]
 pub mod epoll;
 
+#[cfg(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+pub mod kqueue;
+
 pub use interest::Interest;
 pub use lab::{FaultConfig, LabReactor};
 #[allow(unused_imports)]

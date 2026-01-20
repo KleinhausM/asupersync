@@ -18,12 +18,16 @@ pub fn render_console_summary(summary: &BenchRunSummary) -> String {
 
     for result in &summary.results {
         if let Some(stats) = &result.stats {
+            let alloc = format_alloc_summary(result.alloc_stats.as_ref());
             out.push_str(&format!(
-                "- {}: mean={} p95={} samples={}\n",
+                "- {}: mean={} p50={} p95={} p99={} samples={}{}\n",
                 result.benchmark_id,
                 format_duration(stats.mean),
+                format_duration(stats.p50),
                 format_duration(stats.p95),
-                stats.sample_count
+                format_duration(stats.p99),
+                stats.sample_count,
+                alloc
             ));
         } else if let Some(error) = &result.error {
             out.push_str(&format!("- {}: ERROR: {}\n", result.benchmark_id, error));
@@ -65,19 +69,24 @@ pub fn write_html_report(summary: &BenchRunSummary, path: &Path) -> io::Result<(
     ));
 
     html.push_str("<table><tr>");
-    html.push_str("<th>Benchmark</th><th>Mean</th><th>Median</th><th>P95</th>");
-    html.push_str("<th>Std Dev</th><th>Samples</th><th>Status</th></tr>");
+    html.push_str(
+        "<th>Benchmark</th><th>Mean</th><th>P50</th><th>P95</th><th>P99</th><th>Std Dev</th><th>Samples</th><th>Alloc Avg</th><th>Bytes Avg</th><th>Status</th></tr>",
+    );
 
     for result in &summary.results {
         if let Some(stats) = &result.stats {
+            let (alloc_avg, bytes_avg) = format_alloc_columns(result.alloc_stats.as_ref());
             html.push_str(&format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>OK</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>OK</td></tr>",
                 result.benchmark_name,
                 format_duration(stats.mean),
-                format_duration(stats.median),
+                format_duration(stats.p50),
                 format_duration(stats.p95),
+                format_duration(stats.p99),
                 format_duration(stats.std_dev),
-                stats.sample_count
+                stats.sample_count,
+                alloc_avg,
+                bytes_avg
             ));
         } else {
             let error = result
@@ -86,7 +95,7 @@ pub fn write_html_report(summary: &BenchRunSummary, path: &Path) -> io::Result<(
                 .map(String::as_str)
                 .unwrap_or("Unknown error");
             html.push_str(&format!(
-                "<tr><td>{}</td><td colspan=\"5\"></td><td class=\"error\">{}</td></tr>",
+                "<tr><td>{}</td><td colspan=\"8\"></td><td class=\"error\">{}</td></tr>",
                 result.benchmark_name, error
             ));
         }
@@ -182,5 +191,41 @@ fn format_duration(duration: Duration) -> String {
         format!("{}ms", duration.as_millis())
     } else {
         format!("{:.2}s", duration.as_secs_f64())
+    }
+}
+
+fn format_alloc_summary(stats: Option<&crate::bench::runner::BenchAllocStats>) -> String {
+    match stats {
+        Some(stats) => format!(
+            " alloc_avg={:.1} bytes_avg={}",
+            stats.avg_allocations,
+            format_bytes(stats.avg_bytes_allocated)
+        ),
+        None => String::new(),
+    }
+}
+
+fn format_alloc_columns(stats: Option<&crate::bench::runner::BenchAllocStats>) -> (String, String) {
+    match stats {
+        Some(stats) => (
+            format!("{:.1}", stats.avg_allocations),
+            format_bytes(stats.avg_bytes_allocated),
+        ),
+        None => ("-".to_string(), "-".to_string()),
+    }
+}
+
+fn format_bytes(bytes: f64) -> String {
+    if !bytes.is_finite() || bytes <= 0.0 {
+        return "0B".to_string();
+    }
+    if bytes < 1024.0 {
+        format!("{:.0}B", bytes)
+    } else if bytes < 1024.0 * 1024.0 {
+        format!("{:.1}KB", bytes / 1024.0)
+    } else if bytes < 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.1}MB", bytes / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}GB", bytes / (1024.0 * 1024.0 * 1024.0))
     }
 }

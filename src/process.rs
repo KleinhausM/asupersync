@@ -927,7 +927,12 @@ mod tests {
         // Run the future synchronously for testing
         let result = futures_lite::future::block_on(output).expect("output failed");
 
-        crate::assert_with_log!(result.status.success(), "success", true, result.status.success());
+        crate::assert_with_log!(
+            result.status.success(),
+            "success",
+            true,
+            result.status.success()
+        );
         crate::assert_with_log!(
             result.stdout == b"hello\n",
             "stdout",
@@ -1019,12 +1024,15 @@ mod tests {
 
         // Write to stdin
         if let Some(mut stdin) = child.stdin() {
-            stdin.inner.write_all(b"hello from stdin").expect("write failed");
+            stdin
+                .inner
+                .write_all(b"hello from stdin")
+                .expect("write failed");
         }
         drop(child.stdin); // Close stdin to signal EOF
 
-        let output = futures_lite::future::block_on(child.wait_with_output())
-            .expect("output failed");
+        let output =
+            futures_lite::future::block_on(child.wait_with_output()).expect("output failed");
 
         crate::assert_with_log!(
             output.stdout == b"hello from stdin",
@@ -1156,7 +1164,12 @@ mod tests {
         let result = futures_lite::future::block_on(output).expect("output failed");
 
         // stdout/stderr should be empty because they were null (not piped)
-        crate::assert_with_log!(result.stdout.is_empty(), "stdout empty", true, result.stdout.is_empty());
+        crate::assert_with_log!(
+            result.stdout.is_empty(),
+            "stdout empty",
+            true,
+            result.stdout.is_empty()
+        );
         crate::test_complete!("test_stdio_null");
     }
 
