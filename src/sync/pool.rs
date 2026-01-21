@@ -424,6 +424,11 @@ impl<R> std::ops::DerefMut for PooledResource<R> {
     }
 }
 
+// PooledResource is Send if the resource is Send.
+// The callback is already required to be Send + Sync.
+#[allow(unsafe_code)]
+unsafe impl<R: Send> Send for PooledResource<R> {}
+
 // ============================================================================
 // PoolConfig and GenericPool
 // ============================================================================
