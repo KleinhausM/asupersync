@@ -60,6 +60,7 @@ impl<T, Request> ServiceExt<Request> for T where T: Service<Request> + ?Sized {}
 /// Unlike [`Service`], this trait is async-native and does not expose readiness
 /// polling. Callers supply a `Cx` so cancellation, budgets, and capabilities
 /// are explicitly threaded through the call.
+#[allow(async_fn_in_trait)]
 pub trait AsupersyncService<Request>: Send + Sync {
     /// Response type returned by the service.
     type Response;
