@@ -40,8 +40,8 @@ pub use compat::{
 };
 pub use event::{TraceData, TraceEvent, TraceEventKind, TRACE_EVENT_SCHEMA_VERSION};
 pub use file::{
-    read_trace, write_trace, TraceEventIterator, TraceFileError, TraceReader, TraceWriter,
-    TRACE_FILE_VERSION, TRACE_MAGIC,
+    read_trace, write_trace, CompressionMode, TraceEventIterator, TraceFileConfig, TraceFileError,
+    TraceReader, TraceWriter, TRACE_FILE_VERSION, TRACE_MAGIC,
 };
 pub use filter::{EventCategory, FilterBuilder, FilterableEvent, TraceFilter};
 pub use integrity::{

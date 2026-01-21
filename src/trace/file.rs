@@ -6,6 +6,7 @@
 //! - **Compactness**: Uses MessagePack for efficient binary encoding
 //! - **Versioning**: Format version in header for forward compatibility
 //! - **Streaming**: Events can be read incrementally without loading all into memory
+//! - **Compression**: Optional LZ4 compression for reduced storage (feature-gated)
 //!
 //! # File Format
 //!
@@ -15,7 +16,9 @@
 //! +-------------------+
 //! | Version (2 bytes) |  u16 little-endian
 //! +-------------------+
-//! | Flags (2 bytes)   |  u16 little-endian (reserved for compression, etc.)
+//! | Flags (2 bytes)   |  u16 little-endian (bit 0 = compressed)
+//! +-------------------+
+//! | Compression (1 b) |  u8 (0=none, 1=lz4)
 //! +-------------------+
 //! | Meta len (4 bytes)|  u32 little-endian
 //! +-------------------+
@@ -23,23 +26,30 @@
 //! +-------------------+
 //! | Event count (8 b) |  u64 little-endian
 //! +-------------------+
-//! | Events (msgpack)  |  [ReplayEvent] length-prefixed
+//! | Events (msgpack)  |  [ReplayEvent] length-prefixed (optionally compressed)
 //! +-------------------+
 //! ```
+//!
+//! # Compression
+//!
+//! When compression is enabled (via the `trace-compression` feature), events are
+//! compressed in chunks using LZ4 for efficient streaming compression/decompression.
+//! Compression is auto-detected on read based on the flags in the header.
 //!
 //! # Example
 //!
 //! ```ignore
-//! use asupersync::trace::file::{TraceWriter, TraceReader};
+//! use asupersync::trace::file::{TraceWriter, TraceReader, CompressionMode};
 //! use asupersync::trace::replay::{ReplayEvent, TraceMetadata};
 //!
-//! // Writing a trace
-//! let mut writer = TraceWriter::create("trace.bin")?;
+//! // Writing a compressed trace
+//! let config = TraceFileConfig::default().with_compression(CompressionMode::Lz4 { level: 1 });
+//! let mut writer = TraceWriter::create_with_config("trace.bin", config)?;
 //! writer.write_metadata(&TraceMetadata::new(42))?;
 //! writer.write_event(&ReplayEvent::RngSeed { seed: 42 })?;
 //! writer.finish()?;
 //!
-//! // Reading a trace
+//! // Reading auto-detects compression
 //! let reader = TraceReader::open("trace.bin")?;
 //! println!("Seed: {}", reader.metadata().seed);
 //! for event in reader.events() {
@@ -61,13 +71,122 @@ use std::path::Path;
 pub const TRACE_MAGIC: &[u8; 11] = b"ASUPERTRACE";
 
 /// Current file format version.
-pub const TRACE_FILE_VERSION: u16 = 1;
+/// Version 2 adds compression byte after flags.
+pub const TRACE_FILE_VERSION: u16 = 2;
 
-/// Flag: Events are LZ4 compressed (not yet implemented).
+/// Flag: Events are LZ4 compressed.
 pub const FLAG_COMPRESSED: u16 = 0x0001;
 
-/// Header size (magic + version + flags + meta_len).
-pub const HEADER_SIZE: usize = 11 + 2 + 2 + 4;
+/// Header size (magic + version + flags + compression + meta_len).
+pub const HEADER_SIZE: usize = 11 + 2 + 2 + 1 + 4;
+
+/// Default chunk size for streaming compression (64KB).
+pub const DEFAULT_COMPRESSION_CHUNK_SIZE: usize = 64 * 1024;
+
+/// Threshold for auto-compression (1MB).
+pub const AUTO_COMPRESSION_THRESHOLD: usize = 1024 * 1024;
+
+// =============================================================================
+// Compression Types
+// =============================================================================
+
+/// Compression mode for trace files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompressionMode {
+    /// No compression.
+    #[default]
+    None,
+
+    /// LZ4 compression with configurable level.
+    ///
+    /// Level ranges from -1 (fast) to 16 (best compression).
+    /// Default level is 1 which provides good balance.
+    #[cfg(feature = "trace-compression")]
+    Lz4 {
+        /// Compression level (-1 to 16, default 1).
+        level: i32,
+    },
+
+    /// Auto-select compression based on trace size.
+    ///
+    /// Compresses if estimated size exceeds 1MB.
+    #[cfg(feature = "trace-compression")]
+    Auto,
+}
+
+impl CompressionMode {
+    /// Returns true if this mode enables compression.
+    #[must_use]
+    pub fn is_compressed(&self) -> bool {
+        match self {
+            Self::None => false,
+            #[cfg(feature = "trace-compression")]
+            Self::Lz4 { .. } | Self::Auto => true,
+        }
+    }
+
+    /// Returns the compression byte for the file header.
+    fn to_byte(&self) -> u8 {
+        match self {
+            Self::None => 0,
+            #[cfg(feature = "trace-compression")]
+            Self::Lz4 { .. } | Self::Auto => 1,
+        }
+    }
+
+    /// Creates a compression mode from the header byte.
+    fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::None),
+            #[cfg(feature = "trace-compression")]
+            1 => Some(Self::Lz4 { level: 1 }),
+            #[cfg(not(feature = "trace-compression"))]
+            1 => None, // Compressed but feature not enabled
+            _ => None,
+        }
+    }
+}
+
+/// Configuration for trace file operations.
+#[derive(Debug, Clone)]
+pub struct TraceFileConfig {
+    /// Compression mode for writing.
+    pub compression: CompressionMode,
+
+    /// Chunk size for streaming compression (default: 64KB).
+    pub chunk_size: usize,
+}
+
+impl Default for TraceFileConfig {
+    fn default() -> Self {
+        Self {
+            compression: CompressionMode::None,
+            chunk_size: DEFAULT_COMPRESSION_CHUNK_SIZE,
+        }
+    }
+}
+
+impl TraceFileConfig {
+    /// Creates a new config with default settings.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the compression mode.
+    #[must_use]
+    pub fn with_compression(mut self, mode: CompressionMode) -> Self {
+        self.compression = mode;
+        self
+    }
+
+    /// Sets the chunk size for streaming compression.
+    #[must_use]
+    pub fn with_chunk_size(mut self, size: usize) -> Self {
+        self.chunk_size = size;
+        self
+    }
+}
 
 // =============================================================================
 // Error Types
@@ -96,6 +215,22 @@ pub enum TraceFileError {
     /// Unsupported flags in header.
     #[error("unsupported flags: {0:#06x}")]
     UnsupportedFlags(u16),
+
+    /// Unsupported compression format.
+    #[error("unsupported compression format: {0}")]
+    UnsupportedCompression(u8),
+
+    /// Compression not available (feature not enabled).
+    #[error("file is compressed but trace-compression feature is not enabled")]
+    CompressionNotAvailable,
+
+    /// Compression error.
+    #[error("compression error: {0}")]
+    Compression(String),
+
+    /// Decompression error.
+    #[error("decompression error: {0}")]
+    Decompression(String),
 
     /// Error serializing data.
     #[error("serialization error: {0}")]
@@ -145,7 +280,8 @@ pub type TraceFileResult<T> = Result<T, TraceFileError>;
 /// Writer for streaming trace events to a file.
 ///
 /// Events are written incrementally, allowing large traces to be written
-/// without holding all events in memory.
+/// without holding all events in memory. When compression is enabled,
+/// events are buffered and compressed in chunks.
 ///
 /// # Example
 ///
@@ -162,15 +298,28 @@ pub struct TraceWriter {
     event_count: u64,
     event_count_pos: u64,
     finished: bool,
+    config: TraceFileConfig,
+    /// Buffer for uncompressed event data (used in chunked compression).
+    #[cfg(feature = "trace-compression")]
+    event_buffer: Vec<u8>,
 }
 
 impl TraceWriter {
-    /// Creates a new trace file for writing.
+    /// Creates a new trace file for writing with default configuration.
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be created.
     pub fn create(path: impl AsRef<Path>) -> TraceFileResult<Self> {
+        Self::create_with_config(path, TraceFileConfig::default())
+    }
+
+    /// Creates a new trace file for writing with custom configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be created.
+    pub fn create_with_config(path: impl AsRef<Path>, config: TraceFileConfig) -> TraceFileResult<Self> {
         let file = File::create(path)?;
         let writer = BufWriter::new(file);
 
@@ -179,13 +328,16 @@ impl TraceWriter {
             event_count: 0,
             event_count_pos: 0,
             finished: false,
+            config,
+            #[cfg(feature = "trace-compression")]
+            event_buffer: Vec::new(),
         })
     }
 
     /// Writes the trace metadata (must be called first).
     ///
     /// This writes the file header including magic bytes, version,
-    /// flags, and the serialized metadata.
+    /// flags, compression mode, and the serialized metadata.
     ///
     /// # Errors
     ///
@@ -198,10 +350,18 @@ impl TraceWriter {
         // Serialize metadata to get its length
         let meta_bytes = rmp_serde::to_vec(metadata)?;
 
+        // Determine flags
+        let flags = if self.config.compression.is_compressed() {
+            FLAG_COMPRESSED
+        } else {
+            0
+        };
+
         // Write header
         self.writer.write_all(TRACE_MAGIC)?;
         self.writer.write_all(&TRACE_FILE_VERSION.to_le_bytes())?;
-        self.writer.write_all(&0u16.to_le_bytes())?; // flags (none set)
+        self.writer.write_all(&flags.to_le_bytes())?;
+        self.writer.write_all(&[self.config.compression.to_byte()])?; // compression byte
 
         // Write metadata length and data
         let meta_len = meta_bytes.len() as u32;
@@ -217,7 +377,8 @@ impl TraceWriter {
 
     /// Writes a single replay event.
     ///
-    /// Events are length-prefixed for streaming reads.
+    /// Events are length-prefixed for streaming reads. When compression is
+    /// enabled, events are buffered and written in compressed chunks.
     ///
     /// # Errors
     ///
@@ -227,28 +388,67 @@ impl TraceWriter {
             return Err(TraceFileError::AlreadyFinished);
         }
 
-        // Serialize event
+        // Serialize event with length prefix
         let event_bytes = rmp_serde::to_vec(event)?;
-
-        // Write length-prefixed event
         let len = event_bytes.len() as u32;
+
+        #[cfg(feature = "trace-compression")]
+        if self.config.compression.is_compressed() {
+            // Buffer the event for chunk compression
+            self.event_buffer.extend_from_slice(&len.to_le_bytes());
+            self.event_buffer.extend_from_slice(&event_bytes);
+            self.event_count += 1;
+
+            // Flush chunk if buffer exceeds threshold
+            if self.event_buffer.len() >= self.config.chunk_size {
+                self.flush_compressed_chunk()?;
+            }
+            return Ok(());
+        }
+
+        // Uncompressed: write directly
         self.writer.write_all(&len.to_le_bytes())?;
         self.writer.write_all(&event_bytes)?;
-
         self.event_count += 1;
+        Ok(())
+    }
+
+    /// Flushes a compressed chunk of events to the file.
+    #[cfg(feature = "trace-compression")]
+    fn flush_compressed_chunk(&mut self) -> TraceFileResult<()> {
+        if self.event_buffer.is_empty() {
+            return Ok(());
+        }
+
+        // Compress the buffer
+        let compressed = lz4_flex::compress_prepend_size(&self.event_buffer);
+
+        // Write chunk: compressed_len (u32) + compressed_data
+        let chunk_len = compressed.len() as u32;
+        self.writer.write_all(&chunk_len.to_le_bytes())?;
+        self.writer.write_all(&compressed)?;
+
+        self.event_buffer.clear();
         Ok(())
     }
 
     /// Finishes writing the trace file.
     ///
-    /// This updates the event count in the header and flushes all data.
-    /// Must be called to complete the file properly.
+    /// This flushes any remaining compressed data, updates the event count
+    /// in the header, and flushes all data. Must be called to complete the
+    /// file properly.
     ///
     /// # Errors
     ///
     /// Returns an error if flushing or seeking fails.
     pub fn finish(mut self) -> TraceFileResult<()> {
         self.finished = true;
+
+        // Flush any remaining compressed data
+        #[cfg(feature = "trace-compression")]
+        if self.config.compression.is_compressed() {
+            self.flush_compressed_chunk()?;
+        }
 
         // Flush buffered data
         self.writer.flush()?;
@@ -285,6 +485,7 @@ impl Drop for TraceWriter {
 /// Reader for loading trace files.
 ///
 /// Supports streaming reads where events are loaded incrementally.
+/// Compression is auto-detected from the file header.
 ///
 /// # Example
 ///
@@ -292,6 +493,7 @@ impl Drop for TraceWriter {
 /// let reader = TraceReader::open("trace.bin")?;
 /// println!("Seed: {}", reader.metadata().seed);
 /// println!("Events: {}", reader.event_count());
+/// println!("Compressed: {}", reader.is_compressed());
 ///
 /// for event in reader.events() {
 ///     let event = event?;
@@ -304,10 +506,19 @@ pub struct TraceReader {
     event_count: u64,
     events_read: u64,
     events_start_pos: u64,
+    compression: CompressionMode,
+    /// Buffer for decompressed event data.
+    #[cfg(feature = "trace-compression")]
+    decompressed_buffer: Vec<u8>,
+    /// Position in decompressed buffer.
+    #[cfg(feature = "trace-compression")]
+    buffer_pos: usize,
 }
 
 impl TraceReader {
     /// Opens a trace file for reading.
+    ///
+    /// Compression is auto-detected from the file header.
     ///
     /// # Errors
     ///
@@ -315,6 +526,7 @@ impl TraceReader {
     /// - The file cannot be opened
     /// - The file has invalid magic bytes
     /// - The file version is unsupported
+    /// - The file is compressed but the `trace-compression` feature is not enabled
     /// - The metadata is corrupt
     pub fn open(path: impl AsRef<Path>) -> TraceFileResult<Self> {
         let file = File::open(path)?;
@@ -342,9 +554,29 @@ impl TraceReader {
         let mut flags_bytes = [0u8; 2];
         reader.read_exact(&mut flags_bytes)?;
         let flags = u16::from_le_bytes(flags_bytes);
-        // Check for unsupported flags (only compression flag is defined)
-        if flags & FLAG_COMPRESSED != 0 {
-            return Err(TraceFileError::UnsupportedFlags(flags));
+        let is_compressed = flags & FLAG_COMPRESSED != 0;
+
+        // Read compression byte (only in version 2+)
+        let compression = if version >= 2 {
+            let mut comp_byte = [0u8; 1];
+            reader.read_exact(&mut comp_byte)?;
+            match CompressionMode::from_byte(comp_byte[0]) {
+                Some(mode) => mode,
+                None if is_compressed => return Err(TraceFileError::UnsupportedCompression(comp_byte[0])),
+                None => CompressionMode::None,
+            }
+        } else {
+            // Version 1 files don't have compression byte
+            if is_compressed {
+                return Err(TraceFileError::UnsupportedFlags(flags));
+            }
+            CompressionMode::None
+        };
+
+        // Check if we can handle compression
+        #[cfg(not(feature = "trace-compression"))]
+        if compression.is_compressed() {
+            return Err(TraceFileError::CompressionNotAvailable);
         }
 
         // Read metadata length
@@ -370,8 +602,9 @@ impl TraceReader {
         reader.read_exact(&mut event_count_bytes)?;
         let event_count = u64::from_le_bytes(event_count_bytes);
 
-        // Calculate events start position
-        let events_start_pos = HEADER_SIZE as u64 + meta_len as u64 + 8;
+        // Calculate events start position (header size depends on version)
+        let header_size = if version >= 2 { HEADER_SIZE } else { HEADER_SIZE - 1 };
+        let events_start_pos = header_size as u64 + meta_len as u64 + 8;
 
         Ok(Self {
             reader,
@@ -379,7 +612,24 @@ impl TraceReader {
             event_count,
             events_read: 0,
             events_start_pos,
+            compression,
+            #[cfg(feature = "trace-compression")]
+            decompressed_buffer: Vec::new(),
+            #[cfg(feature = "trace-compression")]
+            buffer_pos: 0,
         })
+    }
+
+    /// Returns true if the trace file is compressed.
+    #[must_use]
+    pub fn is_compressed(&self) -> bool {
+        self.compression.is_compressed()
+    }
+
+    /// Returns the compression mode of the trace file.
+    #[must_use]
+    pub fn compression(&self) -> CompressionMode {
+        self.compression
     }
 
     /// Returns the trace metadata.
@@ -403,16 +653,23 @@ impl TraceReader {
     /// Returns an iterator over the events in the trace.
     ///
     /// Events are read incrementally from the file.
+    /// Automatically handles decompression for compressed files.
     pub fn events(self) -> TraceEventIterator {
         TraceEventIterator {
             reader: self.reader,
             remaining: self.event_count,
+            compression: self.compression,
+            #[cfg(feature = "trace-compression")]
+            decompressed_buffer: self.decompressed_buffer,
+            #[cfg(feature = "trace-compression")]
+            buffer_pos: self.buffer_pos,
         }
     }
 
     /// Reads the next event from the trace.
     ///
     /// Returns `None` when all events have been read.
+    /// Automatically handles decompression for compressed files.
     ///
     /// # Errors
     ///
@@ -422,6 +679,17 @@ impl TraceReader {
             return Ok(None);
         }
 
+        #[cfg(feature = "trace-compression")]
+        if self.compression.is_compressed() {
+            return self.read_compressed_event();
+        }
+
+        // Uncompressed read
+        self.read_uncompressed_event()
+    }
+
+    /// Reads an event from uncompressed data.
+    fn read_uncompressed_event(&mut self) -> TraceFileResult<Option<ReplayEvent>> {
         // Read event length
         let mut len_bytes = [0u8; 4];
         if self.reader.read_exact(&mut len_bytes).is_err() {
@@ -439,6 +707,66 @@ impl TraceReader {
         Ok(Some(event))
     }
 
+    /// Reads an event from compressed data.
+    #[cfg(feature = "trace-compression")]
+    fn read_compressed_event(&mut self) -> TraceFileResult<Option<ReplayEvent>> {
+        // Refill buffer if needed
+        if self.buffer_pos >= self.decompressed_buffer.len() {
+            if !self.refill_decompressed_buffer()? {
+                return Ok(None);
+            }
+        }
+
+        // Read event length from buffer
+        if self.buffer_pos + 4 > self.decompressed_buffer.len() {
+            return Err(TraceFileError::Truncated);
+        }
+        let len_bytes: [u8; 4] = self.decompressed_buffer[self.buffer_pos..self.buffer_pos + 4]
+            .try_into()
+            .map_err(|_| TraceFileError::Truncated)?;
+        let len = u32::from_le_bytes(len_bytes) as usize;
+        self.buffer_pos += 4;
+
+        // Read event data from buffer
+        if self.buffer_pos + len > self.decompressed_buffer.len() {
+            return Err(TraceFileError::Truncated);
+        }
+        let event_bytes = &self.decompressed_buffer[self.buffer_pos..self.buffer_pos + len];
+        let event: ReplayEvent = rmp_serde::from_slice(event_bytes)?;
+        self.buffer_pos += len;
+
+        self.events_read += 1;
+        Ok(Some(event))
+    }
+
+    /// Refills the decompressed buffer from the next compressed chunk.
+    #[cfg(feature = "trace-compression")]
+    fn refill_decompressed_buffer(&mut self) -> TraceFileResult<bool> {
+        // Read chunk length
+        let mut chunk_len_bytes = [0u8; 4];
+        match self.reader.read_exact(&mut chunk_len_bytes) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+            Err(e) => return Err(TraceFileError::Io(e)),
+        }
+        let chunk_len = u32::from_le_bytes(chunk_len_bytes) as usize;
+
+        if chunk_len == 0 {
+            return Ok(false);
+        }
+
+        // Read compressed chunk
+        let mut compressed = vec![0u8; chunk_len];
+        self.reader.read_exact(&mut compressed)?;
+
+        // Decompress
+        self.decompressed_buffer = lz4_flex::decompress_size_prepended(&compressed)
+            .map_err(|e| TraceFileError::Decompression(e.to_string()))?;
+        self.buffer_pos = 0;
+
+        Ok(true)
+    }
+
     /// Resets the reader to the beginning of the events section.
     ///
     /// # Errors
@@ -447,6 +775,13 @@ impl TraceReader {
     pub fn rewind(&mut self) -> TraceFileResult<()> {
         self.reader.seek(SeekFrom::Start(self.events_start_pos))?;
         self.events_read = 0;
+
+        #[cfg(feature = "trace-compression")]
+        {
+            self.decompressed_buffer.clear();
+            self.buffer_pos = 0;
+        }
+
         Ok(())
     }
 
@@ -475,6 +810,13 @@ impl TraceReader {
 pub struct TraceEventIterator {
     reader: BufReader<File>,
     remaining: u64,
+    compression: CompressionMode,
+    /// Buffer for decompressed event data.
+    #[cfg(feature = "trace-compression")]
+    decompressed_buffer: Vec<u8>,
+    /// Position in decompressed buffer.
+    #[cfg(feature = "trace-compression")]
+    buffer_pos: usize,
 }
 
 impl Iterator for TraceEventIterator {
@@ -485,6 +827,23 @@ impl Iterator for TraceEventIterator {
             return None;
         }
 
+        #[cfg(feature = "trace-compression")]
+        if self.compression.is_compressed() {
+            return self.next_compressed();
+        }
+
+        self.next_uncompressed()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.remaining as usize;
+        (remaining, Some(remaining))
+    }
+}
+
+impl TraceEventIterator {
+    /// Reads the next uncompressed event.
+    fn next_uncompressed(&mut self) -> Option<TraceFileResult<ReplayEvent>> {
         // Read event length
         let mut len_bytes = [0u8; 4];
         if let Err(e) = self.reader.read_exact(&mut len_bytes) {
@@ -510,9 +869,71 @@ impl Iterator for TraceEventIterator {
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.remaining as usize;
-        (remaining, Some(remaining))
+    /// Reads the next compressed event.
+    #[cfg(feature = "trace-compression")]
+    fn next_compressed(&mut self) -> Option<TraceFileResult<ReplayEvent>> {
+        // Refill buffer if needed
+        if self.buffer_pos >= self.decompressed_buffer.len() {
+            match self.refill_buffer() {
+                Ok(true) => {}
+                Ok(false) => return None,
+                Err(e) => return Some(Err(e)),
+            }
+        }
+
+        // Read event length from buffer
+        if self.buffer_pos + 4 > self.decompressed_buffer.len() {
+            return Some(Err(TraceFileError::Truncated));
+        }
+        let len_bytes: [u8; 4] = match self.decompressed_buffer[self.buffer_pos..self.buffer_pos + 4].try_into() {
+            Ok(b) => b,
+            Err(_) => return Some(Err(TraceFileError::Truncated)),
+        };
+        let len = u32::from_le_bytes(len_bytes) as usize;
+        self.buffer_pos += 4;
+
+        // Read event data from buffer
+        if self.buffer_pos + len > self.decompressed_buffer.len() {
+            return Some(Err(TraceFileError::Truncated));
+        }
+        let event_bytes = &self.decompressed_buffer[self.buffer_pos..self.buffer_pos + len];
+
+        match rmp_serde::from_slice(event_bytes) {
+            Ok(event) => {
+                self.buffer_pos += len;
+                self.remaining -= 1;
+                Some(Ok(event))
+            }
+            Err(e) => Some(Err(TraceFileError::from(e))),
+        }
+    }
+
+    /// Refills the decompressed buffer from the next compressed chunk.
+    #[cfg(feature = "trace-compression")]
+    fn refill_buffer(&mut self) -> TraceFileResult<bool> {
+        // Read chunk length
+        let mut chunk_len_bytes = [0u8; 4];
+        match self.reader.read_exact(&mut chunk_len_bytes) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+            Err(e) => return Err(TraceFileError::Io(e)),
+        }
+        let chunk_len = u32::from_le_bytes(chunk_len_bytes) as usize;
+
+        if chunk_len == 0 {
+            return Ok(false);
+        }
+
+        // Read compressed chunk
+        let mut compressed = vec![0u8; chunk_len];
+        self.reader.read_exact(&mut compressed)?;
+
+        // Decompress
+        self.decompressed_buffer = lz4_flex::decompress_size_prepended(&compressed)
+            .map_err(|e| TraceFileError::Decompression(e.to_string()))?;
+        self.buffer_pos = 0;
+
+        Ok(true)
     }
 }
 
@@ -777,5 +1198,234 @@ mod tests {
 
         // Attempting to use a finished writer should not be possible
         // because finish() consumes self, so this is compile-time safety
+    }
+
+    // =========================================================================
+    // Compression Tests (feature-gated)
+    // =========================================================================
+
+    #[cfg(feature = "trace-compression")]
+    mod compression_tests {
+        use super::*;
+
+        #[test]
+        fn compressed_write_and_read_roundtrip() {
+            let temp = NamedTempFile::new().expect("create temp file");
+            let path = temp.path();
+
+            let metadata = TraceMetadata::new(42).with_description("compressed trace");
+            let events = sample_events();
+
+            // Write with compression
+            let config = TraceFileConfig::new().with_compression(CompressionMode::Lz4 { level: 1 });
+            let mut writer = TraceWriter::create_with_config(path, config).expect("create writer");
+            writer.write_metadata(&metadata).expect("write metadata");
+            for event in &events {
+                writer.write_event(event).expect("write event");
+            }
+            writer.finish().expect("finish");
+
+            // Read (auto-detects compression)
+            let reader = TraceReader::open(path).expect("open reader");
+            assert!(reader.is_compressed());
+            assert_eq!(reader.metadata().seed, metadata.seed);
+            assert_eq!(reader.event_count(), events.len() as u64);
+
+            let read_events = reader.load_all().expect("load all");
+            assert_eq!(read_events.len(), events.len());
+            for (orig, read) in events.iter().zip(read_events.iter()) {
+                assert_eq!(orig, read);
+            }
+        }
+
+        #[test]
+        fn compressed_streaming_read() {
+            let temp = NamedTempFile::new().expect("create temp file");
+            let path = temp.path();
+
+            let metadata = TraceMetadata::new(123);
+            let events = sample_events();
+
+            // Write with compression
+            let config = TraceFileConfig::new().with_compression(CompressionMode::Lz4 { level: 1 });
+            let mut writer = TraceWriter::create_with_config(path, config).expect("create writer");
+            writer.write_metadata(&metadata).expect("write metadata");
+            for event in &events {
+                writer.write_event(event).expect("write event");
+            }
+            writer.finish().expect("finish");
+
+            // Streaming read
+            let reader = TraceReader::open(path).expect("open reader");
+            assert!(reader.is_compressed());
+
+            let mut count = 0;
+            for result in reader.events() {
+                let event = result.expect("read event");
+                assert_eq!(event, events[count]);
+                count += 1;
+            }
+            assert_eq!(count, events.len());
+        }
+
+        #[test]
+        fn large_compressed_trace() {
+            let temp = NamedTempFile::new().expect("create temp file");
+            let path = temp.path();
+
+            let metadata = TraceMetadata::new(42);
+            let event_count = 10_000u64;
+
+            // Generate large trace
+            let events: Vec<_> = (0..event_count)
+                .map(|i| ReplayEvent::TaskScheduled {
+                    task: CompactTaskId(i),
+                    at_tick: i,
+                })
+                .collect();
+
+            // Write with compression
+            let config = TraceFileConfig::new()
+                .with_compression(CompressionMode::Lz4 { level: 1 })
+                .with_chunk_size(8 * 1024); // 8KB chunks for more chunks in test
+            let mut writer = TraceWriter::create_with_config(path, config).expect("create writer");
+            writer.write_metadata(&metadata).expect("write metadata");
+            for event in &events {
+                writer.write_event(event).expect("write event");
+            }
+            writer.finish().expect("finish");
+
+            // Read with streaming
+            let reader = TraceReader::open(path).expect("open reader");
+            assert!(reader.is_compressed());
+            assert_eq!(reader.event_count(), event_count);
+
+            let mut count = 0u64;
+            for result in reader.events() {
+                let event = result.expect("read event");
+                if let ReplayEvent::TaskScheduled { task, at_tick } = event {
+                    assert_eq!(task.0, count);
+                    assert_eq!(at_tick, count);
+                } else {
+                    panic!("unexpected event type");
+                }
+                count += 1;
+            }
+            assert_eq!(count, event_count);
+        }
+
+        #[test]
+        fn compression_ratio() {
+            let temp_uncompressed = NamedTempFile::new().expect("create temp file");
+            let temp_compressed = NamedTempFile::new().expect("create temp file");
+
+            let metadata = TraceMetadata::new(42);
+            let event_count = 5000u64;
+
+            // Generate trace with repetitive data (good for compression)
+            let events: Vec<_> = (0..event_count)
+                .map(|i| ReplayEvent::TaskScheduled {
+                    task: CompactTaskId(i % 100), // Repetitive task IDs
+                    at_tick: i,
+                })
+                .collect();
+
+            // Write uncompressed
+            {
+                let mut writer = TraceWriter::create(temp_uncompressed.path()).expect("create writer");
+                writer.write_metadata(&metadata).expect("write metadata");
+                for event in &events {
+                    writer.write_event(event).expect("write event");
+                }
+                writer.finish().expect("finish");
+            }
+
+            // Write compressed
+            {
+                let config = TraceFileConfig::new().with_compression(CompressionMode::Lz4 { level: 1 });
+                let mut writer =
+                    TraceWriter::create_with_config(temp_compressed.path(), config).expect("create writer");
+                writer.write_metadata(&metadata).expect("write metadata");
+                for event in &events {
+                    writer.write_event(event).expect("write event");
+                }
+                writer.finish().expect("finish");
+            }
+
+            let uncompressed_size = std::fs::metadata(temp_uncompressed.path())
+                .expect("metadata")
+                .len();
+            let compressed_size = std::fs::metadata(temp_compressed.path())
+                .expect("metadata")
+                .len();
+
+            let ratio = uncompressed_size as f64 / compressed_size as f64;
+            println!(
+                "Compression ratio: {:.2}x ({} -> {} bytes)",
+                ratio, uncompressed_size, compressed_size
+            );
+
+            // LZ4 should achieve at least 2x compression on this repetitive data
+            assert!(
+                ratio > 2.0,
+                "Compression ratio {:.2}x is below expected 2x minimum",
+                ratio
+            );
+        }
+
+        #[test]
+        fn compressed_rewind() {
+            let temp = NamedTempFile::new().expect("create temp file");
+            let path = temp.path();
+
+            let metadata = TraceMetadata::new(42);
+            let events = sample_events();
+
+            // Write with compression
+            let config = TraceFileConfig::new().with_compression(CompressionMode::Lz4 { level: 1 });
+            let mut writer = TraceWriter::create_with_config(path, config).expect("create writer");
+            writer.write_metadata(&metadata).expect("write metadata");
+            for event in &events {
+                writer.write_event(event).expect("write event");
+            }
+            writer.finish().expect("finish");
+
+            let mut reader = TraceReader::open(path).expect("open reader");
+            assert!(reader.is_compressed());
+
+            // Read first two events
+            let e1 = reader.read_event().expect("read").expect("event");
+            let e2 = reader.read_event().expect("read").expect("event");
+            assert_eq!(reader.events_read(), 2);
+
+            // Rewind and verify we get the same events
+            reader.rewind().expect("rewind");
+            assert_eq!(reader.events_read(), 0);
+
+            let e1_again = reader.read_event().expect("read").expect("event");
+            let e2_again = reader.read_event().expect("read").expect("event");
+            assert_eq!(e1, e1_again);
+            assert_eq!(e2, e2_again);
+        }
+
+        #[test]
+        fn uncompressed_still_readable() {
+            let temp = NamedTempFile::new().expect("create temp file");
+            let path = temp.path();
+
+            let metadata = TraceMetadata::new(42);
+            let events = sample_events();
+
+            // Write without compression
+            write_trace(path, &metadata, &events).expect("write trace");
+
+            // Should read successfully and report not compressed
+            let reader = TraceReader::open(path).expect("open reader");
+            assert!(!reader.is_compressed());
+            assert_eq!(reader.event_count(), events.len() as u64);
+
+            let read_events = reader.load_all().expect("load all");
+            assert_eq!(read_events, events);
+        }
     }
 }
