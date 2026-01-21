@@ -37,10 +37,10 @@ use crate::cx::Cx;
 use crate::net::unix::stream::UCred;
 use crate::runtime::io_driver::IoRegistration;
 use crate::runtime::reactor::Interest;
-use std::cell::RefCell;
 use std::io;
 use std::os::unix::net::{self, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 /// A Unix domain socket datagram.
@@ -70,8 +70,8 @@ pub struct UnixDatagram {
     /// None for abstract namespace sockets, unbound sockets, or from_std().
     path: Option<PathBuf>,
     /// Reactor registration for async I/O wakeup.
-    /// Uses RefCell for interior mutability since async methods take &self.
-    registration: RefCell<Option<IoRegistration>>,
+    /// Uses Mutex for thread-safe interior mutability.
+    registration: Mutex<Option<IoRegistration>>,
 }
 
 impl UnixDatagram {
@@ -108,7 +108,7 @@ impl UnixDatagram {
         Ok(Self {
             inner,
             path: Some(path.to_path_buf()),
-            registration: RefCell::new(None),
+            registration: Mutex::new(None),
         })
     }
 
@@ -141,7 +141,7 @@ impl UnixDatagram {
         Ok(Self {
             inner,
             path: None, // No filesystem path for abstract sockets
-            registration: RefCell::new(None),
+            registration: Mutex::new(None),
         })
     }
 
@@ -168,7 +168,7 @@ impl UnixDatagram {
         Ok(Self {
             inner,
             path: None,
-            registration: RefCell::new(None),
+            registration: Mutex::new(None),
         })
     }
 
@@ -200,12 +200,12 @@ impl UnixDatagram {
             Self {
                 inner: s1,
                 path: None,
-                registration: RefCell::new(None),
+                registration: Mutex::new(None),
             },
             Self {
                 inner: s2,
                 path: None,
-                registration: RefCell::new(None),
+                registration: Mutex::new(None),
             },
         ))
     }
@@ -255,9 +255,9 @@ impl UnixDatagram {
 
     /// Register interest with the reactor for async wakeup.
     ///
-    /// Uses interior mutability via RefCell since async methods take &self.
+    /// Uses interior mutability via Mutex since async methods take &self.
     fn register_interest(&self, cx: &Context<'_>, interest: Interest) -> io::Result<()> {
-        let mut reg = self.registration.borrow_mut();
+        let mut reg = self.registration.lock().expect("registration lock poisoned");
 
         if let Some(registration) = reg.as_mut() {
             let combined = registration.interest() | interest;
@@ -546,7 +546,7 @@ impl UnixDatagram {
         Ok(Self {
             inner: socket,
             path: None, // Don't clean up sockets we didn't create
-            registration: RefCell::new(None),
+            registration: Mutex::new(None),
         })
     }
 
@@ -1096,7 +1096,7 @@ mod tests {
             "Poll::Pending",
             format!("{:?}", poll)
         );
-        let has_registration = b.registration.borrow().is_some();
+        let has_registration = b.registration.lock().unwrap().is_some();
         crate::assert_with_log!(
             has_registration,
             "registration present",
@@ -1162,7 +1162,7 @@ mod tests {
         let poll = a.poll_send_ready(&mut poll_cx);
         // Either ready or pending with registration is acceptable
         if matches!(poll, Poll::Pending) {
-            let has_registration = a.registration.borrow().is_some();
+            let has_registration = a.registration.lock().unwrap().is_some();
             crate::assert_with_log!(
                 has_registration,
                 "registration present on Pending",
