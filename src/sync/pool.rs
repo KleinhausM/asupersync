@@ -40,7 +40,7 @@
 //!         PoolStats::default()
 //!     }
 //!
-//!     fn close<'a>(&'a self) -> asupersync::sync::PoolFuture<'a, ()> {
+//!     fn close(&self) -> asupersync::sync::PoolFuture<'_, ()> {
 //!         Box::pin(async move { })
 //!     }
 //! }
@@ -93,7 +93,7 @@ pub trait Pool: Send + Sync {
     fn stats(&self) -> PoolStats;
 
     /// Close the pool, rejecting new acquisitions.
-    fn close<'a>(&'a self) -> PoolFuture<'a, ()>;
+    fn close(&self) -> PoolFuture<'_, ()>;
 }
 
 /// Pool usage statistics.
@@ -157,7 +157,6 @@ pub struct PooledResource<R> {
 
 impl<R> PooledResource<R> {
     /// Creates a new pooled resource wrapper.
-    #[must_use]
     pub fn new(resource: R, return_tx: PoolReturnSender<R>) -> Self {
         Self {
             resource: Some(resource),

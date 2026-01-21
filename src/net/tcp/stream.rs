@@ -167,7 +167,7 @@ fn connect_in_progress(err: &io::Error) -> bool {
     matches!(
         err.kind(),
         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-    )
+    ) || err.raw_os_error() == Some(libc::EINPROGRESS)
 }
 
 async fn wait_for_connect(socket: &Socket) -> io::Result<()> {
@@ -180,6 +180,8 @@ async fn wait_for_connect(socket: &Socket) -> io::Result<()> {
         match socket.peer_addr() {
             Ok(_) => return Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
+                // Sleep briefly to avoid busy loop in Phase 0 blocking connect
+                std::thread::sleep(Duration::from_millis(1));
                 crate::runtime::yield_now().await;
             }
             Err(err) => return Err(err),
