@@ -2,11 +2,13 @@
 
 use crate::error::Error;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::deadline_monitor::{default_warning_handler, DeadlineWarning, MonitorConfig};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Wake, Waker};
+use std::time::Duration;
 
 /// Builder for constructing a runtime with custom configuration.
 #[derive(Clone)]
@@ -100,6 +102,47 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Configure deadline monitoring for this runtime.
+    ///
+    /// The provided closure can customize thresholds and warning handlers.
+    ///
+    /// ```ignore
+    /// use asupersync::runtime::RuntimeBuilder;
+    /// use std::time::Duration;
+    ///
+    /// let runtime = RuntimeBuilder::new()
+    ///     .deadline_monitoring(|m| {
+    ///         m.check_interval(Duration::from_secs(1))
+    ///             .warning_threshold_fraction(0.2)
+    ///             .checkpoint_timeout(Duration::from_secs(30))
+    ///             .on_warning(|w| {
+    ///                 asupersync::tracing_compat::warn!(?w, "deadline warning");
+    ///             })
+    ///     })
+    ///     .build();
+    /// ```
+    #[must_use]
+    pub fn deadline_monitoring<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(DeadlineMonitoringBuilder) -> DeadlineMonitoringBuilder,
+    {
+        let builder = f(DeadlineMonitoringBuilder::new());
+        let (config, handler) = builder.finish();
+        let handler =
+            handler.or_else(|| {
+                if config.enabled {
+                    Some(Arc::new(default_warning_handler)
+                        as Arc<dyn Fn(DeadlineWarning) + Send + Sync>)
+                } else {
+                    None
+                }
+            });
+
+        self.config.deadline_monitor = Some(config);
+        self.config.deadline_warning_handler = handler;
+        self
+    }
+
     /// Build a runtime from this configuration.
     #[allow(clippy::result_large_err)]
     pub fn build(self) -> Result<Runtime, Error> {
@@ -131,6 +174,75 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn low_latency() -> Self {
         Self::new().steal_batch_size(4).poll_budget(32)
+    }
+}
+
+/// Builder for deadline monitoring configuration.
+pub struct DeadlineMonitoringBuilder {
+    config: MonitorConfig,
+    on_warning: Option<Arc<dyn Fn(DeadlineWarning) + Send + Sync>>,
+}
+
+impl DeadlineMonitoringBuilder {
+    fn new() -> Self {
+        Self {
+            config: MonitorConfig::default(),
+            on_warning: None,
+        }
+    }
+
+    /// Use an explicit monitor configuration.
+    #[must_use]
+    pub fn config(mut self, config: MonitorConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Set how often the monitor should scan for warnings.
+    #[must_use]
+    pub fn check_interval(mut self, interval: Duration) -> Self {
+        self.config.check_interval = interval;
+        self
+    }
+
+    /// Set the fraction of deadline remaining that triggers a warning.
+    #[must_use]
+    pub fn warning_threshold_fraction(mut self, fraction: f64) -> Self {
+        self.config.warning_threshold_fraction = fraction;
+        self
+    }
+
+    /// Set how long a task may go without progress before warning.
+    #[must_use]
+    pub fn checkpoint_timeout(mut self, timeout: Duration) -> Self {
+        self.config.checkpoint_timeout = timeout;
+        self
+    }
+
+    /// Enable or disable deadline monitoring.
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.config.enabled = enabled;
+        self
+    }
+
+    /// Register a custom warning handler.
+    #[must_use]
+    pub fn on_warning<F>(mut self, f: F) -> Self
+    where
+        F: Fn(DeadlineWarning) + Send + Sync + 'static,
+    {
+        self.on_warning = Some(Arc::new(f));
+        self
+    }
+
+    fn finish(
+        self,
+    ) -> (
+        MonitorConfig,
+        Option<Arc<dyn Fn(DeadlineWarning) + Send + Sync>>,
+    ) {
+        (self.config, self.on_warning)
     }
 }
 

@@ -379,6 +379,12 @@ impl Cx {
     /// checking the cancellation flag with returning an error, making it
     /// convenient for use with the `?` operator.
     ///
+    /// In addition to cancellation checking, this method records progress by
+    /// updating the checkpoint state. This is useful for:
+    /// - Detecting stuck/stalled tasks via `checkpoint_state()`
+    /// - Work-stealing scheduler decisions
+    /// - Observability and debugging
+    ///
     /// If the context is currently masked (via `masked()`), this method
     /// returns `Ok(())` even when cancellation is pending, deferring the
     /// cancellation until the mask is released.
@@ -406,6 +412,84 @@ impl Cx {
     /// ```
     #[allow(clippy::result_large_err)]
     pub fn checkpoint(&self) -> Result<(), crate::error::Error> {
+        // Record progress checkpoint
+        {
+            let mut inner = self.inner.write().expect("lock poisoned");
+            inner.checkpoint_state.record();
+        }
+        // Check for cancellation
+        self.check_cancel()
+    }
+
+    /// Checks for cancellation with a progress message.
+    ///
+    /// This is like [`checkpoint()`](Self::checkpoint) but also records a
+    /// human-readable message describing the current progress. The message
+    /// is stored in the checkpoint state and can be retrieved via
+    /// [`checkpoint_state()`](Self::checkpoint_state).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Err` with kind `ErrorKind::Cancelled` if cancellation is
+    /// pending and the context is not masked.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// async fn process_batch(cx: &Cx, items: &[Item]) -> Result<(), Error> {
+    ///     for (i, item) in items.iter().enumerate() {
+    ///         cx.checkpoint_with(format!("Processing item {}/{}", i + 1, items.len()))?;
+    ///         process(item).await?;
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    #[allow(clippy::result_large_err)]
+    pub fn checkpoint_with(&self, msg: impl Into<String>) -> Result<(), crate::error::Error> {
+        // Record progress checkpoint with message
+        {
+            let mut inner = self.inner.write().expect("lock poisoned");
+            inner.checkpoint_state.record_with_message(msg.into());
+        }
+        // Delegate to cancellation check logic (but don't double-record)
+        self.check_cancel()
+    }
+
+    /// Returns a snapshot of the current checkpoint state.
+    ///
+    /// The checkpoint state tracks progress reporting checkpoints:
+    /// - `last_checkpoint`: When the last checkpoint was recorded
+    /// - `last_message`: The message from the last `checkpoint_with()` call
+    /// - `checkpoint_count`: Total number of checkpoints
+    ///
+    /// This is useful for monitoring task progress and detecting stalled tasks.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn check_task_health(cx: &Cx) -> bool {
+    ///     let state = cx.checkpoint_state();
+    ///     if let Some(last) = state.last_checkpoint {
+    ///         // Stalled if no checkpoint in 30 seconds
+    ///         last.elapsed() < Duration::from_secs(30)
+    ///     } else {
+    ///         // Never checkpointed, could be stuck
+    ///         false
+    ///     }
+    /// }
+    /// ```
+    #[must_use]
+    pub fn checkpoint_state(&self) -> crate::types::CheckpointState {
+        self.inner
+            .read()
+            .expect("lock poisoned")
+            .checkpoint_state
+            .clone()
+    }
+
+    /// Internal: checks cancellation without recording a checkpoint.
+    #[allow(clippy::result_large_err)]
+    fn check_cancel(&self) -> Result<(), crate::error::Error> {
         let (cancel_requested, mask_depth, task, region, budget, budget_baseline, cancel_reason) = {
             let inner = self.inner.read().expect("lock poisoned");
             (
@@ -428,7 +512,6 @@ impl Cx {
             (Some(baseline), Some(remaining)) => Some(baseline.saturating_sub(remaining)),
             _ => None,
         };
-        // Best-effort until a clock is threaded through Cx.
         let time_remaining = budget.deadline;
 
         let _ = (
@@ -442,7 +525,6 @@ impl Cx {
             &time_remaining,
         );
 
-        // Trace every checkpoint call at TRACE level for high-frequency observability
         trace!(
             task_id = ?task,
             region_id = ?region,
@@ -460,7 +542,6 @@ impl Cx {
 
         if cancel_requested {
             if mask_depth == 0 {
-                // Determine which resource triggered cancellation for INFO logging
                 let cancel_reason_ref = cancel_reason.as_ref();
                 let exhausted_resource = cancel_reason_ref
                     .map_or_else(|| "unknown".to_string(), |r| format!("{:?}", r.kind));
@@ -1255,5 +1336,115 @@ mod tests {
         assert_eq!(chain.len(), 2);
         assert_eq!(chain[0].kind, CancelKind::ParentCancelled);
         assert_eq!(chain[1].kind, CancelKind::Timeout);
+    }
+
+    // ========================================================================
+    // Checkpoint Progress Reporting Tests
+    // ========================================================================
+
+    #[test]
+    fn checkpoint_records_progress() {
+        let cx = test_cx();
+
+        // Initially no checkpoints
+        let state = cx.checkpoint_state();
+        assert!(state.last_checkpoint.is_none());
+        assert!(state.last_message.is_none());
+        assert_eq!(state.checkpoint_count, 0);
+
+        // Record first checkpoint
+        assert!(cx.checkpoint().is_ok());
+        let state = cx.checkpoint_state();
+        assert!(state.last_checkpoint.is_some());
+        assert!(state.last_message.is_none());
+        assert_eq!(state.checkpoint_count, 1);
+
+        // Record second checkpoint
+        assert!(cx.checkpoint().is_ok());
+        let state = cx.checkpoint_state();
+        assert_eq!(state.checkpoint_count, 2);
+    }
+
+    #[test]
+    fn checkpoint_with_records_message() {
+        let cx = test_cx();
+
+        // Record checkpoint with message
+        assert!(cx.checkpoint_with("processing step 1").is_ok());
+        let state = cx.checkpoint_state();
+        assert!(state.last_checkpoint.is_some());
+        assert_eq!(state.last_message.as_deref(), Some("processing step 1"));
+        assert_eq!(state.checkpoint_count, 1);
+
+        // Second checkpoint overwrites message
+        assert!(cx.checkpoint_with("processing step 2").is_ok());
+        let state = cx.checkpoint_state();
+        assert_eq!(state.last_message.as_deref(), Some("processing step 2"));
+        assert_eq!(state.checkpoint_count, 2);
+    }
+
+    #[test]
+    fn checkpoint_clears_message() {
+        let cx = test_cx();
+
+        // Record checkpoint with message
+        assert!(cx.checkpoint_with("step 1").is_ok());
+        assert_eq!(
+            cx.checkpoint_state().last_message.as_deref(),
+            Some("step 1")
+        );
+
+        // Regular checkpoint clears the message
+        assert!(cx.checkpoint().is_ok());
+        assert!(cx.checkpoint_state().last_message.is_none());
+    }
+
+    #[test]
+    fn checkpoint_with_checks_cancel() {
+        let cx = test_cx();
+        cx.set_cancel_requested(true);
+
+        // checkpoint_with should return error on cancellation
+        assert!(cx.checkpoint_with("should fail").is_err());
+
+        // But checkpoint state should still be updated
+        let state = cx.checkpoint_state();
+        assert_eq!(state.checkpoint_count, 1);
+        assert_eq!(state.last_message.as_deref(), Some("should fail"));
+    }
+
+    #[test]
+    fn checkpoint_state_is_snapshot() {
+        let cx = test_cx();
+
+        // Get a snapshot
+        let snapshot = cx.checkpoint_state();
+        assert_eq!(snapshot.checkpoint_count, 0);
+
+        // Record more checkpoints
+        assert!(cx.checkpoint().is_ok());
+        assert!(cx.checkpoint().is_ok());
+
+        // Original snapshot should be unchanged
+        assert_eq!(snapshot.checkpoint_count, 0);
+
+        // New snapshot should reflect updates
+        assert_eq!(cx.checkpoint_state().checkpoint_count, 2);
+    }
+
+    #[test]
+    fn checkpoint_with_accepts_string_types() {
+        let cx = test_cx();
+
+        // Test &str
+        assert!(cx.checkpoint_with("literal").is_ok());
+
+        // Test String
+        assert!(cx.checkpoint_with(String::from("owned")).is_ok());
+
+        // Test format!
+        assert!(cx.checkpoint_with(format!("item {}", 42)).is_ok());
+
+        assert_eq!(cx.checkpoint_state().checkpoint_count, 3);
     }
 }

@@ -10,11 +10,13 @@
 //! - [`task_handle`]: TaskHandle for awaiting spawned task results
 //! - [`waker`]: Waker implementation with deduplication
 //! - [`timer`]: Timer heap for deadline management
+//! - [`deadline_monitor`]: Deadline monitoring for approaching timeouts
 //! - [`reactor`]: I/O reactor abstraction
 //! - [`io_driver`]: Reactor driver that dispatches readiness to wakers
 
 pub mod builder;
 pub mod config;
+pub mod deadline_monitor;
 pub mod io_driver;
 pub mod reactor;
 pub mod scheduler;
@@ -26,8 +28,9 @@ pub mod waker;
 /// Yield points for cooperative multitasking.
 pub mod yield_now;
 
-pub use builder::{JoinHandle, Runtime, RuntimeBuilder, RuntimeHandle};
+pub use builder::{DeadlineMonitoringBuilder, JoinHandle, Runtime, RuntimeBuilder, RuntimeHandle};
 pub use config::{BlockingPoolConfig, RuntimeConfig};
+pub use deadline_monitor::{DeadlineMonitor, DeadlineWarning, MonitorConfig, WarningReason};
 pub use io_driver::{IoDriver, IoDriverHandle, IoRegistration};
 pub use reactor::{Event, Events, Interest, LabReactor, Reactor, Registration, Source, Token};
 pub use scheduler::Scheduler;

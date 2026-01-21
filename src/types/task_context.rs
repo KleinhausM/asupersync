@@ -1,6 +1,57 @@
 //! Internal state shared between TaskRecord and Cx.
 
 use crate::types::{Budget, CancelReason, RegionId, TaskId};
+use std::time::Instant;
+
+/// State for tracking checkpoint progress.
+///
+/// This struct tracks progress reporting checkpoints, which are distinct from
+/// cancellation checkpoints. Progress checkpoints indicate that a task is
+/// making forward progress and are useful for:
+/// - Detecting stuck/stalled tasks
+/// - Work-stealing scheduler decisions
+/// - Observability and debugging
+#[derive(Debug, Clone)]
+pub struct CheckpointState {
+    /// The timestamp of the last checkpoint.
+    pub last_checkpoint: Option<Instant>,
+    /// The message from the last `checkpoint_with()` call.
+    pub last_message: Option<String>,
+    /// The total number of checkpoints recorded.
+    pub checkpoint_count: u64,
+}
+
+impl Default for CheckpointState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CheckpointState {
+    /// Creates a new checkpoint state with no recorded checkpoints.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            last_checkpoint: None,
+            last_message: None,
+            checkpoint_count: 0,
+        }
+    }
+
+    /// Records a checkpoint without a message.
+    pub fn record(&mut self) {
+        self.last_checkpoint = Some(Instant::now());
+        self.last_message = None;
+        self.checkpoint_count += 1;
+    }
+
+    /// Records a checkpoint with a message.
+    pub fn record_with_message(&mut self, message: String) {
+        self.last_checkpoint = Some(Instant::now());
+        self.last_message = Some(message);
+        self.checkpoint_count += 1;
+    }
+}
 
 /// Internal state for a capability context.
 ///
@@ -23,6 +74,8 @@ pub struct CxInner {
     pub cancel_reason: Option<CancelReason>,
     /// Current mask depth.
     pub mask_depth: u32,
+    /// Progress checkpoint state.
+    pub checkpoint_state: CheckpointState,
 }
 
 impl CxInner {
@@ -37,6 +90,7 @@ impl CxInner {
             cancel_requested: false,
             cancel_reason: None,
             mask_depth: 0,
+            checkpoint_state: CheckpointState::new(),
         }
     }
 }

@@ -1,32 +1,53 @@
 //! Cancel-safe resource pooling with obligation-based return semantics.
 //!
-//! The pool trait defines the contract for acquiring and returning resources
-//! in a cancel-safe manner. A `PooledResource` acts as an obligation: when it
-//! is dropped (or explicitly returned), the resource is sent back to the pool.
+//! This module provides a generic resource pooling framework that integrates with
+//! asupersync's cancel-safety guarantees. Resources are managed through an
+//! obligation-based contract: when a [`PooledResource`] is dropped (or explicitly
+//! returned), the underlying resource is automatically sent back to the pool.
 //!
-//! # Example (sketch)
+//! # Getting Started
+//!
+//! ## Using the Generic Pool
+//!
+//! The easiest way to create a pool is with [`GenericPool`] and a factory function:
+//!
 //! ```ignore
-//! use asupersync::sync::{Pool, PoolReturn, PoolReturnReceiver, PoolReturnSender, PoolStats, PooledResource};
+//! use asupersync::sync::{GenericPool, Pool, PoolConfig};
+//!
+//! // Create a factory that produces resources
+//! let factory = || Box::pin(async {
+//!     Ok(TcpStream::connect("localhost:5432").await?)
+//! });
+//!
+//! // Create pool with configuration
+//! let pool = GenericPool::new(factory, PoolConfig::default());
+//!
+//! // Acquire and use a resource
+//! async fn example(cx: &Cx, pool: &impl Pool<Resource = TcpStream>) {
+//!     let conn = pool.acquire(cx).await?;
+//!     conn.write_all(b"SELECT 1").await?;
+//!     conn.return_to_pool();  // Or just drop - both work!
+//! }
+//! ```
+//!
+//! ## Implementing the Pool Trait
+//!
+//! For custom pool implementations, implement the [`Pool`] trait:
+//!
+//! ```ignore
+//! use asupersync::sync::{Pool, PooledResource, PoolStats, PoolFuture, PoolReturnSender};
 //! use asupersync::Cx;
 //! use std::sync::mpsc;
 //!
 //! struct MyPool {
 //!     return_tx: PoolReturnSender<Vec<u8>>,
-//!     return_rx: PoolReturnReceiver<Vec<u8>>,
-//! }
-//!
-//! impl MyPool {
-//!     fn new() -> Self {
-//!         let (tx, rx) = mpsc::channel();
-//!         Self { return_tx: tx, return_rx: rx }
-//!     }
 //! }
 //!
 //! impl Pool for MyPool {
 //!     type Resource = Vec<u8>;
 //!     type Error = std::io::Error;
 //!
-//!     fn acquire<'a>(&'a self, _cx: &'a Cx) -> asupersync::sync::PoolFuture<'a, Result<PooledResource<Self::Resource>, Self::Error>> {
+//!     fn acquire<'a>(&'a self, cx: &'a Cx) -> PoolFuture<'a, Result<PooledResource<Self::Resource>, Self::Error>> {
 //!         let resource = vec![0u8; 128];
 //!         let pooled = PooledResource::new(resource, self.return_tx.clone());
 //!         Box::pin(async move { Ok(pooled) })
@@ -36,15 +57,150 @@
 //!         Some(PooledResource::new(vec![0u8; 128], self.return_tx.clone()))
 //!     }
 //!
-//!     fn stats(&self) -> PoolStats {
-//!         PoolStats::default()
-//!     }
+//!     fn stats(&self) -> PoolStats { PoolStats::default() }
 //!
-//!     fn close(&self) -> asupersync::sync::PoolFuture<'_, ()> {
+//!     fn close(&self) -> PoolFuture<'_, ()> {
 //!         Box::pin(async move { })
 //!     }
 //! }
 //! ```
+//!
+//! # Configuration Guide
+//!
+//! [`PoolConfig`] provides fine-grained control over pool behavior:
+//!
+//! | Option | Default | Description |
+//! |--------|---------|-------------|
+//! | `min_size` | 1 | Minimum resources to keep in pool |
+//! | `max_size` | 10 | Maximum total resources |
+//! | `acquire_timeout` | 30s | Timeout for acquire operations |
+//! | `idle_timeout` | 600s | Max time a resource can be idle |
+//! | `max_lifetime` | 3600s | Max lifetime of a resource |
+//!
+//! ```ignore
+//! let config = PoolConfig::with_max_size(20)
+//!     .min_size(5)
+//!     .acquire_timeout(Duration::from_secs(10))
+//!     .idle_timeout(Duration::from_secs(300))
+//!     .max_lifetime(Duration::from_secs(1800));
+//! ```
+//!
+//! # Cancel-Safety Patterns
+//!
+//! The pool is designed for cancel-safety at every phase:
+//!
+//! ## Cancellation During Wait
+//!
+//! If a task is cancelled while waiting for a resource (pool at capacity),
+//! no resource is leaked. The waiter is simply removed from the queue.
+//!
+//! ## Cancellation While Holding
+//!
+//! If a task is cancelled while holding a resource, the [`PooledResource`]'s
+//! [`Drop`] implementation ensures the resource is returned to the pool:
+//!
+//! ```ignore
+//! async fn risky_operation(cx: &Cx, pool: &DbPool) -> Result<Data> {
+//!     let conn = pool.acquire(cx).await?;
+//!
+//!     // Even if this panics or cx is cancelled, conn will be returned!
+//!     let data = conn.query("SELECT * FROM users").await?;
+//!
+//!     // Explicit return is optional but recommended for clarity
+//!     conn.return_to_pool();
+//!     Ok(data)
+//! }
+//! ```
+//!
+//! ## Discarding Broken Resources
+//!
+//! If a resource becomes broken (connection error, invalid state), use
+//! [`PooledResource::discard()`] to remove it from the pool rather than
+//! returning it:
+//!
+//! ```ignore
+//! async fn handle_connection(conn: PooledResource<TcpStream>) {
+//!     match conn.write_all(b"PING").await {
+//!         Ok(_) => conn.return_to_pool(),
+//!         Err(_) => conn.discard(),  // Don't return broken connections
+//!     }
+//! }
+//! ```
+//!
+//! ## Obligation Tracking
+//!
+//! The pool uses an obligation-based model. Once you acquire a resource,
+//! you have an "obligation" to return it. This obligation is automatically
+//! discharged by either:
+//!
+//! 1. Calling [`return_to_pool()`](PooledResource::return_to_pool)
+//! 2. Calling [`discard()`](PooledResource::discard)
+//! 3. Dropping the [`PooledResource`] (implicit return)
+//!
+//! The obligation prevents double-return bugs and ensures resources
+//! are always accounted for.
+//!
+//! # Metrics and Monitoring
+//!
+//! Use [`Pool::stats()`] to monitor pool health:
+//!
+//! ```ignore
+//! let stats = pool.stats();
+//!
+//! tracing::info!(
+//!     active = stats.active,
+//!     idle = stats.idle,
+//!     total = stats.total,
+//!     max_size = stats.max_size,
+//!     waiters = stats.waiters,
+//!     acquisitions = stats.total_acquisitions,
+//!     "Pool health check"
+//! );
+//!
+//! // Alert if pool is starved
+//! if stats.waiters > 10 {
+//!     tracing::warn!(waiters = stats.waiters, "Pool congestion detected");
+//! }
+//!
+//! // Alert if utilization is high
+//! let utilization = stats.active as f64 / stats.max_size as f64;
+//! if utilization > 0.9 {
+//!     tracing::warn!(utilization = %format!("{:.0}%", utilization * 100.0), "Pool near capacity");
+//! }
+//! ```
+//!
+//! ## Key Metrics
+//!
+//! | Metric | Meaning |
+//! |--------|---------|
+//! | `active` | Resources currently held by tasks |
+//! | `idle` | Resources waiting to be used |
+//! | `total` | Total resources (active + idle) |
+//! | `waiters` | Tasks blocked waiting for resources |
+//! | `total_acquisitions` | Lifetime acquisition count |
+//! | `total_wait_time` | Cumulative wait time |
+//!
+//! # Troubleshooting
+//!
+//! ## Pool Exhaustion
+//!
+//! If `waiters` is high and `total == max_size`, consider:
+//! - Increasing `max_size`
+//! - Reducing hold time (return resources faster)
+//! - Adding circuit breakers to prevent cascading failures
+//!
+//! ## Resource Leaks
+//!
+//! If `total` grows but `idle` stays low, resources may be:
+//! - Held too long (check `held_duration()`)
+//! - Not being returned properly (ensure `return_to_pool()` or drop is called)
+//!
+//! ## Stale Resources
+//!
+//! If connections are timing out, consider:
+//! - Reducing `idle_timeout` to evict stale resources faster
+//! - Reducing `max_lifetime` to force refresh
+//! - Adding health checks before returning resources to pool
 
 use std::future::Future;
 use std::pin::Pin;
@@ -94,6 +250,26 @@ pub trait Pool: Send + Sync {
 
     /// Close the pool, rejecting new acquisitions.
     fn close(&self) -> PoolFuture<'_, ()>;
+
+    /// Check if a resource is still healthy/usable.
+    ///
+    /// Called before returning an idle resource from the pool. If this
+    /// returns `false`, the resource is discarded and another is tried
+    /// (or a new one is created).
+    ///
+    /// The default implementation assumes all resources are healthy.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// async fn health_check(&self, resource: &TcpStream) -> bool {
+    ///     // Try a quick ping
+    ///     resource.peer_addr().is_ok()
+    /// }
+    /// ```
+    fn health_check<'a>(&'a self, _resource: &'a Self::Resource) -> PoolFuture<'a, bool> {
+        Box::pin(async { true })
+    }
 }
 
 /// Pool usage statistics.
@@ -252,6 +428,18 @@ impl<R> std::ops::DerefMut for PooledResource<R> {
 // PoolConfig and GenericPool
 // ============================================================================
 
+/// Strategy for handling partial warmup failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WarmupStrategy {
+    /// Continue with whatever connections succeeded.
+    #[default]
+    BestEffort,
+    /// Fail pool creation if any warmup fails.
+    FailFast,
+    /// Require at least min_size connections.
+    RequireMinimum,
+}
+
 /// Configuration for a generic resource pool.
 #[derive(Debug, Clone)]
 pub struct PoolConfig {
@@ -265,6 +453,23 @@ pub struct PoolConfig {
     pub idle_timeout: Duration,
     /// Maximum lifetime of a resource.
     pub max_lifetime: Duration,
+
+    // --- Health check options ---
+    /// Perform health check before returning idle resources.
+    pub health_check_on_acquire: bool,
+    /// Periodic health check interval for idle resources.
+    /// If `None`, periodic health checks are disabled.
+    pub health_check_interval: Option<Duration>,
+    /// Remove unhealthy resources immediately when detected.
+    pub evict_unhealthy: bool,
+
+    // --- Warmup options ---
+    /// Pre-create this many connections on pool init.
+    pub warmup_connections: usize,
+    /// Timeout for warmup phase.
+    pub warmup_timeout: Duration,
+    /// Strategy when warmup partially fails.
+    pub warmup_failure_strategy: WarmupStrategy,
 }
 
 impl Default for PoolConfig {
@@ -275,6 +480,14 @@ impl Default for PoolConfig {
             acquire_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(600),
             max_lifetime: Duration::from_secs(3600),
+            // Health check defaults
+            health_check_on_acquire: false,
+            health_check_interval: None,
+            evict_unhealthy: true,
+            // Warmup defaults
+            warmup_connections: 0,
+            warmup_timeout: Duration::from_secs(30),
+            warmup_failure_strategy: WarmupStrategy::BestEffort,
         }
     }
 }
@@ -315,6 +528,42 @@ impl PoolConfig {
     /// Sets the max lifetime.
     pub fn max_lifetime(mut self, lifetime: Duration) -> Self {
         self.max_lifetime = lifetime;
+        self
+    }
+
+    /// Enables health checking before returning idle resources.
+    pub fn health_check_on_acquire(mut self, enabled: bool) -> Self {
+        self.health_check_on_acquire = enabled;
+        self
+    }
+
+    /// Sets the periodic health check interval for idle resources.
+    pub fn health_check_interval(mut self, interval: Option<Duration>) -> Self {
+        self.health_check_interval = interval;
+        self
+    }
+
+    /// Sets whether to immediately evict unhealthy resources.
+    pub fn evict_unhealthy(mut self, evict: bool) -> Self {
+        self.evict_unhealthy = evict;
+        self
+    }
+
+    /// Sets the number of connections to pre-create during warmup.
+    pub fn warmup_connections(mut self, count: usize) -> Self {
+        self.warmup_connections = count;
+        self
+    }
+
+    /// Sets the timeout for the warmup phase.
+    pub fn warmup_timeout(mut self, timeout: Duration) -> Self {
+        self.warmup_timeout = timeout;
+        self
+    }
+
+    /// Sets the strategy for handling partial warmup failures.
+    pub fn warmup_failure_strategy(mut self, strategy: WarmupStrategy) -> Self {
+        self.warmup_failure_strategy = strategy;
         self
     }
 }
@@ -841,5 +1090,283 @@ mod tests {
         );
 
         crate::test_complete!("pool_error_display");
+    }
+
+    // ========================================================================
+    // Cancel-safety tests
+    // ========================================================================
+
+    #[test]
+    fn cancel_while_holding_resource_returns_on_drop() {
+        init_test("cancel_while_holding_resource_returns_on_drop");
+
+        // This test verifies that when a task holding a pooled resource is
+        // cancelled, the resource is properly returned to the pool via the
+        // Drop implementation.
+
+        let (tx, rx) = mpsc::channel();
+        let pooled = PooledResource::new(99u8, tx.clone());
+
+        // Simulate cancellation by just dropping the resource
+        // In a real scenario, cancellation would cause the future to be dropped
+        drop(pooled);
+
+        // Verify resource was returned
+        let msg = rx.recv().expect("should receive return message");
+        match msg {
+            PoolReturn::Return(value) => {
+                crate::assert_with_log!(value == 99, "returned value", 99u8, value);
+            }
+            PoolReturn::Discard => panic!("expected Return, got Discard"),
+        }
+
+        // Verify channel is empty (exactly one return)
+        crate::assert_with_log!(
+            rx.try_recv().is_err(),
+            "no extra messages",
+            true,
+            rx.try_recv().is_err()
+        );
+
+        crate::test_complete!("cancel_while_holding_resource_returns_on_drop");
+    }
+
+    #[test]
+    fn obligation_discharged_prevents_double_return() {
+        init_test("obligation_discharged_prevents_double_return");
+
+        // Test that explicitly returning a resource prevents the Drop from
+        // returning it again (no double-return bug).
+
+        let (tx, rx) = mpsc::channel();
+        let pooled = PooledResource::new(77u8, tx);
+
+        // Explicitly return
+        pooled.return_to_pool();
+
+        // Verify exactly one return message
+        let msg = rx.recv().expect("should receive return message");
+        match msg {
+            PoolReturn::Return(value) => {
+                crate::assert_with_log!(value == 77, "returned value", 77u8, value);
+            }
+            PoolReturn::Discard => panic!("expected Return, got Discard"),
+        }
+
+        // No second message (drop should not send again)
+        crate::assert_with_log!(
+            rx.try_recv().is_err(),
+            "no double return",
+            true,
+            rx.try_recv().is_err()
+        );
+
+        crate::test_complete!("obligation_discharged_prevents_double_return");
+    }
+
+    #[test]
+    fn discard_prevents_return_on_drop() {
+        init_test("discard_prevents_return_on_drop");
+
+        // Test that discarding a resource prevents the Drop from returning it.
+
+        let (tx, rx) = mpsc::channel();
+        let pooled = PooledResource::new(88u8, tx);
+
+        // Explicitly discard
+        pooled.discard();
+
+        // Verify we got a discard message
+        let msg = rx.recv().expect("should receive discard message");
+        match msg {
+            PoolReturn::Return(_) => panic!("expected Discard, got Return"),
+            PoolReturn::Discard => {
+                // Good - discard was sent
+            }
+        }
+
+        // No second message
+        crate::assert_with_log!(
+            rx.try_recv().is_err(),
+            "no extra messages after discard",
+            true,
+            rx.try_recv().is_err()
+        );
+
+        crate::test_complete!("discard_prevents_return_on_drop");
+    }
+
+    #[test]
+    fn generic_pool_close_clears_idle_resources() {
+        init_test("generic_pool_close_clears_idle_resources");
+
+        let pool = GenericPool::new(simple_factory, PoolConfig::with_max_size(5));
+
+        // Close the pool
+        futures_lite::future::block_on(pool.close());
+
+        // Verify pool is closed - try_acquire should return None
+        let result = pool.try_acquire();
+        crate::assert_with_log!(
+            result.is_none(),
+            "closed pool returns None",
+            true,
+            result.is_none()
+        );
+
+        // Stats should show empty
+        let stats = pool.stats();
+        crate::assert_with_log!(stats.idle == 0, "idle after close", 0usize, stats.idle);
+
+        crate::test_complete!("generic_pool_close_clears_idle_resources");
+    }
+
+    #[test]
+    fn generic_pool_acquire_when_closed_returns_error() {
+        init_test("generic_pool_acquire_when_closed_returns_error");
+
+        let pool = GenericPool::new(simple_factory, PoolConfig::with_max_size(5));
+        let cx = crate::cx::Cx::for_testing();
+
+        // Close the pool
+        futures_lite::future::block_on(pool.close());
+
+        // Acquire should return Closed error
+        let result = futures_lite::future::block_on(pool.acquire(&cx));
+        match result {
+            Err(PoolError::Closed) => {
+                // Good - closed error as expected
+            }
+            Ok(_) => panic!("expected Closed error, got Ok"),
+            Err(e) => panic!("expected Closed error, got {:?}", e),
+        }
+
+        crate::test_complete!("generic_pool_acquire_when_closed_returns_error");
+    }
+
+    #[test]
+    fn generic_pool_resource_returned_becomes_idle() {
+        init_test("generic_pool_resource_returned_becomes_idle");
+
+        let pool = GenericPool::new(simple_factory, PoolConfig::with_max_size(5));
+        let cx = crate::cx::Cx::for_testing();
+
+        // Acquire a resource
+        let resource = futures_lite::future::block_on(pool.acquire(&cx))
+            .expect("first acquire should succeed");
+
+        // Check stats - should show 1 active
+        let stats = pool.stats();
+        crate::assert_with_log!(
+            stats.active == 1,
+            "active after acquire",
+            1usize,
+            stats.active
+        );
+        crate::assert_with_log!(stats.idle == 0, "idle after acquire", 0usize, stats.idle);
+
+        // Return the resource
+        resource.return_to_pool();
+
+        // Process returns and check stats
+        let stats = pool.stats();
+        crate::assert_with_log!(
+            stats.active == 0,
+            "active after return",
+            0usize,
+            stats.active
+        );
+        crate::assert_with_log!(stats.idle == 1, "idle after return", 1usize, stats.idle);
+
+        crate::test_complete!("generic_pool_resource_returned_becomes_idle");
+    }
+
+    #[test]
+    fn generic_pool_discarded_resource_not_returned_to_idle() {
+        init_test("generic_pool_discarded_resource_not_returned_to_idle");
+
+        let pool = GenericPool::new(simple_factory, PoolConfig::with_max_size(5));
+        let cx = crate::cx::Cx::for_testing();
+
+        // Acquire a resource
+        let resource = futures_lite::future::block_on(pool.acquire(&cx))
+            .expect("first acquire should succeed");
+
+        // Discard the resource (simulating a broken connection)
+        resource.discard();
+
+        // Process returns and check stats - should show 0 idle (discarded resources don't return)
+        let stats = pool.stats();
+        crate::assert_with_log!(
+            stats.active == 0,
+            "active after discard",
+            0usize,
+            stats.active
+        );
+        crate::assert_with_log!(stats.idle == 0, "idle after discard", 0usize, stats.idle);
+
+        crate::test_complete!("generic_pool_discarded_resource_not_returned_to_idle");
+    }
+
+    #[test]
+    fn generic_pool_held_duration_increases() {
+        init_test("generic_pool_held_duration_increases");
+
+        let (tx, _rx) = mpsc::channel();
+        let pooled = PooledResource::new(42u8, tx);
+
+        // Small sleep to ensure time passes
+        std::thread::sleep(Duration::from_millis(10));
+
+        let held = pooled.held_duration();
+        crate::assert_with_log!(
+            held >= Duration::from_millis(10),
+            "held duration at least 10ms",
+            Duration::from_millis(10),
+            held
+        );
+
+        crate::test_complete!("generic_pool_held_duration_increases");
+    }
+
+    #[test]
+    fn load_test_many_acquire_return_cycles() {
+        init_test("load_test_many_acquire_return_cycles");
+
+        let pool = GenericPool::new(simple_factory, PoolConfig::with_max_size(5));
+        let cx = crate::cx::Cx::for_testing();
+
+        // Run many acquire/return cycles
+        for i in 0..100 {
+            let resource =
+                futures_lite::future::block_on(pool.acquire(&cx)).expect("acquire should succeed");
+
+            // Use the resource
+            let _ = *resource;
+
+            // Return it (or drop it - both should work)
+            if i % 2 == 0 {
+                resource.return_to_pool();
+            } else {
+                drop(resource);
+            }
+        }
+
+        // Final stats check
+        let stats = pool.stats();
+        crate::assert_with_log!(
+            stats.active == 0,
+            "no active after all returned",
+            0usize,
+            stats.active
+        );
+        crate::assert_with_log!(
+            stats.total_acquisitions == 100,
+            "100 total acquisitions",
+            100u64,
+            stats.total_acquisitions
+        );
+
+        crate::test_complete!("load_test_many_acquire_return_cycles");
     }
 }

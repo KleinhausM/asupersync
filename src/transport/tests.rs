@@ -323,4 +323,1151 @@ mod tests {
             assert!(matches!(err, SinkError::Closed));
         });
     }
+
+    // ============================================================================
+    // Comprehensive Transport Layer Tests (bead: asupersync-6bp)
+    // ============================================================================
+
+    mod comprehensive_tests {
+        use super::*;
+        use crate::transport::aggregator::{
+            AggregatorConfig, MultipathAggregator, PathSelectionPolicy, PathSet,
+            SymbolDeduplicator, SymbolReorderer, TransportPath,
+        };
+        use crate::transport::mock::{mock_channel, MockNetwork, MockTransportConfig, NodeId};
+        use crate::transport::router::{
+            DispatchStrategy, LoadBalanceStrategy, RoutingEntry, RoutingTable, SymbolDispatcher,
+            SymbolRouter,
+        };
+        use std::collections::HashSet;
+
+        fn init_test(name: &str) {
+            crate::test_utils::init_test_logging();
+            crate::test_phase!(name);
+        }
+
+        // ========================================================================
+        // Single-Path Happy Flow Tests
+        // ========================================================================
+
+        #[test]
+        fn test_single_path_happy_flow_basic() {
+            init_test("test_single_path_happy_flow_basic");
+
+            let config = MockTransportConfig::reliable();
+            let (mut sink, mut stream) = mock_channel(config);
+
+            future::block_on(async {
+                // Send 100 symbols
+                for i in 0..100 {
+                    sink.send(create_symbol(i)).await.unwrap();
+                }
+                sink.close().await.unwrap();
+
+                // Receive all symbols in order
+                let mut received = Vec::new();
+                while let Some(item) = stream.next().await {
+                    received.push(item.unwrap().symbol().esi());
+                }
+
+                crate::assert_with_log!(
+                    received.len() == 100,
+                    "received count",
+                    100,
+                    received.len()
+                );
+                for (i, esi) in received.iter().enumerate() {
+                    crate::assert_with_log!(*esi == i as u32, "esi order", i as u32, *esi);
+                }
+            });
+
+            crate::test_complete!("test_single_path_happy_flow_basic");
+        }
+
+        #[test]
+        fn test_single_path_happy_flow_with_router() {
+            init_test("test_single_path_happy_flow_with_router");
+
+            let config = MockTransportConfig::reliable();
+            let (sink, mut stream) = mock_channel(config);
+
+            // Create routing table with single endpoint
+            let mut table = RoutingTable::new();
+            let route_key = "test_route".to_string();
+            table.add_endpoint(
+                route_key.clone(),
+                RoutingEntry::new("endpoint1".to_string(), Box::new(sink)),
+            );
+
+            let mut router = SymbolRouter::new(table, LoadBalanceStrategy::RoundRobin);
+
+            future::block_on(async {
+                // Route 50 symbols through the router
+                for i in 0..50 {
+                    let symbol = create_symbol(i);
+                    let routed = router.route(&route_key, symbol.clone()).await;
+                    crate::assert_with_log!(routed.is_ok(), "route success", true, routed.is_ok());
+                }
+
+                // Verify all symbols arrived
+                let mut count = 0;
+                while let Some(item) = stream.next().await {
+                    item.unwrap();
+                    count += 1;
+                    if count == 50 {
+                        break;
+                    }
+                }
+                crate::assert_with_log!(count == 50, "received via router", 50, count);
+            });
+
+            crate::test_complete!("test_single_path_happy_flow_with_router");
+        }
+
+        #[test]
+        fn test_single_path_happy_flow_batch_send() {
+            init_test("test_single_path_happy_flow_batch_send");
+
+            let config = MockTransportConfig::reliable();
+            let (mut sink, mut stream) = mock_channel(config);
+
+            future::block_on(async {
+                // Send batch of symbols
+                let symbols: Vec<_> = (0..25).map(create_symbol).collect();
+                let sent = sink.send_all(symbols).await.unwrap();
+                crate::assert_with_log!(sent == 25, "batch sent", 25, sent);
+                sink.close().await.unwrap();
+
+                // Collect all received
+                let mut set = SymbolSet::new();
+                let collected = stream.collect_to_set(&mut set).await.unwrap();
+                crate::assert_with_log!(collected == 25, "batch received", 25, collected);
+            });
+
+            crate::test_complete!("test_single_path_happy_flow_batch_send");
+        }
+
+        // ========================================================================
+        // Multi-Path Deduplication Tests
+        // ========================================================================
+
+        #[test]
+        fn test_multipath_dedup_duplicate_symbols() {
+            init_test("test_multipath_dedup_duplicate_symbols");
+
+            let mut dedup = SymbolDeduplicator::new(1000);
+
+            // First symbol should be accepted
+            let sym1 = create_symbol(1);
+            let (is_new, _) = dedup.check_and_record(sym1.symbol().id());
+            crate::assert_with_log!(is_new, "first symbol new", true, is_new);
+
+            // Duplicate should be rejected
+            let sym1_dup = create_symbol(1);
+            let (is_new, _) = dedup.check_and_record(sym1_dup.symbol().id());
+            crate::assert_with_log!(!is_new, "duplicate rejected", false, is_new);
+
+            // Different symbol should be accepted
+            let sym2 = create_symbol(2);
+            let (is_new, _) = dedup.check_and_record(sym2.symbol().id());
+            crate::assert_with_log!(is_new, "different symbol new", true, is_new);
+
+            crate::test_complete!("test_multipath_dedup_duplicate_symbols");
+        }
+
+        #[test]
+        fn test_multipath_dedup_across_paths() {
+            init_test("test_multipath_dedup_across_paths");
+
+            // Create mock network with 3 nodes
+            let config = MockTransportConfig::reliable();
+            let network = MockNetwork::fully_connected(3, config.clone());
+
+            // Get transports from node 0 to node 1, and node 2 to node 1
+            let (mut sink_0_1, _stream_0_1) = network.transport(0, 1);
+            let (mut sink_2_1, _stream_2_1) = network.transport(2, 1);
+
+            // Create deduplicator at receiving node
+            let mut dedup = SymbolDeduplicator::new(1000);
+
+            future::block_on(async {
+                // Send same symbol via both paths
+                let sym = create_symbol(42);
+                sink_0_1.send(sym.clone()).await.unwrap();
+                sink_2_1.send(sym.clone()).await.unwrap();
+
+                // First arrival should be new
+                let (is_new, _) = dedup.check_and_record(sym.symbol().id());
+                crate::assert_with_log!(is_new, "first path new", true, is_new);
+
+                // Second arrival (from other path) should be duplicate
+                let (is_new, _) = dedup.check_and_record(sym.symbol().id());
+                crate::assert_with_log!(!is_new, "second path dup", false, is_new);
+            });
+
+            crate::test_complete!("test_multipath_dedup_across_paths");
+        }
+
+        #[test]
+        fn test_multipath_aggregator_basic() {
+            init_test("test_multipath_aggregator_basic");
+
+            let config = AggregatorConfig {
+                max_tracked_symbols: 1000,
+                reorder_window: 10,
+                reorder_timeout: Duration::from_millis(100),
+                dedup_window: 1000,
+            };
+            let mut aggregator = MultipathAggregator::new(config);
+
+            // Process symbols from multiple paths
+            let sym1 = create_symbol(0);
+            let sym2 = create_symbol(1);
+            let sym1_dup = create_symbol(0); // Duplicate of sym1
+
+            let result1 = aggregator.process(sym1.clone(), 0);
+            crate::assert_with_log!(result1.is_some(), "sym1 accepted", true, result1.is_some());
+
+            let result2 = aggregator.process(sym2.clone(), 1);
+            crate::assert_with_log!(result2.is_some(), "sym2 accepted", true, result2.is_some());
+
+            let result_dup = aggregator.process(sym1_dup.clone(), 1);
+            crate::assert_with_log!(
+                result_dup.is_none(),
+                "dup rejected",
+                true,
+                result_dup.is_none()
+            );
+
+            crate::test_complete!("test_multipath_aggregator_basic");
+        }
+
+        #[test]
+        fn test_multipath_dedup_window_expiry() {
+            init_test("test_multipath_dedup_window_expiry");
+
+            // Create deduplicator with very small window
+            let mut dedup = SymbolDeduplicator::new(5);
+
+            // Fill the window
+            for i in 0..5 {
+                let sym = create_symbol(i);
+                let (is_new, _) = dedup.check_and_record(sym.symbol().id());
+                crate::assert_with_log!(is_new, &format!("sym {} new", i), true, is_new);
+            }
+
+            // Adding more should evict oldest
+            for i in 5..10 {
+                let sym = create_symbol(i);
+                let (is_new, _) = dedup.check_and_record(sym.symbol().id());
+                crate::assert_with_log!(is_new, &format!("sym {} new", i), true, is_new);
+            }
+
+            // Old symbols (0-4) should be re-accepted after eviction
+            // Note: exact eviction behavior depends on implementation
+            let sym0 = create_symbol(0);
+            let (is_new, _) = dedup.check_and_record(sym0.symbol().id());
+            // After adding 10 symbols with window of 5, symbol 0 should be evicted
+            crate::assert_with_log!(is_new, "old symbol re-accepted", true, is_new);
+
+            crate::test_complete!("test_multipath_dedup_window_expiry");
+        }
+
+        // ========================================================================
+        // Backpressure Propagation Tests
+        // ========================================================================
+
+        #[test]
+        fn test_backpressure_channel_full() {
+            init_test("test_backpressure_channel_full");
+
+            let config = MockTransportConfig {
+                capacity: 3,
+                ..MockTransportConfig::reliable()
+            };
+            let (mut sink, mut stream) = mock_channel(config);
+
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+
+            future::block_on(async {
+                // Fill the channel to capacity
+                for i in 0..3 {
+                    sink.send(create_symbol(i)).await.unwrap();
+                }
+            });
+
+            // poll_ready should return Pending when full
+            let ready = Pin::new(&mut sink).poll_ready(&mut cx);
+            crate::assert_with_log!(
+                matches!(ready, Poll::Pending),
+                "backpressure active",
+                "Pending",
+                format!("{:?}", ready)
+            );
+
+            // Consume one symbol
+            future::block_on(async {
+                let _ = stream.next().await;
+            });
+
+            // Now should be ready
+            let ready = Pin::new(&mut sink).poll_ready(&mut cx);
+            crate::assert_with_log!(
+                matches!(ready, Poll::Ready(Ok(()))),
+                "backpressure released",
+                "Ready(Ok)",
+                format!("{:?}", ready)
+            );
+
+            crate::test_complete!("test_backpressure_channel_full");
+        }
+
+        #[test]
+        fn test_backpressure_propagation_through_router() {
+            init_test("test_backpressure_propagation_through_router");
+
+            let config = MockTransportConfig {
+                capacity: 2,
+                ..MockTransportConfig::reliable()
+            };
+            let (sink, mut stream) = mock_channel(config);
+
+            let mut table = RoutingTable::new();
+            table.add_endpoint(
+                "route".to_string(),
+                RoutingEntry::new("ep1".to_string(), Box::new(sink)),
+            );
+            let mut router = SymbolRouter::new(table, LoadBalanceStrategy::RoundRobin);
+
+            future::block_on(async {
+                // Fill the underlying channel
+                for i in 0..2 {
+                    router
+                        .route(&"route".to_string(), create_symbol(i))
+                        .await
+                        .unwrap();
+                }
+
+                // Third send should hit backpressure (either block or return error)
+                // Since router uses poll-based send, we test by draining
+                let _ = stream.next().await;
+                let _ = stream.next().await;
+
+                // After draining, routing should work
+                let result = router.route(&"route".to_string(), create_symbol(10)).await;
+                crate::assert_with_log!(result.is_ok(), "route after drain", true, result.is_ok());
+            });
+
+            crate::test_complete!("test_backpressure_propagation_through_router");
+        }
+
+        #[test]
+        fn test_backpressure_buffered_sink() {
+            init_test("test_backpressure_buffered_sink");
+
+            let config = MockTransportConfig {
+                capacity: 10,
+                ..MockTransportConfig::reliable()
+            };
+            let (sink, mut stream) = mock_channel(config);
+
+            // Buffer with capacity 5
+            let mut buffered = sink.buffer(5);
+
+            future::block_on(async {
+                // Send 5 items (should be buffered, not yet sent)
+                for i in 0..5 {
+                    buffered.send(create_symbol(i)).await.unwrap();
+                }
+
+                // Flush to actually send
+                buffered.flush().await.unwrap();
+
+                // All 5 should now be in the stream
+                for _ in 0..5 {
+                    let item = stream.next().await;
+                    crate::assert_with_log!(item.is_some(), "item received", true, item.is_some());
+                }
+            });
+
+            crate::test_complete!("test_backpressure_buffered_sink");
+        }
+
+        // ========================================================================
+        // Priority Dispatch Tests
+        // ========================================================================
+
+        #[test]
+        fn test_priority_dispatch_unicast() {
+            init_test("test_priority_dispatch_unicast");
+
+            let config = MockTransportConfig::reliable();
+            let (sink1, mut stream1) = mock_channel(config.clone());
+            let (sink2, mut stream2) = mock_channel(config);
+
+            let mut dispatcher = SymbolDispatcher::new();
+            dispatcher.add_sink("target1".to_string(), Box::new(sink1));
+            dispatcher.add_sink("target2".to_string(), Box::new(sink2));
+
+            future::block_on(async {
+                // Unicast to target1 only
+                let sym = create_symbol(1);
+                let result = dispatcher
+                    .dispatch_with_strategy(
+                        sym.clone(),
+                        DispatchStrategy::Unicast("target1".to_string()),
+                    )
+                    .await;
+                crate::assert_with_log!(result.is_ok(), "unicast ok", true, result.is_ok());
+
+                // target1 should have the symbol
+                let recv1 = stream1.next().await;
+                crate::assert_with_log!(recv1.is_some(), "target1 received", true, recv1.is_some());
+            });
+
+            // target2 should be empty - verify via poll
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            let poll = Pin::new(&mut stream2).poll_next(&mut cx);
+            crate::assert_with_log!(
+                matches!(poll, Poll::Pending),
+                "target2 empty",
+                "Pending",
+                format!("{:?}", poll)
+            );
+
+            crate::test_complete!("test_priority_dispatch_unicast");
+        }
+
+        #[test]
+        fn test_priority_dispatch_broadcast() {
+            init_test("test_priority_dispatch_broadcast");
+
+            let config = MockTransportConfig::reliable();
+            let (sink1, mut stream1) = mock_channel(config.clone());
+            let (sink2, mut stream2) = mock_channel(config.clone());
+            let (sink3, mut stream3) = mock_channel(config);
+
+            let mut dispatcher = SymbolDispatcher::new();
+            dispatcher.add_sink("node1".to_string(), Box::new(sink1));
+            dispatcher.add_sink("node2".to_string(), Box::new(sink2));
+            dispatcher.add_sink("node3".to_string(), Box::new(sink3));
+
+            future::block_on(async {
+                // Broadcast to all nodes
+                let sym = create_symbol(42);
+                let result = dispatcher
+                    .dispatch_with_strategy(sym.clone(), DispatchStrategy::Broadcast)
+                    .await;
+                crate::assert_with_log!(result.is_ok(), "broadcast ok", true, result.is_ok());
+
+                // All streams should have the symbol
+                let recv1 = stream1.next().await.unwrap().unwrap();
+                let recv2 = stream2.next().await.unwrap().unwrap();
+                let recv3 = stream3.next().await.unwrap().unwrap();
+
+                crate::assert_with_log!(
+                    recv1.symbol().esi() == 42,
+                    "node1 received",
+                    42,
+                    recv1.symbol().esi()
+                );
+                crate::assert_with_log!(
+                    recv2.symbol().esi() == 42,
+                    "node2 received",
+                    42,
+                    recv2.symbol().esi()
+                );
+                crate::assert_with_log!(
+                    recv3.symbol().esi() == 42,
+                    "node3 received",
+                    42,
+                    recv3.symbol().esi()
+                );
+            });
+
+            crate::test_complete!("test_priority_dispatch_broadcast");
+        }
+
+        #[test]
+        fn test_priority_dispatch_multicast() {
+            init_test("test_priority_dispatch_multicast");
+
+            let config = MockTransportConfig::reliable();
+            let (sink1, mut stream1) = mock_channel(config.clone());
+            let (sink2, mut stream2) = mock_channel(config.clone());
+            let (sink3, mut stream3) = mock_channel(config);
+
+            let mut dispatcher = SymbolDispatcher::new();
+            dispatcher.add_sink("a".to_string(), Box::new(sink1));
+            dispatcher.add_sink("b".to_string(), Box::new(sink2));
+            dispatcher.add_sink("c".to_string(), Box::new(sink3));
+
+            future::block_on(async {
+                // Multicast to only 'a' and 'c'
+                let sym = create_symbol(99);
+                let targets = vec!["a".to_string(), "c".to_string()];
+                let result = dispatcher
+                    .dispatch_with_strategy(sym.clone(), DispatchStrategy::Multicast(targets))
+                    .await;
+                crate::assert_with_log!(result.is_ok(), "multicast ok", true, result.is_ok());
+
+                // 'a' and 'c' should have the symbol
+                let recv_a = stream1.next().await.unwrap().unwrap();
+                crate::assert_with_log!(
+                    recv_a.symbol().esi() == 99,
+                    "a received",
+                    99,
+                    recv_a.symbol().esi()
+                );
+
+                let recv_c = stream3.next().await.unwrap().unwrap();
+                crate::assert_with_log!(
+                    recv_c.symbol().esi() == 99,
+                    "c received",
+                    99,
+                    recv_c.symbol().esi()
+                );
+            });
+
+            // 'b' should be empty
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            let poll = Pin::new(&mut stream2).poll_next(&mut cx);
+            crate::assert_with_log!(
+                matches!(poll, Poll::Pending),
+                "b empty",
+                "Pending",
+                format!("{:?}", poll)
+            );
+
+            crate::test_complete!("test_priority_dispatch_multicast");
+        }
+
+        #[test]
+        fn test_priority_dispatch_quorum_cast() {
+            init_test("test_priority_dispatch_quorum_cast");
+
+            let config = MockTransportConfig::reliable();
+            let mut streams = Vec::new();
+            let mut dispatcher = SymbolDispatcher::new();
+
+            // Create 5 nodes
+            for i in 0..5 {
+                let (sink, stream) = mock_channel(config.clone());
+                dispatcher.add_sink(format!("node{}", i), Box::new(sink));
+                streams.push(stream);
+            }
+
+            future::block_on(async {
+                // QuorumCast with quorum of 3
+                let sym = create_symbol(77);
+                let result = dispatcher
+                    .dispatch_with_strategy(sym.clone(), DispatchStrategy::QuorumCast(3))
+                    .await;
+                crate::assert_with_log!(result.is_ok(), "quorum cast ok", true, result.is_ok());
+
+                // At least 3 nodes should receive the symbol
+                let mut received_count = 0;
+                for stream in &mut streams {
+                    let waker = noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    let poll = Pin::new(stream).poll_next(&mut cx);
+                    if matches!(poll, Poll::Ready(Some(Ok(_)))) {
+                        received_count += 1;
+                    }
+                }
+
+                crate::assert_with_log!(
+                    received_count >= 3,
+                    "quorum received",
+                    ">=3",
+                    received_count
+                );
+            });
+
+            crate::test_complete!("test_priority_dispatch_quorum_cast");
+        }
+
+        // ========================================================================
+        // Cancel Mid-Flight Tests
+        // ========================================================================
+
+        #[test]
+        fn test_cancel_mid_flight_stream() {
+            init_test("test_cancel_mid_flight_stream");
+
+            let config = MockTransportConfig::reliable();
+            let (mut sink, mut stream) = mock_channel(config);
+
+            let cx = Cx::for_testing();
+
+            future::block_on(async {
+                // Send some symbols
+                for i in 0..5 {
+                    sink.send(create_symbol(i)).await.unwrap();
+                }
+
+                // Receive first two
+                let _ = stream.next().await;
+                let _ = stream.next().await;
+
+                // Now cancel
+                cx.set_cancel_requested(true);
+
+                // Next receive should return cancelled
+                let result = stream.next_with_cancel(&cx).await;
+                crate::assert_with_log!(
+                    matches!(result, Err(StreamError::Cancelled)),
+                    "cancelled",
+                    "Cancelled",
+                    format!("{:?}", result)
+                );
+            });
+
+            crate::test_complete!("test_cancel_mid_flight_stream");
+        }
+
+        #[test]
+        fn test_cancel_mid_flight_pending() {
+            init_test("test_cancel_mid_flight_pending");
+
+            let config = MockTransportConfig::reliable();
+            let (_sink, mut stream) = mock_channel(config);
+            let cx = Cx::for_testing();
+
+            let waker = noop_waker();
+            let mut context = Context::from_waker(&waker);
+
+            // Start waiting for a symbol that won't arrive
+            let mut fut = stream.next_with_cancel(&cx);
+            let mut fut = Pin::new(&mut fut);
+
+            // First poll should be pending (no symbols available)
+            let first = fut.as_mut().poll(&mut context);
+            crate::assert_with_log!(
+                matches!(first, Poll::Pending),
+                "first poll pending",
+                "Pending",
+                format!("{:?}", first)
+            );
+
+            // Cancel mid-flight
+            cx.set_cancel_requested(true);
+
+            // Second poll should return cancelled
+            let second = fut.as_mut().poll(&mut context);
+            crate::assert_with_log!(
+                matches!(second, Poll::Ready(Err(StreamError::Cancelled))),
+                "cancelled after pending",
+                "Ready(Cancelled)",
+                format!("{:?}", second)
+            );
+
+            crate::test_complete!("test_cancel_mid_flight_pending");
+        }
+
+        #[test]
+        fn test_cancel_mid_flight_batch() {
+            init_test("test_cancel_mid_flight_batch");
+
+            let config = MockTransportConfig::reliable();
+            let (mut sink, mut stream) = mock_channel(config);
+            let cx = Cx::for_testing();
+
+            future::block_on(async {
+                // Send batch
+                let symbols: Vec<_> = (0..20).map(create_symbol).collect();
+                sink.send_all(symbols).await.unwrap();
+                sink.close().await.unwrap();
+
+                // Collect with cancel - set cancel partway through
+                let mut collected = 0;
+                loop {
+                    if collected >= 10 {
+                        cx.set_cancel_requested(true);
+                    }
+                    match stream.next_with_cancel(&cx).await {
+                        Ok(Some(_)) => collected += 1,
+                        Ok(None) => break,
+                        Err(StreamError::Cancelled) => break,
+                        Err(e) => panic!("unexpected error: {:?}", e),
+                    }
+                }
+
+                // Should have collected around 10-11 before cancel
+                crate::assert_with_log!(
+                    collected >= 10 && collected <= 12,
+                    "partial collect",
+                    "10-12",
+                    collected
+                );
+            });
+
+            crate::test_complete!("test_cancel_mid_flight_batch");
+        }
+
+        // ========================================================================
+        // Failover Scenario Tests
+        // ========================================================================
+
+        #[test]
+        fn test_failover_endpoint_failure() {
+            init_test("test_failover_endpoint_failure");
+
+            // Primary endpoint that fails after 3 operations
+            let config_fail = MockTransportConfig {
+                fail_after: Some(3),
+                ..MockTransportConfig::reliable()
+            };
+            let (sink_primary, _stream_primary) = mock_channel(config_fail);
+
+            // Backup endpoint that's reliable
+            let config_backup = MockTransportConfig::reliable();
+            let (sink_backup, mut stream_backup) = mock_channel(config_backup);
+
+            let mut table = RoutingTable::new();
+            table.add_endpoint(
+                "route".to_string(),
+                RoutingEntry::new("primary".to_string(), Box::new(sink_primary)),
+            );
+            table.add_endpoint(
+                "route".to_string(),
+                RoutingEntry::new("backup".to_string(), Box::new(sink_backup)),
+            );
+
+            let mut router = SymbolRouter::new(table, LoadBalanceStrategy::RoundRobin);
+
+            future::block_on(async {
+                // First 3 should succeed (alternating between primary and backup in round-robin)
+                for i in 0..6 {
+                    let sym = create_symbol(i);
+                    let result = router.route(&"route".to_string(), sym).await;
+                    // Some may fail if they hit the failing primary after 3 ops
+                    if i < 4 {
+                        // Early sends should mostly work
+                        if result.is_err() {
+                            // Primary failed, but that's expected
+                        }
+                    }
+                }
+
+                // Backup should have received some symbols
+                let mut backup_count = 0;
+                loop {
+                    let waker = noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    let poll = Pin::new(&mut stream_backup).poll_next(&mut cx);
+                    match poll {
+                        Poll::Ready(Some(Ok(_))) => backup_count += 1,
+                        _ => break,
+                    }
+                }
+
+                crate::assert_with_log!(
+                    backup_count > 0,
+                    "backup received symbols",
+                    ">0",
+                    backup_count
+                );
+            });
+
+            crate::test_complete!("test_failover_endpoint_failure");
+        }
+
+        #[test]
+        fn test_failover_network_partition() {
+            init_test("test_failover_network_partition");
+
+            let config = MockTransportConfig::reliable();
+            let mut network = MockNetwork::fully_connected(4, config);
+
+            // Partition: nodes 0,1 can't reach 2,3
+            network.partition(&[0, 1], &[2, 3]);
+
+            // Transport 0->2 should be closed (partitioned)
+            let (mut sink_0_2, _) = network.transport(0, 2);
+
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+
+            // Trying to send should fail (closed)
+            let poll = Pin::new(&mut sink_0_2).poll_ready(&mut cx);
+            crate::assert_with_log!(
+                matches!(poll, Poll::Ready(Err(SinkError::Closed))),
+                "partitioned link closed",
+                "Ready(Err(Closed))",
+                format!("{:?}", poll)
+            );
+
+            // Transport 0->1 should still work (same partition)
+            let (mut sink_0_1, mut stream_0_1) = network.transport(0, 1);
+
+            future::block_on(async {
+                let sym = create_symbol(1);
+                sink_0_1.send(sym.clone()).await.unwrap();
+                let received = stream_0_1.next().await.unwrap().unwrap();
+                crate::assert_with_log!(
+                    received.symbol().esi() == 1,
+                    "same partition works",
+                    1,
+                    received.symbol().esi()
+                );
+            });
+
+            // Heal partition
+            network.heal_partition(&[0, 1], &[2, 3]);
+
+            // Transport 0->2 should now work
+            let (mut sink_0_2_healed, mut stream_0_2_healed) = network.transport(0, 2);
+
+            future::block_on(async {
+                let sym = create_symbol(2);
+                sink_0_2_healed.send(sym.clone()).await.unwrap();
+                let received = stream_0_2_healed.next().await.unwrap().unwrap();
+                crate::assert_with_log!(
+                    received.symbol().esi() == 2,
+                    "healed partition works",
+                    2,
+                    received.symbol().esi()
+                );
+            });
+
+            crate::test_complete!("test_failover_network_partition");
+        }
+
+        #[test]
+        fn test_failover_lossy_path_recovery() {
+            init_test("test_failover_lossy_path_recovery");
+
+            // Lossy path with 50% loss
+            let config_lossy = MockTransportConfig {
+                loss_rate: 0.5,
+                seed: Some(42),
+                capacity: 1024,
+                ..MockTransportConfig::default()
+            };
+            let (mut sink_lossy, mut stream_lossy) = mock_channel(config_lossy);
+
+            // Reliable backup path
+            let config_reliable = MockTransportConfig::reliable();
+            let (mut sink_reliable, mut stream_reliable) = mock_channel(config_reliable);
+
+            future::block_on(async {
+                // Send 100 symbols via lossy path
+                for i in 0..100 {
+                    sink_lossy.send(create_symbol(i)).await.unwrap();
+                }
+                sink_lossy.close().await.unwrap();
+
+                // Count received via lossy
+                let mut lossy_received = HashSet::new();
+                while let Some(item) = stream_lossy.next().await {
+                    if let Ok(sym) = item {
+                        lossy_received.insert(sym.symbol().esi());
+                    }
+                }
+
+                // Should have lost some
+                crate::assert_with_log!(
+                    lossy_received.len() < 100,
+                    "lossy lost some",
+                    "<100",
+                    lossy_received.len()
+                );
+
+                // Resend missing via reliable path
+                for i in 0..100 {
+                    if !lossy_received.contains(&i) {
+                        sink_reliable.send(create_symbol(i)).await.unwrap();
+                    }
+                }
+                sink_reliable.close().await.unwrap();
+
+                // Count recovered
+                let mut reliable_received = HashSet::new();
+                while let Some(item) = stream_reliable.next().await {
+                    if let Ok(sym) = item {
+                        reliable_received.insert(sym.symbol().esi());
+                    }
+                }
+
+                // Total should be 100
+                let total: HashSet<_> = lossy_received.union(&reliable_received).copied().collect();
+                crate::assert_with_log!(total.len() == 100, "full recovery", 100, total.len());
+            });
+
+            crate::test_complete!("test_failover_lossy_path_recovery");
+        }
+
+        #[test]
+        fn test_failover_ring_topology() {
+            init_test("test_failover_ring_topology");
+
+            let config = MockTransportConfig::reliable();
+            let network = MockNetwork::ring(4, config);
+
+            // In a ring of 4 nodes: 0-1-2-3-0
+            // Direct links: 0<->1, 1<->2, 2<->3, 3<->0
+            // No direct link: 0<->2, 1<->3
+
+            // 0->1 should work (direct link)
+            let (mut sink_0_1, mut stream_0_1) = network.transport(0, 1);
+
+            future::block_on(async {
+                sink_0_1.send(create_symbol(1)).await.unwrap();
+                let recv = stream_0_1.next().await.unwrap().unwrap();
+                crate::assert_with_log!(
+                    recv.symbol().esi() == 1,
+                    "direct link works",
+                    1,
+                    recv.symbol().esi()
+                );
+            });
+
+            // 0->2 has no direct link in ring topology
+            let (mut sink_0_2, _) = network.transport(0, 2);
+
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            let poll = Pin::new(&mut sink_0_2).poll_ready(&mut cx);
+            crate::assert_with_log!(
+                matches!(poll, Poll::Ready(Err(SinkError::Closed))),
+                "no direct 0->2 in ring",
+                "Closed",
+                format!("{:?}", poll)
+            );
+
+            crate::test_complete!("test_failover_ring_topology");
+        }
+
+        // ========================================================================
+        // Reordering Tests
+        // ========================================================================
+
+        #[test]
+        fn test_reorder_out_of_order_symbols() {
+            init_test("test_reorder_out_of_order_symbols");
+
+            let mut reorderer = SymbolReorderer::new(10, Duration::from_millis(100));
+
+            // Send symbols out of order: 2, 0, 1
+            let sym2 = create_symbol(2);
+            let sym0 = create_symbol(0);
+            let sym1 = create_symbol(1);
+
+            // Symbol 2 arrives first - should be buffered (waiting for 0,1)
+            let out2 = reorderer.process(sym2.clone());
+            crate::assert_with_log!(out2.is_empty(), "sym2 buffered", true, out2.is_empty());
+
+            // Symbol 0 arrives - should be delivered (it's the expected one)
+            let out0 = reorderer.process(sym0.clone());
+            crate::assert_with_log!(out0.len() == 1, "sym0 delivered", 1, out0.len());
+            crate::assert_with_log!(
+                out0[0].symbol().esi() == 0,
+                "sym0 esi",
+                0,
+                out0[0].symbol().esi()
+            );
+
+            // Symbol 1 arrives - should deliver 1 and then 2 (in order)
+            let out1 = reorderer.process(sym1.clone());
+            crate::assert_with_log!(out1.len() == 2, "sym1+2 delivered", 2, out1.len());
+            crate::assert_with_log!(
+                out1[0].symbol().esi() == 1,
+                "first is sym1",
+                1,
+                out1[0].symbol().esi()
+            );
+            crate::assert_with_log!(
+                out1[1].symbol().esi() == 2,
+                "second is sym2",
+                2,
+                out1[1].symbol().esi()
+            );
+
+            crate::test_complete!("test_reorder_out_of_order_symbols");
+        }
+
+        #[test]
+        fn test_reorder_gap_flush_on_timeout() {
+            init_test("test_reorder_gap_flush_on_timeout");
+
+            let mut reorderer = SymbolReorderer::new(10, Duration::from_millis(10));
+
+            // Symbol 2 arrives (gap: 0,1 missing)
+            let sym2 = create_symbol(2);
+            let _ = reorderer.process(sym2);
+
+            // Wait for timeout
+            std::thread::sleep(Duration::from_millis(20));
+
+            // Flush should deliver buffered symbols even with gaps
+            let flushed = reorderer.flush_timeouts();
+            crate::assert_with_log!(
+                !flushed.is_empty(),
+                "timeout flush delivered",
+                true,
+                !flushed.is_empty()
+            );
+
+            crate::test_complete!("test_reorder_gap_flush_on_timeout");
+        }
+
+        // ========================================================================
+        // Path Selection Policy Tests
+        // ========================================================================
+
+        #[test]
+        fn test_path_selection_use_all() {
+            init_test("test_path_selection_use_all");
+
+            let mut path_set = PathSet::new(PathSelectionPolicy::UseAll);
+
+            path_set.add_path(TransportPath::new(1, "path1".to_string(), 1.0, 0));
+            path_set.add_path(TransportPath::new(2, "path2".to_string(), 0.8, 1));
+            path_set.add_path(TransportPath::new(3, "path3".to_string(), 0.6, 2));
+
+            let selected = path_set.select_paths();
+            crate::assert_with_log!(
+                selected.len() == 3,
+                "use all selects all",
+                3,
+                selected.len()
+            );
+
+            crate::test_complete!("test_path_selection_use_all");
+        }
+
+        #[test]
+        fn test_path_selection_primary_only() {
+            init_test("test_path_selection_primary_only");
+
+            let mut path_set = PathSet::new(PathSelectionPolicy::PrimaryOnly);
+
+            path_set.add_path(TransportPath::new(1, "primary".to_string(), 1.0, 0));
+            path_set.add_path(TransportPath::new(2, "backup".to_string(), 0.8, 1));
+
+            let selected = path_set.select_paths();
+            crate::assert_with_log!(
+                selected.len() == 1,
+                "primary only selects one",
+                1,
+                selected.len()
+            );
+            crate::assert_with_log!(
+                selected[0].priority() == 0,
+                "selected is primary",
+                0,
+                selected[0].priority()
+            );
+
+            crate::test_complete!("test_path_selection_primary_only");
+        }
+
+        #[test]
+        fn test_path_selection_best_quality() {
+            init_test("test_path_selection_best_quality");
+
+            let mut path_set = PathSet::new(PathSelectionPolicy::BestQuality);
+
+            // Add paths with different quality scores
+            path_set.add_path(TransportPath::new(1, "low".to_string(), 0.3, 0));
+            path_set.add_path(TransportPath::new(2, "high".to_string(), 0.95, 1));
+            path_set.add_path(TransportPath::new(3, "medium".to_string(), 0.6, 2));
+
+            let selected = path_set.select_paths();
+            crate::assert_with_log!(
+                selected.len() == 1,
+                "best quality selects one",
+                1,
+                selected.len()
+            );
+            crate::assert_with_log!(
+                (selected[0].quality_score() - 0.95).abs() < 0.01,
+                "selected is highest quality",
+                0.95,
+                selected[0].quality_score()
+            );
+
+            crate::test_complete!("test_path_selection_best_quality");
+        }
+
+        // ========================================================================
+        // Load Balance Strategy Tests
+        // ========================================================================
+
+        #[test]
+        fn test_load_balance_round_robin() {
+            init_test("test_load_balance_round_robin");
+
+            let config = MockTransportConfig::reliable();
+            let (sink1, mut stream1) = mock_channel(config.clone());
+            let (sink2, mut stream2) = mock_channel(config.clone());
+            let (sink3, mut stream3) = mock_channel(config);
+
+            let mut table = RoutingTable::new();
+            table.add_endpoint(
+                "r".to_string(),
+                RoutingEntry::new("e1".to_string(), Box::new(sink1)),
+            );
+            table.add_endpoint(
+                "r".to_string(),
+                RoutingEntry::new("e2".to_string(), Box::new(sink2)),
+            );
+            table.add_endpoint(
+                "r".to_string(),
+                RoutingEntry::new("e3".to_string(), Box::new(sink3)),
+            );
+
+            let mut router = SymbolRouter::new(table, LoadBalanceStrategy::RoundRobin);
+
+            future::block_on(async {
+                // Send 9 symbols (3 per endpoint in round-robin)
+                for i in 0..9 {
+                    router
+                        .route(&"r".to_string(), create_symbol(i))
+                        .await
+                        .unwrap();
+                }
+
+                // Each endpoint should have 3 symbols
+                let mut count1 = 0;
+                let mut count2 = 0;
+                let mut count3 = 0;
+
+                loop {
+                    let waker = noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    let p1 = Pin::new(&mut stream1).poll_next(&mut cx);
+                    let p2 = Pin::new(&mut stream2).poll_next(&mut cx);
+                    let p3 = Pin::new(&mut stream3).poll_next(&mut cx);
+
+                    let mut any = false;
+                    if matches!(p1, Poll::Ready(Some(Ok(_)))) {
+                        count1 += 1;
+                        any = true;
+                    }
+                    if matches!(p2, Poll::Ready(Some(Ok(_)))) {
+                        count2 += 1;
+                        any = true;
+                    }
+                    if matches!(p3, Poll::Ready(Some(Ok(_)))) {
+                        count3 += 1;
+                        any = true;
+                    }
+                    if !any {
+                        break;
+                    }
+                }
+
+                crate::assert_with_log!(count1 == 3, "endpoint1 count", 3, count1);
+                crate::assert_with_log!(count2 == 3, "endpoint2 count", 3, count2);
+                crate::assert_with_log!(count3 == 3, "endpoint3 count", 3, count3);
+            });
+
+            crate::test_complete!("test_load_balance_round_robin");
+        }
+    }
 }

@@ -9,6 +9,9 @@
 use super::chaos::{ChaosRng, ChaosStats};
 use super::config::LabConfig;
 use crate::record::ObligationKind;
+use crate::runtime::deadline_monitor::{
+    default_warning_handler, DeadlineMonitor, DeadlineWarning, MonitorConfig,
+};
 use crate::runtime::RuntimeState;
 use crate::trace::event::TraceEventKind;
 use crate::trace::recorder::TraceRecorder;
@@ -48,6 +51,8 @@ pub struct LabRuntime {
     chaos_stats: ChaosStats,
     /// Replay recorder for deterministic trace capture.
     replay_recorder: TraceRecorder,
+    /// Optional deadline monitor for warning callbacks.
+    deadline_monitor: Option<DeadlineMonitor>,
 }
 
 impl LabRuntime {
@@ -81,6 +86,7 @@ impl LabRuntime {
             chaos_rng,
             chaos_stats: ChaosStats::new(),
             replay_recorder,
+            deadline_monitor: None,
         }
     }
 
@@ -200,6 +206,26 @@ impl LabRuntime {
         self.steps - start_steps
     }
 
+    /// Enable deadline monitoring with the default warning handler.
+    pub fn enable_deadline_monitoring(&mut self, config: MonitorConfig) {
+        self.enable_deadline_monitoring_with_handler(config, default_warning_handler);
+    }
+
+    /// Enable deadline monitoring with a custom warning handler.
+    pub fn enable_deadline_monitoring_with_handler<F>(&mut self, config: MonitorConfig, f: F)
+    where
+        F: Fn(DeadlineWarning) + Send + Sync + 'static,
+    {
+        let mut monitor = DeadlineMonitor::new(config);
+        monitor.on_warning(f);
+        self.deadline_monitor = Some(monitor);
+    }
+
+    /// Returns a mutable reference to the deadline monitor, if enabled.
+    pub fn deadline_monitor_mut(&mut self) -> Option<&mut DeadlineMonitor> {
+        self.deadline_monitor.as_mut()
+    }
+
     /// Executes a single step.
     fn step(&mut self) {
         self.steps += 1;
@@ -211,6 +237,7 @@ impl LabRuntime {
 
         // 1. Pop a task from the scheduler
         let Some(task_id) = self.scheduler.lock().unwrap().pop() else {
+            self.check_deadline_monitor();
             return;
         };
 
@@ -300,6 +327,15 @@ impl LabRuntime {
                 // 6. Post-poll chaos injection (spurious wakeups for pending tasks)
                 self.inject_post_poll_chaos(task_id, priority);
             }
+        }
+
+        self.check_deadline_monitor();
+    }
+
+    fn check_deadline_monitor(&mut self) {
+        if let Some(monitor) = &mut self.deadline_monitor {
+            let now = self.state.now;
+            monitor.check(now, self.state.tasks.iter().map(|(_, record)| record));
         }
     }
 
@@ -768,8 +804,11 @@ mod tests {
     use super::*;
     use crate::record::TaskRecord;
     use crate::record::{ObligationAbortReason, ObligationKind, ObligationRecord};
-    use crate::types::{Budget, ObligationId, Outcome, TaskId};
+    use crate::runtime::deadline_monitor::WarningReason;
+    use crate::types::{Budget, CxInner, ObligationId, Outcome, TaskId};
     use crate::util::ArenaIndex;
+    use std::sync::{Arc, Mutex, RwLock};
+    use std::time::Duration;
 
     fn init_test(name: &str) {
         crate::test_utils::init_test_logging();
@@ -813,6 +852,70 @@ mod tests {
         let b = r2.rng.next_u64();
         crate::assert_with_log!(a == b, "rng", b, a);
         crate::test_complete!("deterministic_rng");
+    }
+
+    #[test]
+    fn deadline_monitor_emits_warning() {
+        init_test("deadline_monitor_emits_warning");
+        let mut runtime = LabRuntime::with_seed(42);
+
+        let warnings: Arc<Mutex<Vec<DeadlineWarning>>> = Arc::new(Mutex::new(Vec::new()));
+        let warnings_clone = Arc::clone(&warnings);
+
+        let config = MonitorConfig {
+            check_interval: Duration::from_secs(0),
+            warning_threshold_fraction: 1.0,
+            checkpoint_timeout: Duration::from_secs(0),
+            enabled: true,
+        };
+
+        runtime.enable_deadline_monitoring_with_handler(config, move |warning| {
+            warnings_clone.lock().unwrap().push(warning);
+        });
+
+        let root = runtime.state.create_root_region(Budget::INFINITE);
+        let budget = Budget::new().with_deadline(Time::from_millis(10));
+
+        let task_idx = runtime.state.tasks.insert(TaskRecord::new_with_time(
+            TaskId::from_arena(ArenaIndex::new(0, 0)),
+            root,
+            budget,
+            runtime.state.now,
+        ));
+        let task_id = TaskId::from_arena(task_idx);
+        runtime.state.tasks.get_mut(task_idx).unwrap().id = task_id;
+
+        let mut inner = CxInner::new(root, task_id, budget);
+        inner.checkpoint_state.last_checkpoint = None;
+        runtime
+            .state
+            .tasks
+            .get_mut(task_idx)
+            .unwrap()
+            .set_cx_inner(Arc::new(RwLock::new(inner)));
+
+        runtime.step();
+
+        let warnings = warnings.lock().unwrap();
+        let warning = warnings.first().expect("expected warning");
+        crate::assert_with_log!(
+            warning.task_id == task_id,
+            "task_id",
+            task_id,
+            warning.task_id
+        );
+        crate::assert_with_log!(
+            warning.region_id == root,
+            "region_id",
+            root,
+            warning.region_id
+        );
+        let ok = matches!(
+            warning.reason,
+            WarningReason::ApproachingDeadline | WarningReason::ApproachingDeadlineNoProgress
+        );
+        crate::assert_with_log!(ok, "reason", true, ok);
+        crate::test_complete!("deadline_monitor_emits_warning");
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub use symbol::{ObjectId, ObjectParams, Symbol, SymbolId, SymbolKind, DEFAULT_S
 pub use symbol_set::{
     BlockProgress, ConcurrentSymbolSet, InsertResult, SymbolSet, ThresholdConfig,
 };
-pub use task_context::CxInner;
+pub use task_context::{CheckpointState, CxInner};
 pub use typed_symbol::{
     DeserializationError, Deserializer, SerdeCodec, SerializationError, SerializationFormat,
     Serializer, TypeDescriptor, TypeMismatchError, TypeRegistry, TypedDecoder, TypedEncoder,

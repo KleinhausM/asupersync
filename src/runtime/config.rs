@@ -1,5 +1,6 @@
 //! Runtime configuration types.
 
+use crate::runtime::deadline_monitor::{DeadlineWarning, MonitorConfig};
 use std::sync::Arc;
 
 /// Configuration for the blocking pool.
@@ -43,6 +44,10 @@ pub struct RuntimeConfig {
     pub on_thread_start: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Callback executed when a worker thread stops.
     pub on_thread_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Deadline monitoring configuration (when enabled).
+    pub deadline_monitor: Option<MonitorConfig>,
+    /// Warning callback for deadline monitoring.
+    pub deadline_warning_handler: Option<Arc<dyn Fn(DeadlineWarning) + Send + Sync>>,
 }
 
 impl RuntimeConfig {
@@ -86,6 +91,8 @@ impl Default for RuntimeConfig {
             poll_budget: 128,
             on_thread_start: None,
             on_thread_stop: None,
+            deadline_monitor: None,
+            deadline_warning_handler: None,
         }
     }
 }
