@@ -63,6 +63,15 @@ pub struct BulkheadPolicy {
     pub on_full: Option<FullCallback>,
 }
 
+impl BulkheadPolicy {
+    /// Sets the maximum concurrent operations.
+    #[must_use]
+    pub fn concurrency(mut self, max: u32) -> Self {
+        self.max_concurrent = max;
+        self
+    }
+}
+
 /// Callback type when bulkhead is full.
 pub type FullCallback = Arc<dyn Fn(&BulkheadMetrics) + Send + Sync>;
 
