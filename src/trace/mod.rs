@@ -15,6 +15,7 @@
 //! - [`file`]: Binary file format for trace persistence
 //! - [`buffer`]: Ring buffer for recent events
 //! - [`format`]: Output formatting utilities
+//! - [`streaming`]: Streaming replay for large traces with O(1) memory
 
 pub mod buffer;
 pub mod distributed;
@@ -24,6 +25,7 @@ pub mod format;
 pub mod recorder;
 pub mod replay;
 pub mod replayer;
+pub mod streaming;
 
 pub use buffer::TraceBuffer;
 pub use event::{TraceData, TraceEvent, TraceEventKind};
@@ -37,3 +39,7 @@ pub use replay::{
     REPLAY_SCHEMA_VERSION,
 };
 pub use replayer::{Breakpoint, DivergenceError, ReplayError, ReplayMode, TraceReplayer};
+pub use streaming::{
+    ReplayCheckpoint, ReplayProgress, StreamingReplayError, StreamingReplayResult,
+    StreamingReplayer,
+};
