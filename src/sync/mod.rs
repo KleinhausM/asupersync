@@ -41,7 +41,8 @@ pub use mutex::{LockError, Mutex, MutexGuard, OwnedMutexGuard, TryLockError};
 pub use notify::{Notified, Notify};
 pub use once_cell::{OnceCell, OnceCellError};
 pub use pool::{
-    Pool, PoolFuture, PoolReturn, PoolReturnReceiver, PoolReturnSender, PoolStats, PooledResource,
+    GenericPool, Pool, PoolConfig, PoolError, PoolFuture, PoolReturn, PoolReturnReceiver,
+    PoolReturnSender, PoolStats, PooledResource,
 };
 pub use rwlock::{
     OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, RwLockError, RwLockReadGuard,

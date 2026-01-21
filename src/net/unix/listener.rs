@@ -301,7 +301,8 @@ impl Stream for Incoming<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
+    use crate::io::AsyncReadExt;
+    use std::io::Write;
     use tempfile::tempdir;
 
     fn init_test(name: &str) {
@@ -352,9 +353,9 @@ mod tests {
             // Accept the connection
             let (mut stream, _addr) = listener.accept().await.expect("accept failed");
 
-            // Read the data using the std Read trait
+            // Read the data using async read
             let mut buf = [0u8; 5];
-            stream.read_exact(&mut buf).expect("read failed");
+            stream.read_exact(&mut buf).await.expect("read failed");
             crate::assert_with_log!(&buf == b"hello", "buf", b"hello", buf);
 
             handle.join().expect("thread failed");
