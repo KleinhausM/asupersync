@@ -766,16 +766,46 @@ impl RuntimeState {
         );
 
         // Collect all regions to cancel (target + descendants) with depth information
-        let regions_to_cancel = self.collect_region_and_descendants_with_depth(region_id);
+        let mut regions_to_cancel = self.collect_region_and_descendants_with_depth(region_id);
+
+        // Sort by depth (ascending) to ensure parents are processed before children.
+        // This is required for building proper cause chains.
+        regions_to_cancel.sort_by_key(|node| node.depth);
+
+        // Build a map of region -> cancel reason for cause chain construction.
+        // Each child region's reason chains to its parent's reason.
+        let mut region_reasons: HashMap<RegionId, CancelReason> =
+            HashMap::with_capacity(regions_to_cancel.len());
 
         // First pass: mark regions with cancellation reason and transition to Closing
         for node in &regions_to_cancel {
             let rid = node.id;
+
+            // Build the cancel reason with proper cause chain:
+            // - Root region gets the original reason
+            // - Descendants get ParentCancelled chained to their parent's reason
             let region_reason = if rid == region_id {
                 reason.clone()
-            } else {
+            } else if let Some(parent_id) = node.parent {
+                // Look up parent's reason from the map (guaranteed to exist since we process by depth)
+                let parent_reason = region_reasons
+                    .get(&parent_id)
+                    .cloned()
+                    .unwrap_or_else(|| reason.clone());
+
                 CancelReason::parent_cancelled()
+                    .with_region(parent_id)
+                    .with_timestamp(reason.timestamp)
+                    .with_cause(parent_reason)
+            } else {
+                // Fallback: no parent but not root (shouldn't happen)
+                CancelReason::parent_cancelled()
+                    .with_timestamp(reason.timestamp)
+                    .with_cause(reason.clone())
             };
+
+            // Store this region's reason for child chain building
+            region_reasons.insert(rid, region_reason.clone());
 
             if let Some(_parent) = node.parent {
                 let span = trace_span!(
@@ -783,7 +813,8 @@ impl RuntimeState {
                     from_region = ?_parent,
                     to_region = ?rid,
                     depth = node.depth,
-                    cancel_kind = ?region_reason.kind
+                    cancel_kind = ?region_reason.kind,
+                    chain_depth = region_reason.chain_depth()
                 );
                 span.follows_from(&root_span);
                 let _guard = span.enter();
@@ -792,7 +823,9 @@ impl RuntimeState {
                     to_region = ?rid,
                     depth = node.depth,
                     cancel_kind = ?region_reason.kind,
-                    "cancel propagated to region"
+                    chain_depth = region_reason.chain_depth(),
+                    root_cause = ?region_reason.root_cause().kind,
+                    "cancel propagated to region with cause chain"
                 );
             } else {
                 trace!(
@@ -804,7 +837,7 @@ impl RuntimeState {
             }
 
             if let Some(region) = self.regions.get(rid.arena_index()) {
-                // Use ParentCancelled for descendants, original reason for target
+                // Use the properly chained reason.
                 // Try to transition to Closing with the reason.
                 // If already Closing/Draining/etc., strengthen the reason instead.
                 if !region.begin_close(Some(region_reason.clone())) {
@@ -823,24 +856,25 @@ impl RuntimeState {
                 .map(RegionRecord::task_ids)
                 .unwrap_or_default();
 
+            // Get the region's cancel reason with proper cause chain
+            let task_reason = region_reasons
+                .get(&rid)
+                .cloned()
+                .unwrap_or_else(|| reason.clone());
+
             for task_id in task_ids {
                 if let Some(task) = self.tasks.get_mut(task_id.arena_index()) {
-                    // Use the reason's cleanup budget
-                    let task_reason = if rid == region_id {
-                        reason.clone()
-                    } else {
-                        CancelReason::parent_cancelled()
-                    };
-
                     let task_budget = task_reason.cleanup_budget();
-                    let newly_cancelled = task.request_cancel_with_budget(task_reason, task_budget);
+                    let newly_cancelled =
+                        task.request_cancel_with_budget(task_reason.clone(), task_budget);
                     let already_cancelling = task.state.is_cancelling();
                     let span = trace_span!(
                         "cancel_propagate_task",
                         from_region = ?rid,
                         to_task = ?task_id,
                         depth = node.depth,
-                        cancel_kind = ?task.cancel_reason().map(|r| r.kind)
+                        cancel_kind = ?task.cancel_reason().map(|r| r.kind),
+                        chain_depth = task_reason.chain_depth()
                     );
                     span.follows_from(&root_span);
                     let _guard = span.enter();
@@ -852,7 +886,9 @@ impl RuntimeState {
                         already_cancelling,
                         cleanup_poll_quota = task_budget.poll_quota,
                         cleanup_priority = task_budget.priority,
-                        "cancel propagated to task"
+                        chain_depth = task_reason.chain_depth(),
+                        root_cause = ?task_reason.root_cause().kind,
+                        "cancel propagated to task with cause chain"
                     );
 
                     if newly_cancelled {
@@ -2258,6 +2294,170 @@ mod tests {
             other => panic!("expected CancelRequested, got {other:?}"),
         }
         crate::test_complete!("cancel_request_propagates_to_descendants");
+    }
+
+    #[test]
+    fn cancel_request_builds_cause_chains() {
+        init_test("cancel_request_builds_cause_chains");
+        let mut state = RuntimeState::new();
+
+        // Create a region tree: root -> child -> grandchild
+        let root = state.create_root_region(Budget::INFINITE);
+        let child = create_child_region(&mut state, root);
+        let grandchild = create_child_region(&mut state, child);
+
+        // Create tasks in each region
+        let root_task = insert_task(&mut state, root);
+        let child_task = insert_task(&mut state, child);
+        let grandchild_task = insert_task(&mut state, grandchild);
+
+        // Cancel the root with a Deadline reason
+        let original_reason = CancelReason::deadline().with_message("budget exhausted");
+        let _ = state.cancel_request(root, &original_reason, None);
+
+        // Verify root region has original reason (no cause chain)
+        let root_record = state.regions.get(root.arena_index()).expect("root missing");
+        let root_reason_opt = root_record.cancel_reason();
+        let root_reason = root_reason_opt.as_ref().unwrap();
+        crate::assert_with_log!(
+            root_reason.kind == CancelKind::Deadline,
+            "root reason kind",
+            CancelKind::Deadline,
+            root_reason.kind
+        );
+        crate::assert_with_log!(
+            root_reason.chain_depth() == 1,
+            "root chain depth",
+            1,
+            root_reason.chain_depth()
+        );
+        crate::assert_with_log!(
+            root_reason.cause.is_none(),
+            "root has no cause",
+            true,
+            root_reason.cause.is_none()
+        );
+
+        // Verify child region has ParentCancelled with cause chain to root's reason
+        let child_record = state
+            .regions
+            .get(child.arena_index())
+            .expect("child missing");
+        let child_reason_opt = child_record.cancel_reason();
+        let child_reason = child_reason_opt.as_ref().unwrap();
+        crate::assert_with_log!(
+            child_reason.kind == CancelKind::ParentCancelled,
+            "child reason kind",
+            CancelKind::ParentCancelled,
+            child_reason.kind
+        );
+        crate::assert_with_log!(
+            child_reason.chain_depth() == 2,
+            "child chain depth",
+            2,
+            child_reason.chain_depth()
+        );
+        // Root cause should be the original Deadline
+        let child_root_cause = child_reason.root_cause();
+        crate::assert_with_log!(
+            child_root_cause.kind == CancelKind::Deadline,
+            "child root cause kind",
+            CancelKind::Deadline,
+            child_root_cause.kind
+        );
+        // Origin region should be the root (where cancellation originated)
+        crate::assert_with_log!(
+            child_reason.origin_region == root,
+            "child origin region",
+            root,
+            child_reason.origin_region
+        );
+
+        // Verify grandchild region has ParentCancelled with chain depth of 3
+        let grandchild_record = state
+            .regions
+            .get(grandchild.arena_index())
+            .expect("grandchild missing");
+        let grandchild_reason_opt = grandchild_record.cancel_reason();
+        let grandchild_reason = grandchild_reason_opt.as_ref().unwrap();
+        crate::assert_with_log!(
+            grandchild_reason.kind == CancelKind::ParentCancelled,
+            "grandchild reason kind",
+            CancelKind::ParentCancelled,
+            grandchild_reason.kind
+        );
+        crate::assert_with_log!(
+            grandchild_reason.chain_depth() == 3,
+            "grandchild chain depth",
+            3,
+            grandchild_reason.chain_depth()
+        );
+        // Root cause should still be the original Deadline
+        let grandchild_root_cause = grandchild_reason.root_cause();
+        crate::assert_with_log!(
+            grandchild_root_cause.kind == CancelKind::Deadline,
+            "grandchild root cause kind",
+            CancelKind::Deadline,
+            grandchild_root_cause.kind
+        );
+        // Origin region should be the child (immediate parent)
+        crate::assert_with_log!(
+            grandchild_reason.origin_region == child,
+            "grandchild origin region",
+            child,
+            grandchild_reason.origin_region
+        );
+
+        // Verify tasks also have properly chained reasons
+        let grandchild_task_record = state
+            .tasks
+            .get(grandchild_task.arena_index())
+            .expect("task missing");
+        match &grandchild_task_record.state {
+            TaskState::CancelRequested { reason, .. } => {
+                crate::assert_with_log!(
+                    reason.chain_depth() == 3,
+                    "grandchild task chain depth",
+                    3,
+                    reason.chain_depth()
+                );
+                crate::assert_with_log!(
+                    reason.root_cause().kind == CancelKind::Deadline,
+                    "grandchild task root cause",
+                    CancelKind::Deadline,
+                    reason.root_cause().kind
+                );
+            }
+            other => panic!("expected CancelRequested, got {other:?}"),
+        }
+
+        // Verify we can traverse the full cause chain
+        let chain: Vec<_> = grandchild_reason.chain().collect();
+        crate::assert_with_log!(chain.len() == 3, "chain length", 3, chain.len());
+        crate::assert_with_log!(
+            chain[0].kind == CancelKind::ParentCancelled,
+            "chain[0] kind",
+            CancelKind::ParentCancelled,
+            chain[0].kind
+        );
+        crate::assert_with_log!(
+            chain[1].kind == CancelKind::ParentCancelled,
+            "chain[1] kind",
+            CancelKind::ParentCancelled,
+            chain[1].kind
+        );
+        crate::assert_with_log!(
+            chain[2].kind == CancelKind::Deadline,
+            "chain[2] kind",
+            CancelKind::Deadline,
+            chain[2].kind
+        );
+
+        // Suppress unused variable warnings
+        let _ = root_task;
+        let _ = child_task;
+
+        crate::test_complete!("cancel_request_builds_cause_chains");
     }
 
     #[test]
