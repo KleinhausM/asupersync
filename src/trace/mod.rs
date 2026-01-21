@@ -34,10 +34,19 @@ pub mod replayer;
 pub mod streaming;
 
 pub use buffer::TraceBuffer;
+pub use compat::{
+    check_schema_compatibility, CompatEvent, CompatEventIterator, CompatReader, CompatStats,
+    CompatibilityResult, TraceMigration, TraceMigrator, MIN_SUPPORTED_SCHEMA_VERSION,
+};
 pub use event::{TraceData, TraceEvent, TraceEventKind};
 pub use file::{
     read_trace, write_trace, TraceEventIterator, TraceFileError, TraceReader, TraceWriter,
     TRACE_FILE_VERSION, TRACE_MAGIC,
+};
+pub use filter::{EventCategory, FilterBuilder, FilterableEvent, TraceFilter};
+pub use integrity::{
+    find_first_corruption, is_trace_valid_quick, verify_trace, IntegrityIssue, IssueSeverity,
+    VerificationOptions, VerificationResult,
 };
 pub use recorder::{RecorderConfig, TraceRecorder};
 pub use replay::{
@@ -48,13 +57,4 @@ pub use replayer::{Breakpoint, DivergenceError, ReplayError, ReplayMode, TraceRe
 pub use streaming::{
     ReplayCheckpoint, ReplayProgress, StreamingReplayError, StreamingReplayResult,
     StreamingReplayer,
-};
-pub use integrity::{
-    find_first_corruption, is_trace_valid_quick, verify_trace, IntegrityIssue, IssueSeverity,
-    VerificationOptions, VerificationResult,
-};
-pub use filter::{EventCategory, FilterableEvent, FilterBuilder, TraceFilter};
-pub use compat::{
-    check_schema_compatibility, CompatEvent, CompatEventIterator, CompatReader, CompatStats,
-    CompatibilityResult, TraceMigration, TraceMigrator, MIN_SUPPORTED_SCHEMA_VERSION,
 };

@@ -194,25 +194,44 @@ impl std::fmt::Display for IntegrityIssue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::FileTooSmall { actual, expected } => {
-                write!(f, "file too small: {} bytes, expected at least {}", actual, expected)
+                write!(
+                    f,
+                    "file too small: {} bytes, expected at least {}",
+                    actual, expected
+                )
             }
             Self::InvalidMagic { found } => {
                 write!(f, "invalid magic bytes: {:?}", found)
             }
-            Self::UnsupportedVersion { found, max_supported } => {
-                write!(f, "unsupported version: {}, max supported: {}", found, max_supported)
+            Self::UnsupportedVersion {
+                found,
+                max_supported,
+            } => {
+                write!(
+                    f,
+                    "unsupported version: {}, max supported: {}",
+                    found, max_supported
+                )
             }
             Self::UnsupportedFlags { flags } => {
                 write!(f, "unsupported flags: {:#06x}", flags)
             }
             Self::SchemaMismatch { found, expected } => {
-                write!(f, "schema version mismatch: found {}, expected {}", found, expected)
+                write!(
+                    f,
+                    "schema version mismatch: found {}, expected {}",
+                    found, expected
+                )
             }
             Self::InvalidMetadata { message } => {
                 write!(f, "invalid metadata: {}", message)
             }
             Self::EventCountMismatch { declared, actual } => {
-                write!(f, "event count mismatch: declared {}, actual {}", declared, actual)
+                write!(
+                    f,
+                    "event count mismatch: declared {}, actual {}",
+                    declared, actual
+                )
             }
             Self::InvalidEvent { index, message } => {
                 write!(f, "invalid event at index {}: {}", index, message)
@@ -220,7 +239,11 @@ impl std::fmt::Display for IntegrityIssue {
             Self::Truncated { at_event } => {
                 write!(f, "file truncated at event {}", at_event)
             }
-            Self::TimelineNonMonotonic { at_event, prev_time, curr_time } => {
+            Self::TimelineNonMonotonic {
+                at_event,
+                prev_time,
+                curr_time,
+            } => {
                 write!(
                     f,
                     "non-monotonic timeline at event {}: {} -> {}",
@@ -489,7 +512,9 @@ pub fn find_first_corruption(path: impl AsRef<Path>) -> io::Result<Option<u64>> 
         match issue {
             IntegrityIssue::InvalidEvent { index, .. }
             | IntegrityIssue::Truncated { at_event: index }
-            | IntegrityIssue::TimelineNonMonotonic { at_event: index, .. } => {
+            | IntegrityIssue::TimelineNonMonotonic {
+                at_event: index, ..
+            } => {
                 return Ok(Some(*index));
             }
             _ => {}
@@ -855,10 +880,7 @@ mod tests {
         write_trace(path, &metadata, &events).unwrap();
 
         // Truncate the file
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
         let original_size = file.metadata().unwrap().len();
         file.set_len(original_size / 2).unwrap();
 
@@ -916,10 +938,10 @@ mod tests {
         let result = verify_trace(path, VerificationOptions::strict()).unwrap();
 
         assert!(!result.is_valid());
-        assert!(result.issues().iter().any(|i| matches!(
-            i,
-            IntegrityIssue::TimelineNonMonotonic { at_event: 1, .. }
-        )));
+        assert!(result
+            .issues()
+            .iter()
+            .any(|i| matches!(i, IntegrityIssue::TimelineNonMonotonic { at_event: 1, .. })));
     }
 
     #[test]
@@ -960,10 +982,7 @@ mod tests {
         write_trace(path, &metadata, &events).unwrap();
 
         // Truncate to corrupt the end
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
         let original_size = file.metadata().unwrap().len();
         file.set_len(original_size - 100).unwrap();
         drop(file);
@@ -1033,10 +1052,7 @@ mod tests {
         // Now corrupt the file by appending garbage after valid events
         // We'll overwrite some bytes in the middle of the file
         {
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(path)
-                .unwrap();
+            let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
 
             // Seek to somewhere in the middle of the events section
             // and write garbage to corrupt an event
