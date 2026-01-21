@@ -40,6 +40,8 @@ pub mod context;
 pub mod entry;
 pub mod level;
 pub mod metrics;
+#[cfg(feature = "metrics")]
+pub mod otel;
 
 pub use collector::LogCollector;
 pub use context::{DiagnosticContext, Span, SpanId};
@@ -48,6 +50,8 @@ pub use level::LogLevel;
 pub use metrics::{
     Counter, Gauge, Histogram, MetricValue, Metrics, MetricsProvider, NoOpMetrics, OutcomeKind,
 };
+#[cfg(feature = "metrics")]
+pub use otel::OtelMetrics;
 
 /// Configuration for observability and logging.
 ///

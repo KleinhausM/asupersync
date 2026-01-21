@@ -12,6 +12,8 @@ categories = ["asynchronous", "concurrency"]
 # Enable internal test helpers for integration tests.
 # This exposes private APIs like Cx::new() and is NOT for production use.
 test-internals = []
+# OpenTelemetry metrics provider (optional).
+metrics = ["dep:opentelemetry", "dep:opentelemetry_sdk"]
 # Enable tracing integration for structured logging and spans.
 # When disabled, tracing macros compile to no-ops for zero overhead.
 tracing-integration = ["dep:tracing"]
@@ -44,6 +46,9 @@ nix = { version = "0.29", features = ["fs"] }
 bincode = "1.3"
 # Optional tracing integration - only compiled when tracing-integration feature is enabled
 tracing = { version = "0.1", optional = true }
+# Optional OpenTelemetry metrics provider
+opentelemetry = { version = "0.28", default-features = false, features = ["metrics"], optional = true }
+opentelemetry_sdk = { version = "0.28", default-features = false, features = ["metrics"], optional = true }
 # Optional Tower trait integration
 tower = { version = "0.5.3", optional = true }
 # Optional proc macros for structured concurrency
@@ -57,6 +62,7 @@ conformance = { package = "asupersync-conformance", path = "conformance" }
 tempfile = "3.17"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+opentelemetry_sdk = { version = "0.28", default-features = false, features = ["metrics", "testing"] }
 
 [[bench]]
 name = "phase0_baseline"
