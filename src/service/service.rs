@@ -1,5 +1,6 @@
 //! Service trait and utility combinators.
 
+use crate::cx::Cx;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -53,6 +54,154 @@ pub trait ServiceExt<Request>: Service<Request> {
 }
 
 impl<T, Request> ServiceExt<Request> for T where T: Service<Request> + ?Sized {}
+
+/// A service that executes within an Asupersync [`Cx`].
+///
+/// Unlike [`Service`], this trait is async-native and does not expose readiness
+/// polling. Callers supply a `Cx` so cancellation, budgets, and capabilities
+/// are explicitly threaded through the call.
+pub trait AsupersyncService<Request>: Send + Sync {
+    /// Response type returned by the service.
+    type Response;
+    /// Error type returned by the service.
+    type Error;
+
+    /// Dispatches a request within the given context.
+    async fn call(&self, cx: &Cx, request: Request) -> Result<Self::Response, Self::Error>;
+}
+
+/// Extension helpers for [`AsupersyncService`].
+pub trait AsupersyncServiceExt<Request>: AsupersyncService<Request> {
+    /// Map the response type.
+    fn map_response<F, NewResponse>(self, f: F) -> MapResponse<Self, F>
+    where
+        Self: Sized,
+        F: Fn(Self::Response) -> NewResponse + Send + Sync,
+    {
+        MapResponse::new(self, f)
+    }
+
+    /// Map the error type.
+    fn map_err<F, NewError>(self, f: F) -> MapErr<Self, F>
+    where
+        Self: Sized,
+        F: Fn(Self::Error) -> NewError + Send + Sync,
+    {
+        MapErr::new(self, f)
+    }
+
+    /// Convert this service into a Tower-compatible adapter.
+    #[cfg(feature = "tower")]
+    fn into_tower(self) -> TowerAdapter<Self>
+    where
+        Self: Sized,
+    {
+        TowerAdapter::new(self)
+    }
+}
+
+impl<T, Request> AsupersyncServiceExt<Request> for T where T: AsupersyncService<Request> + ?Sized {}
+
+/// Adapter that maps the response type of an [`AsupersyncService`].
+pub struct MapResponse<S, F> {
+    service: S,
+    map: F,
+}
+
+impl<S, F> MapResponse<S, F> {
+    fn new(service: S, map: F) -> Self {
+        Self { service, map }
+    }
+}
+
+impl<S, F, Request, NewResponse> AsupersyncService<Request> for MapResponse<S, F>
+where
+    S: AsupersyncService<Request>,
+    F: Fn(S::Response) -> NewResponse + Send + Sync,
+{
+    type Response = NewResponse;
+    type Error = S::Error;
+
+    async fn call(&self, cx: &Cx, request: Request) -> Result<Self::Response, Self::Error> {
+        let response = self.service.call(cx, request).await?;
+        Ok((self.map)(response))
+    }
+}
+
+/// Adapter that maps the error type of an [`AsupersyncService`].
+pub struct MapErr<S, F> {
+    service: S,
+    map: F,
+}
+
+impl<S, F> MapErr<S, F> {
+    fn new(service: S, map: F) -> Self {
+        Self { service, map }
+    }
+}
+
+impl<S, F, Request, NewError> AsupersyncService<Request> for MapErr<S, F>
+where
+    S: AsupersyncService<Request>,
+    F: Fn(S::Error) -> NewError + Send + Sync,
+{
+    type Response = S::Response;
+    type Error = NewError;
+
+    async fn call(&self, cx: &Cx, request: Request) -> Result<Self::Response, Self::Error> {
+        self.service.call(cx, request).await.map_err(&self.map)
+    }
+}
+
+/// Blanket implementation for async functions and closures.
+impl<F, Fut, Request, Response, Error> AsupersyncService<Request> for F
+where
+    F: Fn(&Cx, Request) -> Fut + Send + Sync,
+    Fut: Future<Output = Result<Response, Error>> + Send,
+{
+    type Response = Response;
+    type Error = Error;
+
+    async fn call(&self, cx: &Cx, request: Request) -> Result<Self::Response, Self::Error> {
+        (self)(cx, request).await
+    }
+}
+
+#[cfg(feature = "tower")]
+pub struct TowerAdapter<S> {
+    service: std::sync::Arc<S>,
+}
+
+#[cfg(feature = "tower")]
+impl<S> TowerAdapter<S> {
+    fn new(service: S) -> Self {
+        Self {
+            service: std::sync::Arc::new(service),
+        }
+    }
+}
+
+#[cfg(feature = "tower")]
+impl<S, Request> tower::Service<(Cx, Request)> for TowerAdapter<S>
+where
+    S: AsupersyncService<Request> + Send + Sync + 'static,
+    Request: Send + 'static,
+    S::Response: Send + 'static,
+    S::Error: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, (cx, request): (Cx, Request)) -> Self::Future {
+        let service = std::sync::Arc::clone(&self.service);
+        Box::pin(async move { service.call(&cx, request).await })
+    }
+}
 
 /// Future returned by [`ServiceExt::ready`].
 #[derive(Debug)]
@@ -156,5 +305,35 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AsupersyncService, AsupersyncServiceExt};
+    use crate::test_utils::run_test_with_cx;
+
+    #[test]
+    fn function_service_call_works() {
+        run_test_with_cx(|cx| async move {
+            let svc = |_: &crate::cx::Cx, req: i32| async move { Ok::<_, ()>(req + 1) };
+            let result = svc.call(&cx, 41).await.unwrap();
+            assert_eq!(result, 42);
+        });
+    }
+
+    #[test]
+    fn map_response_and_map_err() {
+        run_test_with_cx(|cx| async move {
+            let svc = |_: &crate::cx::Cx, req: i32| async move { Ok::<_, &str>(req) };
+            let svc = svc.map_response(|v| v + 1).map_err(|e| format!("err:{e}"));
+            let result = svc.call(&cx, 41).await.unwrap();
+            assert_eq!(result, 42);
+
+            let fail = |_: &crate::cx::Cx, _: i32| async move { Err::<i32, &str>("nope") };
+            let fail = fail.map_err(|e| format!("err:{e}"));
+            let err = fail.call(&cx, 0).await.unwrap_err();
+            assert_eq!(err, "err:nope");
+        });
     }
 }

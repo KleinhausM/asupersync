@@ -29,5 +29,10 @@ pub use layer::{Identity, Layer, Stack};
 pub use load_shed::{LoadShed, LoadShedError, LoadShedLayer, Overloaded};
 pub use rate_limit::{RateLimit, RateLimitError, RateLimitLayer};
 pub use retry::{LimitedRetry, NoRetry, Policy, Retry, RetryLayer};
-pub use service::{Oneshot, Ready, Service, ServiceExt};
+#[cfg(feature = "tower")]
+pub use service::TowerAdapter;
+pub use service::{
+    AsupersyncService, AsupersyncServiceExt, MapErr, MapResponse, Oneshot, Ready, Service,
+    ServiceExt,
+};
 pub use timeout::{Timeout, TimeoutError, TimeoutLayer};

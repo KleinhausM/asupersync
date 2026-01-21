@@ -17,6 +17,8 @@ test-internals = []
 tracing-integration = ["dep:tracing"]
 # Enable proc macros for structured concurrency (scope!, spawn!, join!, race!)
 proc-macros = ["dep:asupersync-macros"]
+# Optional Tower adapter for AsupersyncService.
+tower = ["dep:tower"]
 
 [lib]
 path = "src/lib.rs"
@@ -42,6 +44,8 @@ nix = { version = "0.29", features = ["fs"] }
 bincode = "1.3"
 # Optional tracing integration - only compiled when tracing-integration feature is enabled
 tracing = { version = "0.1", optional = true }
+# Optional Tower trait integration
+tower = { version = "0.5.3", optional = true }
 # Optional proc macros for structured concurrency
 asupersync-macros = { path = "asupersync-macros", optional = true }
 
