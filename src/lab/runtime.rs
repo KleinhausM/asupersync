@@ -11,7 +11,7 @@ use super::config::LabConfig;
 use crate::record::ObligationKind;
 use crate::runtime::RuntimeState;
 use crate::trace::event::TraceEventKind;
-use crate::trace::recorder::{chaos_kind, TraceRecorder};
+use crate::trace::recorder::TraceRecorder;
 use crate::trace::replay::{ReplayTrace, TraceMetadata};
 use crate::trace::TraceBuffer;
 use crate::trace::{TraceData, TraceEvent};
@@ -206,7 +206,8 @@ impl LabRuntime {
         self.steps += 1;
         // Consume RNG state so schedule tie-breaking is deterministic once we
         // start making scheduler decisions here.
-        let _ = self.rng.next_u64();
+        let rng_value = self.rng.next_u64();
+        self.replay_recorder.record_rng_value(rng_value);
         self.check_futurelocks();
 
         // 1. Pop a task from the scheduler

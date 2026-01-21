@@ -30,7 +30,7 @@
 //! - All operations are inline-friendly
 //! - Disabled recorders have zero allocation overhead
 
-use crate::trace::replay::{CompactRegionId, CompactTaskId, ReplayEvent, ReplayTrace, TraceMetadata};
+use crate::trace::replay::{ReplayEvent, ReplayTrace, TraceMetadata};
 use crate::types::{RegionId, Severity, TaskId, Time};
 use std::io;
 
@@ -89,6 +89,24 @@ impl RecorderConfig {
         self.record_wakers = record;
         self
     }
+}
+
+// =============================================================================
+// Chaos Injection Kinds
+// =============================================================================
+
+/// Chaos injection kind constants for replay events.
+pub mod chaos_kind {
+    /// Cancellation injection.
+    pub const CANCEL: u8 = 0;
+    /// Delay injection.
+    pub const DELAY: u8 = 1;
+    /// I/O error injection.
+    pub const IO_ERROR: u8 = 2;
+    /// Wakeup storm injection.
+    pub const WAKEUP_STORM: u8 = 3;
+    /// Budget exhaustion injection.
+    pub const BUDGET_EXHAUST: u8 = 4;
 }
 
 // =============================================================================
@@ -329,20 +347,6 @@ impl TraceRecorder {
     // =========================================================================
     // Recording Methods - Chaos
     // =========================================================================
-
-    /// Chaos injection kinds.
-    pub mod chaos_kind {
-        /// Cancellation injection.
-        pub const CANCEL: u8 = 0;
-        /// Delay injection.
-        pub const DELAY: u8 = 1;
-        /// I/O error injection.
-        pub const IO_ERROR: u8 = 2;
-        /// Wakeup storm injection.
-        pub const WAKEUP_STORM: u8 = 3;
-        /// Budget exhaustion injection.
-        pub const BUDGET_EXHAUST: u8 = 4;
-    }
 
     /// Records a chaos injection.
     #[inline]
