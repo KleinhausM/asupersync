@@ -684,14 +684,14 @@ impl HierarchicalTimerWheel {
     /// All timer nodes in the wheel must be valid.
     pub unsafe fn tick(&mut self) -> Vec<Waker> {
         let now = Instant::now();
-        let wakers = self.level0.slots[self.level0.cursor].collect_expired(now);
+        let mut wakers = self.level0.slots[self.level0.cursor].collect_expired(now);
         self.count = self.count.saturating_sub(wakers.len());
 
         self.level0.cursor = (self.level0.cursor + 1) % LEVEL0_SLOTS;
         self.current_tick = self.current_tick.saturating_add(1);
 
         if self.level0.cursor == 0 {
-            self.cascade(1, now);
+            self.cascade(1, now, &mut wakers);
         }
 
         wakers
@@ -792,24 +792,14 @@ impl HierarchicalTimerWheel {
         }
     }
 
-    fn cascade(&mut self, level_index: u8, now: Instant) {
-        match level_index {
-            1 => self.cascade_level(&mut self.level1, 1, now, LEVEL1_SLOTS),
-            2 => self.cascade_level(&mut self.level2, 2, now, LEVEL2_SLOTS),
-            3 => self.cascade_level(&mut self.level3, 3, now, LEVEL3_SLOTS),
-            _ => {}
-        }
-    }
+    fn cascade(&mut self, level_index: u8, now: Instant, wakers: &mut Vec<Waker>) {
+        let (bucket, wrapped) = match level_index {
+            1 => self.level1.advance_and_drain(),
+            2 => self.level2.advance_and_drain(),
+            3 => self.level3.advance_and_drain(),
+            _ => return,
+        };
 
-    fn cascade_level<const SLOTS: usize>(
-        &mut self,
-        level: &mut WheelLevel<SLOTS>,
-        level_index: u8,
-        now: Instant,
-        slots: usize,
-    ) {
-        level.cursor = (level.cursor + 1) % slots;
-        let bucket = unsafe { level.slots[level.cursor].drain_nodes() };
         for node in bucket {
             let node_ref = unsafe { node.as_ref() };
             if !node_ref.is_linked() {
@@ -819,8 +809,8 @@ impl HierarchicalTimerWheel {
             }
         }
 
-        if level.cursor == 0 {
-            self.cascade(level_index + 1, now);
+        if wrapped {
+            self.cascade(level_index + 1, now, wakers);
         }
     }
 
@@ -852,6 +842,17 @@ impl<const SLOTS: usize> WheelLevel<SLOTS> {
             wakers.extend(slot.drain());
         }
         wakers
+    }
+
+    /// Advances cursor by one and drains the slot at the old cursor position.
+    ///
+    /// Returns the nodes from the drained slot and whether the cursor wrapped around.
+    fn advance_and_drain(&mut self) -> (Vec<NonNull<TimerNode>>, bool) {
+        let old_cursor = self.cursor;
+        self.cursor = (self.cursor + 1) % SLOTS;
+        let wrapped = self.cursor == 0;
+        let nodes = unsafe { self.slots[old_cursor].drain_nodes() };
+        (nodes, wrapped)
     }
 }
 
