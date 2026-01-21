@@ -332,6 +332,42 @@ pub enum ReplayEvent {
     },
 
     // =========================================================================
+    // Region Lifecycle Events
+    // =========================================================================
+    /// A region was created.
+    ///
+    /// Records when structured concurrency regions are established.
+    /// This is needed to track the region tree during replay.
+    RegionCreated {
+        /// The new region.
+        region: CompactRegionId,
+        /// The parent region (None for root).
+        parent: Option<CompactRegionId>,
+        /// Virtual time tick when created.
+        at_tick: u64,
+    },
+
+    /// A region was closed (completed normally or after draining).
+    ///
+    /// Records when all children have completed and finalizers have run.
+    RegionClosed {
+        /// The region that closed.
+        region: CompactRegionId,
+        /// Outcome severity (0=Ok, 1=Err, 2=Cancelled, 3=Panicked).
+        outcome: u8,
+    },
+
+    /// A region received a cancellation request.
+    ///
+    /// Records the start of the cancellation protocol for a region.
+    RegionCancelled {
+        /// The region being cancelled.
+        region: CompactRegionId,
+        /// Cancel kind (severity level 0-5).
+        cancel_kind: u8,
+    },
+
+    // =========================================================================
     // Waker Events
     // =========================================================================
     /// A waker was invoked.
@@ -345,6 +381,26 @@ pub enum ReplayEvent {
         /// Number of tasks woken.
         count: u32,
     },
+
+    // =========================================================================
+    // Checkpoint Events
+    // =========================================================================
+    /// A checkpoint for replay synchronization.
+    ///
+    /// Checkpoints are inserted periodically to:
+    /// - Verify replay is still synchronized with the recording
+    /// - Provide restart points for long traces
+    /// - Mark significant state transitions
+    Checkpoint {
+        /// Monotonic sequence number.
+        sequence: u64,
+        /// Virtual time at checkpoint in nanoseconds.
+        time_nanos: u64,
+        /// Number of active tasks.
+        active_tasks: u32,
+        /// Number of active regions.
+        active_regions: u32,
+    },
 }
 
 impl ReplayEvent {
@@ -355,23 +411,28 @@ impl ReplayEvent {
     #[must_use]
     pub const fn estimated_size(&self) -> usize {
         match self {
-            Self::TaskScheduled { .. } => 17,                 // 1 + 8 + 8
-            Self::TaskYielded { .. } => 9,                    // 1 + 8
-            Self::TaskCompleted { .. } => 10,                 // 1 + 8 + 1
-            Self::TaskSpawned { .. } => 25,                   // 1 + 8 + 8 + 8
-            Self::TimeAdvanced { .. } => 17,                  // 1 + 8 + 8
-            Self::TimerCreated { .. } => 17,                  // 1 + 8 + 8
-            Self::TimerFired { .. } => 9,                     // 1 + 8
-            Self::TimerCancelled { .. } => 9,                 // 1 + 8
-            Self::IoReady { .. } => 10,                       // 1 + 8 + 1
-            Self::IoResult { .. } => 17,                      // 1 + 8 + 8
-            Self::IoError { .. } => 10,                       // 1 + 8 + 1
-            Self::RngSeed { .. } => 9,                        // 1 + 8
-            Self::RngValue { .. } => 9,                       // 1 + 8
-            Self::ChaosInjection { task: None, .. } => 11,    // 1 + 1 + 1 + 8
-            Self::ChaosInjection { task: Some(_), .. } => 19, // 1 + 1 + 9 + 8
-            Self::WakerWake { .. } => 9,                      // 1 + 8
-            Self::WakerBatchWake { .. } => 5,                 // 1 + 4
+            Self::TaskScheduled { .. } => 17,                    // 1 + 8 + 8
+            Self::TaskYielded { .. } => 9,                       // 1 + 8
+            Self::TaskCompleted { .. } => 10,                    // 1 + 8 + 1
+            Self::TaskSpawned { .. } => 25,                      // 1 + 8 + 8 + 8
+            Self::TimeAdvanced { .. } => 17,                     // 1 + 8 + 8
+            Self::TimerCreated { .. } => 17,                     // 1 + 8 + 8
+            Self::TimerFired { .. } => 9,                        // 1 + 8
+            Self::TimerCancelled { .. } => 9,                    // 1 + 8
+            Self::IoReady { .. } => 10,                          // 1 + 8 + 1
+            Self::IoResult { .. } => 17,                         // 1 + 8 + 8
+            Self::IoError { .. } => 10,                          // 1 + 8 + 1
+            Self::RngSeed { .. } => 9,                           // 1 + 8
+            Self::RngValue { .. } => 9,                          // 1 + 8
+            Self::ChaosInjection { task: None, .. } => 11,       // 1 + 1 + 1 + 8
+            Self::ChaosInjection { task: Some(_), .. } => 19,    // 1 + 1 + 9 + 8
+            Self::RegionCreated { parent: None, .. } => 17,      // 1 + 8 + 8
+            Self::RegionCreated { parent: Some(_), .. } => 25,   // 1 + 8 + 8 + 8
+            Self::RegionClosed { .. } => 10,                     // 1 + 8 + 1
+            Self::RegionCancelled { .. } => 10,                  // 1 + 8 + 1
+            Self::WakerWake { .. } => 9,                         // 1 + 8
+            Self::WakerBatchWake { .. } => 5,                    // 1 + 4
+            Self::Checkpoint { .. } => 25,                       // 1 + 8 + 8 + 4 + 4
         }
     }
 
@@ -427,6 +488,54 @@ impl ReplayEvent {
         Self::IoError {
             token,
             kind: error_kind_to_u8(kind),
+        }
+    }
+
+    /// Creates a region created event.
+    #[must_use]
+    pub fn region_created(
+        region: impl Into<CompactRegionId>,
+        parent: Option<impl Into<CompactRegionId>>,
+        at_tick: u64,
+    ) -> Self {
+        Self::RegionCreated {
+            region: region.into(),
+            parent: parent.map(Into::into),
+            at_tick,
+        }
+    }
+
+    /// Creates a region closed event.
+    #[must_use]
+    pub fn region_closed(region: impl Into<CompactRegionId>, severity: Severity) -> Self {
+        Self::RegionClosed {
+            region: region.into(),
+            outcome: severity.as_u8(),
+        }
+    }
+
+    /// Creates a region cancelled event.
+    #[must_use]
+    pub fn region_cancelled(region: impl Into<CompactRegionId>, cancel_kind: u8) -> Self {
+        Self::RegionCancelled {
+            region: region.into(),
+            cancel_kind,
+        }
+    }
+
+    /// Creates a checkpoint event.
+    #[must_use]
+    pub fn checkpoint(
+        sequence: u64,
+        time_nanos: u64,
+        active_tasks: u32,
+        active_regions: u32,
+    ) -> Self {
+        Self::Checkpoint {
+            sequence,
+            time_nanos,
+            active_tasks,
+            active_regions,
         }
     }
 }
@@ -789,5 +898,198 @@ mod tests {
             data: 0,
         };
         assert!(event_with_task.estimated_size() < 64);
+    }
+
+    #[test]
+    fn region_created_event() {
+        let event = ReplayEvent::region_created(
+            CompactRegionId(1),
+            Some(CompactRegionId(0)),
+            100,
+        );
+
+        if let ReplayEvent::RegionCreated {
+            region,
+            parent,
+            at_tick,
+        } = event
+        {
+            assert_eq!(region.0, 1);
+            assert_eq!(parent.map(|p| p.0), Some(0));
+            assert_eq!(at_tick, 100);
+        } else {
+            panic!("Expected RegionCreated");
+        }
+
+        // Test without parent (root region)
+        let root = ReplayEvent::region_created(
+            CompactRegionId(0),
+            None::<CompactRegionId>,
+            0,
+        );
+        if let ReplayEvent::RegionCreated { parent, .. } = root {
+            assert!(parent.is_none());
+        } else {
+            panic!("Expected RegionCreated");
+        }
+    }
+
+    #[test]
+    fn region_closed_event() {
+        let event = ReplayEvent::region_closed(CompactRegionId(5), Severity::Ok);
+
+        if let ReplayEvent::RegionClosed { region, outcome } = event {
+            assert_eq!(region.0, 5);
+            assert_eq!(outcome, Severity::Ok.as_u8());
+        } else {
+            panic!("Expected RegionClosed");
+        }
+    }
+
+    #[test]
+    fn region_cancelled_event() {
+        let event = ReplayEvent::region_cancelled(CompactRegionId(3), 1);
+
+        if let ReplayEvent::RegionCancelled {
+            region,
+            cancel_kind,
+        } = event
+        {
+            assert_eq!(region.0, 3);
+            assert_eq!(cancel_kind, 1);
+        } else {
+            panic!("Expected RegionCancelled");
+        }
+    }
+
+    #[test]
+    fn checkpoint_event() {
+        let event = ReplayEvent::checkpoint(42, 1_000_000_000, 5, 2);
+
+        if let ReplayEvent::Checkpoint {
+            sequence,
+            time_nanos,
+            active_tasks,
+            active_regions,
+        } = event
+        {
+            assert_eq!(sequence, 42);
+            assert_eq!(time_nanos, 1_000_000_000);
+            assert_eq!(active_tasks, 5);
+            assert_eq!(active_regions, 2);
+        } else {
+            panic!("Expected Checkpoint");
+        }
+    }
+
+    #[test]
+    fn region_events_size() {
+        // Verify all region events stay compact (< 64 bytes)
+        let events = [
+            ReplayEvent::RegionCreated {
+                region: CompactRegionId(0),
+                parent: None,
+                at_tick: 0,
+            },
+            ReplayEvent::RegionCreated {
+                region: CompactRegionId(0),
+                parent: Some(CompactRegionId(1)),
+                at_tick: 0,
+            },
+            ReplayEvent::RegionClosed {
+                region: CompactRegionId(0),
+                outcome: 0,
+            },
+            ReplayEvent::RegionCancelled {
+                region: CompactRegionId(0),
+                cancel_kind: 0,
+            },
+            ReplayEvent::Checkpoint {
+                sequence: 0,
+                time_nanos: 0,
+                active_tasks: 0,
+                active_regions: 0,
+            },
+        ];
+
+        for event in &events {
+            let size = event.estimated_size();
+            assert!(
+                size < 64,
+                "Event {:?} exceeds 64 bytes: {} bytes",
+                event,
+                size
+            );
+        }
+    }
+
+    #[test]
+    fn region_events_serialization_roundtrip() {
+        let mut trace = ReplayTrace::new(TraceMetadata::new(123));
+
+        // Add region lifecycle events
+        trace.push(ReplayEvent::RegionCreated {
+            region: CompactRegionId(0),
+            parent: None,
+            at_tick: 0,
+        });
+        trace.push(ReplayEvent::RegionCreated {
+            region: CompactRegionId(1),
+            parent: Some(CompactRegionId(0)),
+            at_tick: 10,
+        });
+        trace.push(ReplayEvent::RegionCancelled {
+            region: CompactRegionId(1),
+            cancel_kind: 2,
+        });
+        trace.push(ReplayEvent::RegionClosed {
+            region: CompactRegionId(1),
+            outcome: 2, // Cancelled
+        });
+        trace.push(ReplayEvent::RegionClosed {
+            region: CompactRegionId(0),
+            outcome: 0, // Ok
+        });
+        trace.push(ReplayEvent::Checkpoint {
+            sequence: 1,
+            time_nanos: 1_000_000,
+            active_tasks: 0,
+            active_regions: 0,
+        });
+
+        let bytes = trace.to_bytes().expect("serialize");
+        let loaded = ReplayTrace::from_bytes(&bytes).expect("deserialize");
+
+        assert_eq!(loaded.events.len(), 6);
+
+        // Verify first event (root region created)
+        match &loaded.events[0] {
+            ReplayEvent::RegionCreated {
+                region,
+                parent,
+                at_tick,
+            } => {
+                assert_eq!(region.0, 0);
+                assert!(parent.is_none());
+                assert_eq!(*at_tick, 0);
+            }
+            _ => panic!("Expected RegionCreated"),
+        }
+
+        // Verify checkpoint event
+        match &loaded.events[5] {
+            ReplayEvent::Checkpoint {
+                sequence,
+                time_nanos,
+                active_tasks,
+                active_regions,
+            } => {
+                assert_eq!(*sequence, 1);
+                assert_eq!(*time_nanos, 1_000_000);
+                assert_eq!(*active_tasks, 0);
+                assert_eq!(*active_regions, 0);
+            }
+            _ => panic!("Expected Checkpoint"),
+        }
     }
 }
