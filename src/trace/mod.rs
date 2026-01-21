@@ -17,11 +17,13 @@
 //! - [`format`]: Output formatting utilities
 //! - [`streaming`]: Streaming replay for large traces with O(1) memory
 //! - [`integrity`]: Trace file integrity verification
+//! - [`filter`]: Trace event filtering during recording
 
 pub mod buffer;
 pub mod distributed;
 pub mod event;
 pub mod file;
+pub mod filter;
 pub mod format;
 pub mod integrity;
 pub mod recorder;
@@ -49,3 +51,4 @@ pub use integrity::{
     find_first_corruption, is_trace_valid_quick, verify_trace, IntegrityIssue, IssueSeverity,
     VerificationOptions, VerificationResult,
 };
+pub use filter::{EventCategory, FilterableEvent, FilterBuilder, TraceFilter};
