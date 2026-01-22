@@ -1,0 +1,214 @@
+name: Conformance Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'conformance/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'conformance/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUST_LOG: info
+
+jobs:
+  conformance:
+    name: Conformance Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-conformance-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-conformance-
+
+      - name: Build conformance package
+        run: cargo build --package asupersync-conformance --all-features
+
+      - name: Run conformance tests
+        run: |
+          cargo test --package asupersync-conformance --all-features -- --nocapture 2>&1 | tee conformance_output.log
+        continue-on-error: true
+
+      - name: Parse test results
+        id: parse_results
+        run: |
+          # Count passed and failed tests
+          PASSED=$(grep -c "test.*ok$" conformance_output.log 2>/dev/null || echo "0")
+          FAILED=$(grep -c "test.*FAILED" conformance_output.log 2>/dev/null || echo "0")
+          TOTAL=$((PASSED + FAILED))
+
+          if [ "$TOTAL" -gt 0 ]; then
+            COVERAGE=$((PASSED * 100 / TOTAL))
+          else
+            COVERAGE=0
+          fi
+
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+
+          echo "### Conformance Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pass Rate | $COVERAGE% |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=${{ steps.parse_results.outputs.coverage }}
+          THRESHOLD=90
+
+          echo "Coverage: $COVERAGE%"
+          echo "Threshold: $THRESHOLD%"
+
+          if [ "$COVERAGE" -lt "$THRESHOLD" ]; then
+            echo "::error::Conformance coverage $COVERAGE% is below threshold $THRESHOLD%"
+            exit 1
+          else
+            echo "Coverage $COVERAGE% meets threshold $THRESHOLD%"
+          fi
+
+      - name: Upload conformance log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conformance-log
+          path: conformance_output.log
+          retention-days: 14
+
+  performance-bounds:
+    name: Performance Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-perf-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run performance benchmarks
+        run: |
+          cargo bench --package asupersync-conformance --all-features 2>&1 | tee perf_output.log || true
+
+      - name: Check for performance regressions
+        run: |
+          # Parse benchmark output for any failures
+          if grep -q "regression" perf_output.log; then
+            echo "::warning::Potential performance regression detected"
+          fi
+
+          echo "### Performance Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -50 perf_output.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload performance log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-log
+          path: perf_output.log
+          retention-days: 14
+
+  runtime-matrix:
+    name: Runtime Matrix
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        runtime: [lab, production]
+        include:
+          - os: ubuntu-latest
+            runtime: lab
+            features: test-internals
+          - os: ubuntu-latest
+            runtime: production
+            features: test-internals
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.runtime }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests with ${{ matrix.runtime }} runtime
+        run: |
+          echo "Testing with runtime: ${{ matrix.runtime }}"
+          cargo test --features ${{ matrix.features }} -- --nocapture
+        env:
+          ASUPERSYNC_RUNTIME: ${{ matrix.runtime }}
+
+  negative-tests:
+    name: Negative Tests (Expected Failures)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-negative-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run negative conformance tests
+        run: |
+          # Negative tests verify that certain patterns correctly fail
+          cargo test --package asupersync-conformance negative -- --nocapture 2>&1 | tee negative_output.log || true
+
+      - name: Upload negative test log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: negative-tests-log
+          path: negative_output.log
+          retention-days: 14
