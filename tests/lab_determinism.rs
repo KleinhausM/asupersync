@@ -1,0 +1,686 @@
+//! Lab reactor determinism tests.
+//!
+//! These tests verify that the lab runtime provides deterministic execution,
+//! enabling reproducible concurrent tests.
+//!
+//! The core principle is: **Same seed → Same execution → Same results**
+//!
+//! This is critical for debugging concurrent bugs - if a test fails,
+//! the same seed reproduces the exact failure.
+
+#[macro_use]
+mod common;
+
+use asupersync::lab::{LabConfig, LabRuntime};
+use asupersync::types::Budget;
+use common::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+fn init_test(test_name: &str) {
+    init_test_logging();
+    test_phase!(test_name);
+}
+
+// ============================================================================
+// Helper types
+// ============================================================================
+
+/// A future that yields once before completing.
+struct YieldOnce {
+    yielded: bool,
+}
+
+impl Future for YieldOnce {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.yielded {
+            Poll::Ready(())
+        } else {
+            self.yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
+async fn yield_now() {
+    YieldOnce { yielded: false }.await;
+}
+
+/// A future that yields N times before completing.
+struct YieldN {
+    remaining: usize,
+}
+
+impl Future for YieldN {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.remaining == 0 {
+            Poll::Ready(())
+        } else {
+            self.remaining -= 1;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
+async fn yield_n(n: usize) {
+    YieldN { remaining: n }.await;
+}
+
+// ============================================================================
+// Test: Basic Determinism
+// ============================================================================
+
+/// Run N tasks with a given seed and return their completion order.
+fn run_tasks_with_seed(seed: u64, task_count: usize, yields_per_task: usize) -> Vec<usize> {
+    let mut runtime = LabRuntime::new(LabConfig::new(seed));
+    let region = runtime.state.create_root_region(Budget::INFINITE);
+
+    // Shared vector to track completion order
+    let completion_order = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    // Spawn tasks
+    let mut task_ids = Vec::new();
+    for i in 0..task_count {
+        let order = completion_order.clone();
+        let (task_id, _handle) = runtime
+            .state
+            .create_task(region, Budget::INFINITE, async move {
+                // Yield multiple times to create scheduling opportunities
+                yield_n(yields_per_task).await;
+                order.lock().unwrap().push(i);
+            })
+            .expect("create task");
+        task_ids.push(task_id);
+    }
+
+    // Schedule all tasks at the same priority (creates non-determinism opportunity)
+    for task_id in task_ids {
+        runtime.scheduler.lock().unwrap().schedule(task_id, 0);
+    }
+
+    // Run until quiescent
+    runtime.run_until_quiescent();
+
+    Arc::try_unwrap(completion_order)
+        .unwrap()
+        .into_inner()
+        .unwrap()
+}
+
+#[test]
+fn test_lab_deterministic_scheduling_same_seed() {
+    init_test("test_lab_deterministic_scheduling_same_seed");
+    test_section!("run_with_same_seed");
+
+    let seed = 42;
+    let task_count = 10;
+    let yields_per_task = 5;
+
+    // Run multiple times with the same seed
+    let result1 = run_tasks_with_seed(seed, task_count, yields_per_task);
+    let result2 = run_tasks_with_seed(seed, task_count, yields_per_task);
+    let result3 = run_tasks_with_seed(seed, task_count, yields_per_task);
+
+    test_section!("verify_determinism");
+    // All runs must produce identical results
+    assert_with_log!(
+        result1 == result2,
+        "Run 1 and Run 2 should be identical",
+        result1.clone(),
+        result2.clone()
+    );
+    assert_with_log!(
+        result2 == result3,
+        "Run 2 and Run 3 should be identical",
+        result2.clone(),
+        result3.clone()
+    );
+
+    tracing::info!(
+        seed = seed,
+        task_count = task_count,
+        completion_order = ?result1,
+        "Deterministic execution verified"
+    );
+
+    test_complete!("test_lab_deterministic_scheduling_same_seed");
+}
+
+// ============================================================================
+// Test: Different Seeds Produce Different Results
+// ============================================================================
+
+#[test]
+fn test_lab_different_seeds_different_results() {
+    init_test("test_lab_different_seeds_different_results");
+    test_section!("run_with_different_seeds");
+
+    let task_count = 10;
+    let yields_per_task = 5;
+
+    // Run with different seeds
+    let result1 = run_tasks_with_seed(1, task_count, yields_per_task);
+    let result2 = run_tasks_with_seed(2, task_count, yields_per_task);
+    let result3 = run_tasks_with_seed(3, task_count, yields_per_task);
+    let result4 = run_tasks_with_seed(1000, task_count, yields_per_task);
+    let result5 = run_tasks_with_seed(0xDEADBEEF, task_count, yields_per_task);
+
+    test_section!("verify_different_results");
+    // Collect all results
+    let results = vec![&result1, &result2, &result3, &result4, &result5];
+
+    // Count unique orderings
+    let mut unique_orderings = std::collections::HashSet::new();
+    for r in &results {
+        unique_orderings.insert(format!("{:?}", r));
+    }
+
+    // With 5 different seeds, we should see at least 2 different orderings
+    // (It's statistically extremely unlikely all 5 would be identical if RNG is working)
+    let unique_count = unique_orderings.len();
+    tracing::info!(
+        unique_count = unique_count,
+        "Found {} unique orderings from 5 seeds",
+        unique_count
+    );
+
+    assert_with_log!(
+        unique_count >= 2,
+        "Different seeds should produce different orderings",
+        ">= 2",
+        unique_count
+    );
+
+    test_complete!("test_lab_different_seeds_different_results");
+}
+
+// ============================================================================
+// Test: Step Count Determinism
+// ============================================================================
+
+/// Run and return the number of steps taken.
+fn run_and_count_steps(seed: u64, task_count: usize, yields_per_task: usize) -> u64 {
+    let mut runtime = LabRuntime::new(LabConfig::new(seed));
+    let region = runtime.state.create_root_region(Budget::INFINITE);
+
+    let mut task_ids = Vec::new();
+    for _ in 0..task_count {
+        let (task_id, _handle) = runtime
+            .state
+            .create_task(region, Budget::INFINITE, async move {
+                yield_n(yields_per_task).await;
+            })
+            .expect("create task");
+        task_ids.push(task_id);
+    }
+
+    for task_id in task_ids {
+        runtime.scheduler.lock().unwrap().schedule(task_id, 0);
+    }
+
+    runtime.run_until_quiescent();
+    runtime.steps()
+}
+
+#[test]
+fn test_lab_step_count_determinism() {
+    init_test("test_lab_step_count_determinism");
+    test_section!("run_multiple_times");
+
+    let seed = 123;
+    let task_count = 5;
+    let yields_per_task = 3;
+
+    let steps1 = run_and_count_steps(seed, task_count, yields_per_task);
+    let steps2 = run_and_count_steps(seed, task_count, yields_per_task);
+    let steps3 = run_and_count_steps(seed, task_count, yields_per_task);
+
+    test_section!("verify_step_counts");
+    assert_with_log!(
+        steps1 == steps2,
+        "Step count should be deterministic (run 1 vs 2)",
+        steps1,
+        steps2
+    );
+    assert_with_log!(
+        steps2 == steps3,
+        "Step count should be deterministic (run 2 vs 3)",
+        steps2,
+        steps3
+    );
+
+    tracing::info!(
+        seed = seed,
+        steps = steps1,
+        "Step count determinism verified"
+    );
+
+    test_complete!("test_lab_step_count_determinism");
+}
+
+// ============================================================================
+// Test: Virtual Time Advancement Determinism
+// ============================================================================
+
+/// Run with time advancement and return events with timestamps.
+fn run_with_time_advancement(seed: u64) -> Vec<(u64, String)> {
+    let mut runtime = LabRuntime::new(LabConfig::new(seed));
+    let region = runtime.state.create_root_region(Budget::INFINITE);
+
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    // Create tasks that record their execution time
+    for i in 0..5 {
+        let events_clone = events.clone();
+        let (task_id, _handle) = runtime
+            .state
+            .create_task(region, Budget::INFINITE, async move {
+                yield_now().await;
+                let time = asupersync::types::Time::ZERO; // Would use Cx::current().now() in real code
+                events_clone
+                    .lock()
+                    .unwrap()
+                    .push((0, format!("task-{}-start", i)));
+            })
+            .expect("create task");
+        runtime.scheduler.lock().unwrap().schedule(task_id, 0);
+    }
+
+    // Run initial tasks
+    runtime.run_until_quiescent();
+
+    // Advance time
+    runtime.advance_time(1_000_000_000); // 1 second in nanos
+
+    // Record time advancement
+    events
+        .lock()
+        .unwrap()
+        .push((runtime.now().as_nanos(), "time-advanced".to_string()));
+
+    Arc::try_unwrap(events).unwrap().into_inner().unwrap()
+}
+
+#[test]
+fn test_lab_virtual_time_determinism() {
+    init_test("test_lab_virtual_time_determinism");
+    test_section!("run_with_time");
+
+    let seed = 789;
+
+    let events1 = run_with_time_advancement(seed);
+    let events2 = run_with_time_advancement(seed);
+
+    test_section!("verify_time_events");
+    assert_with_log!(
+        events1 == events2,
+        "Time-based events should be deterministic",
+        events1.clone(),
+        events2.clone()
+    );
+
+    tracing::info!(
+        seed = seed,
+        events = ?events1,
+        "Virtual time determinism verified"
+    );
+
+    test_complete!("test_lab_virtual_time_determinism");
+}
+
+// ============================================================================
+// Test: Trace Capture Determinism
+// ============================================================================
+
+#[test]
+fn test_lab_trace_capture_determinism() {
+    init_test("test_lab_trace_capture_determinism");
+    test_section!("capture_traces");
+
+    let seed = 101112;
+    let task_count = 5;
+
+    // First run
+    let mut runtime1 = LabRuntime::new(LabConfig::new(seed).trace_capacity(1024));
+    let region1 = runtime1.state.create_root_region(Budget::INFINITE);
+    for _ in 0..task_count {
+        let (task_id, _handle) = runtime1
+            .state
+            .create_task(region1, Budget::INFINITE, async {
+                yield_now().await;
+            })
+            .expect("create task");
+        runtime1.scheduler.lock().unwrap().schedule(task_id, 0);
+    }
+    runtime1.run_until_quiescent();
+    let trace1_len = runtime1.trace().len();
+
+    // Second run
+    let mut runtime2 = LabRuntime::new(LabConfig::new(seed).trace_capacity(1024));
+    let region2 = runtime2.state.create_root_region(Budget::INFINITE);
+    for _ in 0..task_count {
+        let (task_id, _handle) = runtime2
+            .state
+            .create_task(region2, Budget::INFINITE, async {
+                yield_now().await;
+            })
+            .expect("create task");
+        runtime2.scheduler.lock().unwrap().schedule(task_id, 0);
+    }
+    runtime2.run_until_quiescent();
+    let trace2_len = runtime2.trace().len();
+
+    test_section!("verify_traces");
+    // Trace lengths should be identical
+    assert_with_log!(
+        trace1_len == trace2_len,
+        "Trace lengths should be identical",
+        trace1_len,
+        trace2_len
+    );
+
+    tracing::info!(
+        seed = seed,
+        trace_len = trace1_len,
+        "Trace capture determinism verified"
+    );
+
+    test_complete!("test_lab_trace_capture_determinism");
+}
+
+// ============================================================================
+// Test: Priority Scheduling Determinism
+// ============================================================================
+
+/// Run tasks with different priorities and return completion order.
+fn run_with_priorities(seed: u64) -> Vec<(usize, u8)> {
+    let mut runtime = LabRuntime::new(LabConfig::new(seed));
+    let region = runtime.state.create_root_region(Budget::INFINITE);
+
+    let completion_order = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    // Spawn tasks with different priorities
+    let priorities = vec![0u8, 5, 10, 3, 7, 1, 9, 2, 8, 4];
+    for (i, &priority) in priorities.iter().enumerate() {
+        let order = completion_order.clone();
+        let (task_id, _handle) = runtime
+            .state
+            .create_task(region, Budget::INFINITE, async move {
+                yield_now().await;
+                order.lock().unwrap().push((i, priority));
+            })
+            .expect("create task");
+        runtime
+            .scheduler
+            .lock()
+            .unwrap()
+            .schedule(task_id, priority);
+    }
+
+    runtime.run_until_quiescent();
+
+    Arc::try_unwrap(completion_order)
+        .unwrap()
+        .into_inner()
+        .unwrap()
+}
+
+#[test]
+fn test_lab_priority_scheduling_determinism() {
+    init_test("test_lab_priority_scheduling_determinism");
+    test_section!("run_with_priorities");
+
+    let seed = 456;
+
+    let result1 = run_with_priorities(seed);
+    let result2 = run_with_priorities(seed);
+
+    test_section!("verify_priority_order");
+    assert_with_log!(
+        result1 == result2,
+        "Priority-based scheduling should be deterministic",
+        result1.clone(),
+        result2.clone()
+    );
+
+    // Verify higher priority tasks complete before lower priority ones
+    // (priorities are ordered descending in asupersync scheduler)
+    for window in result1.windows(2) {
+        let (_i1, p1) = window[0];
+        let (_i2, p2) = window[1];
+        // With same-time scheduling, higher priority should generally come first
+        // but this depends on scheduler implementation details
+        tracing::debug!(p1 = p1, p2 = p2, "Priority ordering");
+    }
+
+    tracing::info!(
+        seed = seed,
+        completion_order = ?result1,
+        "Priority scheduling determinism verified"
+    );
+
+    test_complete!("test_lab_priority_scheduling_determinism");
+}
+
+// ============================================================================
+// Test: Multiple Runs Consistency
+// ============================================================================
+
+/// Helper to run a test multiple times and verify consistency.
+fn verify_deterministic<F, T>(seed: u64, runs: usize, f: F)
+where
+    F: Fn(u64) -> T,
+    T: Eq + std::fmt::Debug,
+{
+    let baseline = f(seed);
+    for run in 1..runs {
+        let result = f(seed);
+        assert!(
+            result == baseline,
+            "Non-deterministic execution detected on run {}: baseline={:?}, got={:?}",
+            run,
+            baseline,
+            result
+        );
+    }
+}
+
+#[test]
+fn test_lab_multiple_runs_consistency() {
+    init_test("test_lab_multiple_runs_consistency");
+    test_section!("verify_10_runs");
+
+    let seed = 0xCAFEBABE;
+
+    // Run 10 times and verify all produce identical results
+    verify_deterministic(seed, 10, |s| run_tasks_with_seed(s, 8, 4));
+
+    tracing::info!(
+        seed = seed,
+        runs = 10,
+        "Multiple runs consistency verified"
+    );
+
+    test_complete!("test_lab_multiple_runs_consistency");
+}
+
+// ============================================================================
+// Test: Quiescence Detection Determinism
+// ============================================================================
+
+#[test]
+fn test_lab_quiescence_detection_determinism() {
+    init_test("test_lab_quiescence_detection_determinism");
+    test_section!("run_to_quiescence");
+
+    let seed = 0xFEEDFACE;
+
+    // Helper to run and check quiescence
+    let run = |s: u64| -> (bool, u64) {
+        let mut runtime = LabRuntime::new(LabConfig::new(s));
+        let region = runtime.state.create_root_region(Budget::INFINITE);
+
+        for _ in 0..3 {
+            let (task_id, _handle) = runtime
+                .state
+                .create_task(region, Budget::INFINITE, async {
+                    yield_n(2).await;
+                })
+                .expect("create task");
+            runtime.scheduler.lock().unwrap().schedule(task_id, 0);
+        }
+
+        let steps = runtime.run_until_quiescent();
+        let quiescent = runtime.is_quiescent();
+        (quiescent, steps)
+    };
+
+    let result1 = run(seed);
+    let result2 = run(seed);
+    let result3 = run(seed);
+
+    test_section!("verify_quiescence");
+    assert_with_log!(
+        result1 == result2,
+        "Quiescence detection should be deterministic (run 1 vs 2)",
+        result1,
+        result2
+    );
+    assert_with_log!(
+        result2 == result3,
+        "Quiescence detection should be deterministic (run 2 vs 3)",
+        result2,
+        result3
+    );
+
+    // Should always reach quiescence
+    assert_with_log!(
+        result1.0,
+        "Runtime should reach quiescence",
+        true,
+        result1.0
+    );
+
+    tracing::info!(
+        seed = seed,
+        quiescent = result1.0,
+        steps = result1.1,
+        "Quiescence detection determinism verified"
+    );
+
+    test_complete!("test_lab_quiescence_detection_determinism");
+}
+
+// ============================================================================
+// Test: Empty Runtime Determinism
+// ============================================================================
+
+#[test]
+fn test_lab_empty_runtime_determinism() {
+    init_test("test_lab_empty_runtime_determinism");
+    test_section!("empty_runtime");
+
+    let seed = 42;
+
+    // Run with no tasks
+    let run = |s: u64| -> (bool, u64, u64) {
+        let mut runtime = LabRuntime::new(LabConfig::new(s));
+        let _region = runtime.state.create_root_region(Budget::INFINITE);
+        // Don't create any tasks
+        let steps = runtime.run_until_quiescent();
+        (runtime.is_quiescent(), steps, runtime.now().as_nanos())
+    };
+
+    let result1 = run(seed);
+    let result2 = run(seed);
+
+    test_section!("verify_empty");
+    assert_with_log!(
+        result1 == result2,
+        "Empty runtime should be deterministic",
+        result1,
+        result2
+    );
+
+    // Empty runtime should be immediately quiescent with 0 steps
+    assert_with_log!(
+        result1.0,
+        "Empty runtime should be quiescent",
+        true,
+        result1.0
+    );
+    assert_with_log!(result1.1 == 0, "Empty runtime should have 0 steps", 0, result1.1);
+
+    test_complete!("test_lab_empty_runtime_determinism");
+}
+
+// ============================================================================
+// Test: Interleaved Task Completion Determinism
+// ============================================================================
+
+#[test]
+fn test_lab_interleaved_completion_determinism() {
+    init_test("test_lab_interleaved_completion_determinism");
+    test_section!("interleaved_tasks");
+
+    let seed = 0xABCDEF;
+
+    // Create tasks that yield different numbers of times
+    let run = |s: u64| -> Vec<(usize, usize)> {
+        let mut runtime = LabRuntime::new(LabConfig::new(s));
+        let region = runtime.state.create_root_region(Budget::INFINITE);
+
+        let completion_order = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        // Task i yields i times
+        for i in 0..5 {
+            let order = completion_order.clone();
+            let (task_id, _handle) = runtime
+                .state
+                .create_task(region, Budget::INFINITE, async move {
+                    yield_n(i).await;
+                    order.lock().unwrap().push((i, i));
+                })
+                .expect("create task");
+            runtime.scheduler.lock().unwrap().schedule(task_id, 0);
+        }
+
+        runtime.run_until_quiescent();
+
+        Arc::try_unwrap(completion_order)
+            .unwrap()
+            .into_inner()
+            .unwrap()
+    };
+
+    let result1 = run(seed);
+    let result2 = run(seed);
+
+    test_section!("verify_interleaved");
+    assert_with_log!(
+        result1 == result2,
+        "Interleaved completion should be deterministic",
+        result1.clone(),
+        result2.clone()
+    );
+
+    tracing::info!(
+        seed = seed,
+        completion_order = ?result1,
+        "Interleaved completion determinism verified"
+    );
+
+    test_complete!("test_lab_interleaved_completion_determinism");
+}

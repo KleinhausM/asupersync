@@ -1468,7 +1468,11 @@ mod tests {
         // Memory cost should be minimal (just the struct size, no boxed cause)
         let cost = reason.estimated_memory_cost();
         // Should be roughly just the size of CancelReason without any heap allocations for cause
-        assert!(cost < 200, "cancel_fast should have minimal memory cost, got {}", cost);
+        assert!(
+            cost < 200,
+            "cancel_fast should have minimal memory cost, got {}",
+            cost
+        );
     }
 
     // ========================================================================

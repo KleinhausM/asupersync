@@ -204,9 +204,7 @@ impl CardinalityTracker {
     fn record(&self, metric: &str, labels: &[KeyValue]) {
         let hash = Self::hash_labels(labels);
         let mut seen = self.seen.write().unwrap();
-        seen.entry(metric.to_string())
-            .or_default()
-            .insert(hash);
+        seen.entry(metric.to_string()).or_default().insert(hash);
     }
 
     /// Increment overflow counter.
@@ -235,11 +233,7 @@ impl CardinalityTracker {
     /// Get current cardinality for a metric.
     #[cfg(test)]
     fn cardinality(&self, metric: &str) -> usize {
-        self.seen
-            .read()
-            .unwrap()
-            .get(metric)
-            .map_or(0, |s| s.len())
+        self.seen.read().unwrap().get(metric).map_or(0, |s| s.len())
     }
 }
 
@@ -378,14 +372,22 @@ impl MetricsExporter for StdoutExporter {
 
         for (name, labels, value) in &metrics.counters {
             let label_str = Self::format_labels(labels);
-            writeln!(stdout, "{}COUNTER {}{} {}", self.prefix, name, label_str, value)
-                .map_err(|e| ExportError::new(e.to_string()))?;
+            writeln!(
+                stdout,
+                "{}COUNTER {}{} {}",
+                self.prefix, name, label_str, value
+            )
+            .map_err(|e| ExportError::new(e.to_string()))?;
         }
 
         for (name, labels, value) in &metrics.gauges {
             let label_str = Self::format_labels(labels);
-            writeln!(stdout, "{}GAUGE {}{} {}", self.prefix, name, label_str, value)
-                .map_err(|e| ExportError::new(e.to_string()))?;
+            writeln!(
+                stdout,
+                "{}GAUGE {}{} {}",
+                self.prefix, name, label_str, value
+            )
+            .map_err(|e| ExportError::new(e.to_string()))?;
         }
 
         for (name, labels, count, sum) in &metrics.histograms {
@@ -1104,7 +1106,11 @@ mod exporter_tests {
 
         let mut snapshot = MetricsSnapshot::new();
         snapshot.add_counter("test.counter", vec![], 42);
-        snapshot.add_gauge("test.gauge", vec![("label".to_string(), "value".to_string())], 100);
+        snapshot.add_gauge(
+            "test.gauge",
+            vec![("label".to_string(), "value".to_string())],
+            100,
+        );
         snapshot.add_histogram("test.histogram", vec![], 10, 5.5);
 
         assert!(exporter.export(&snapshot).is_ok());
@@ -1160,7 +1166,11 @@ mod exporter_tests {
     fn metrics_snapshot_building() {
         let mut snapshot = MetricsSnapshot::new();
 
-        snapshot.add_counter("requests", vec![("method".to_string(), "GET".to_string())], 100);
+        snapshot.add_counter(
+            "requests",
+            vec![("method".to_string(), "GET".to_string())],
+            100,
+        );
         snapshot.add_gauge("connections", vec![], 42);
         snapshot.add_histogram("latency", vec![], 1000, 125.5);
 

@@ -39,6 +39,7 @@ pub mod bench;
 pub mod logging;
 pub mod runner;
 pub mod tests;
+pub mod traceability;
 
 pub use bench::{
     default_benchmarks, run_benchmark_comparison, BenchAllocSnapshot, BenchAllocStats, BenchCategory,

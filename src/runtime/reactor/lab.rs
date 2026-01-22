@@ -352,6 +352,16 @@ impl LabReactor {
         self.inner.lock().unwrap().time
     }
 
+    /// Returns the next scheduled event time, if any.
+    ///
+    /// This is useful for driving the lab runtime forward to the next I/O event
+    /// without relying on wall-clock time.
+    #[must_use]
+    pub fn next_event_time(&self) -> Option<Time> {
+        let inner = self.inner.lock().unwrap();
+        inner.pending.peek().map(|event| event.time)
+    }
+
     /// Advances virtual time by the specified duration.
     ///
     /// This is useful for testing timeout behavior without going through poll().
