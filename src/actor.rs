@@ -2119,4 +2119,55 @@ mod tests {
         let dbg = format!("{cell:?}");
         assert!(dbg.contains("ActorStateCell"), "{dbg}");
     }
+
+    #[test]
+    fn actor_id_clone_copy_eq_hash() {
+        let id = ActorId::from_task(TaskId::new_for_test(1, 0));
+        let dbg = format!("{:?}", id);
+        assert!(dbg.contains("ActorId"));
+
+        let id2 = id.clone();
+        assert_eq!(id, id2);
+
+        // Copy
+        let id3 = id;
+        assert_eq!(id, id3);
+
+        // Hash
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(id);
+        set.insert(ActorId::from_task(TaskId::new_for_test(2, 0)));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn actor_state_debug_clone_copy_eq() {
+        let s = ActorState::Running;
+        let dbg = format!("{:?}", s);
+        assert!(dbg.contains("Running"));
+
+        let s2 = s.clone();
+        assert_eq!(s, s2);
+
+        let s3 = s;
+        assert_eq!(s, s3);
+
+        assert_ne!(ActorState::Created, ActorState::Stopped);
+    }
+
+    #[test]
+    fn mailbox_config_debug_clone_copy_default() {
+        let c = MailboxConfig::default();
+        let dbg = format!("{:?}", c);
+        assert!(dbg.contains("MailboxConfig"));
+
+        let c2 = c.clone();
+        assert_eq!(c2.capacity, c.capacity);
+        assert_eq!(c2.backpressure, c.backpressure);
+
+        // Copy
+        let c3 = c;
+        assert_eq!(c3.capacity, c.capacity);
+    }
 }

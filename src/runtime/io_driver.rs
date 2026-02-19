@@ -1578,4 +1578,16 @@ mod tests {
             crate::test_complete!("io_driver_with_epoll_reactor_writable");
         }
     }
+
+    #[test]
+    fn io_stats_debug_clone_default() {
+        let s = IoStats::default();
+        let dbg = format!("{:?}", s);
+        assert!(dbg.contains("IoStats"));
+
+        let s2 = s.clone();
+        assert_eq!(s2.polls, 0);
+        assert_eq!(s2.events_received, 0);
+        assert_eq!(s2.registrations, 0);
+    }
 }

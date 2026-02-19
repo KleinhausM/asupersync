@@ -1303,4 +1303,33 @@ mod tests {
             crate::test_complete!("timeout_fallback_triggers_timeout_error");
         }
     }
+
+    #[test]
+    fn cancellation_mode_debug_clone_copy_default_eq() {
+        let m = CancellationMode::default();
+        assert_eq!(m, CancellationMode::BestEffort);
+
+        let dbg = format!("{:?}", m);
+        assert!(dbg.contains("BestEffort"));
+
+        let m2 = m.clone();
+        assert_eq!(m, m2);
+
+        let m3 = m;
+        assert_eq!(m, m3);
+
+        assert_ne!(CancellationMode::BestEffort, CancellationMode::Strict);
+    }
+
+    #[test]
+    fn tower_adapter_error_debug_clone_eq() {
+        let e: TowerAdapterError<String> = TowerAdapterError::Cancelled;
+        let dbg = format!("{:?}", e);
+        assert!(dbg.contains("Cancelled"));
+
+        let e2 = e.clone();
+        assert_eq!(e, e2);
+
+        assert_ne!(TowerAdapterError::<String>::Cancelled, TowerAdapterError::Timeout);
+    }
 }

@@ -1340,4 +1340,42 @@ mod tests {
         assert!(watcher_tids.contains(&w2));
         assert!(watcher_tids.contains(&w3));
     }
+
+    #[test]
+    fn monitor_ref_debug_clone_copy_eq_hash_ord() {
+        let r = MonitorRef::from_raw(42);
+        let dbg = format!("{:?}", r);
+        assert!(dbg.contains("MonitorRef"));
+
+        let r2 = r.clone();
+        assert_eq!(r, r2);
+
+        // Copy
+        let r3 = r;
+        assert_eq!(r, r3);
+
+        // Ord
+        let r4 = MonitorRef::from_raw(100);
+        assert!(r < r4);
+
+        // Hash
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(r);
+        set.insert(r4);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn down_reason_debug_clone_eq() {
+        let d = DownReason::Normal;
+        let dbg = format!("{:?}", d);
+        assert!(dbg.contains("Normal"));
+
+        let d2 = d.clone();
+        assert_eq!(d, d2);
+
+        let d3 = DownReason::Error("oops".into());
+        assert_ne!(d, d3);
+    }
 }
