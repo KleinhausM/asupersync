@@ -535,7 +535,7 @@ mod tests {
         }
         for _ in 0..200 {
             let stats = make_baseline_stats(1000, 100);
-            monitor.check(&stats);
+            let _ = monitor.check(&stats);
         }
 
         // Reset evidence.

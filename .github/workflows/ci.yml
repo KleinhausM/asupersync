@@ -935,6 +935,40 @@ jobs:
           path: target/criterion/
           retention-days: 30
 
+  regression-gates:
+    name: RaptorQ Regression Gates (G2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-regression-gates-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run G2 CI regression gates
+        run: |
+          mkdir -p artifacts
+          cargo test --test ci_regression_gates -- --nocapture 2> artifacts/ci_regression_gate_report.ndjson
+          echo "G2 regression gate exit: $?"
+
+      - name: Upload G2 regression gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-gate-report
+          path: artifacts/ci_regression_gate_report.ndjson
+          retention-days: 30
+
   phase6-e2e:
     name: Phase 6 E2E Suites
     runs-on: ubuntu-latest
@@ -967,6 +1001,97 @@ jobs:
       - name: RAPTORQ – Encode/decode conformance E2E
         run: cargo test --test raptorq_conformance --all-features -- --nocapture
 
+      - name: RAPTORQ – G2 correctness/comparator CI gate
+        run: |
+          set -euo pipefail
+          mkdir -p phase6-artifacts/raptorq-g2
+          cargo test --test ci_regression_gates --all-features -- --nocapture 2>&1 \
+            | tee phase6-artifacts/raptorq-g2/ci_regression_gates.log
+          grep -E '^\{"schema_version":"raptorq-g2-ci-regression-gate-v1"' \
+            phase6-artifacts/raptorq-g2/ci_regression_gates.log > phase6-artifacts/raptorq-g2/g2_events.ndjson || true
+          grep -E '^\{"schema_version":"raptorq-g8-anytime-regression-v1"' \
+            phase6-artifacts/raptorq-g2/ci_regression_gates.log > phase6-artifacts/raptorq-g2/g8_events.ndjson || true
+          python3 - <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          log_path = Path("phase6-artifacts/raptorq-g2/ci_regression_gates.log")
+          text = log_path.read_text(encoding="utf-8", errors="replace")
+
+          levers = ["E4", "E5", "C5", "C6", "F5", "F6", "F7", "F8"]
+          lever_counts = {
+              lever: len(re.findall(rf'"lever":"{lever}"', text))
+              for lever in levers
+          }
+          missing_levers = [lever for lever, count in lever_counts.items() if count == 0]
+          comparator_count = text.count('"type":"comparator"')
+
+          fpr_match = re.search(
+              r"G2 aggregate FPR:\s*(\d+)/(\d+)\s*=\s*([0-9]*\.?[0-9]+)",
+              text,
+          )
+          false_positive_rate = None
+          checks = 0
+          false_positives = 0
+          if fpr_match:
+              false_positives = int(fpr_match.group(1))
+              checks = int(fpr_match.group(2))
+              false_positive_rate = float(fpr_match.group(3))
+
+          summary = {
+              "schema_version": "raptorq-g2-ci-gate-summary-v1",
+              "suite_id": "RQ-G2-CI-GATE",
+              "scenario_id": "RQ-G2-CORRECTNESS-COMPARATOR",
+              "status": "pass",
+              "lever_counts": lever_counts,
+              "missing_levers": missing_levers,
+              "comparator_events": comparator_count,
+              "false_positive_rate": false_positive_rate,
+              "false_positive_checks": checks,
+              "false_positives": false_positives,
+              "fpr_threshold": 0.10,
+              "artifact_path": "phase6-artifacts/raptorq-g2/ci_regression_gates.log",
+              "repro_command": "cargo test --test ci_regression_gates --all-features -- --nocapture",
+          }
+
+          errors = []
+          if missing_levers:
+              errors.append(f"missing lever coverage: {', '.join(missing_levers)}")
+          if comparator_count <= 0:
+              errors.append("missing comparator events in G2 output")
+          if false_positive_rate is None:
+              errors.append("missing aggregate false-positive-rate line in output")
+          elif false_positive_rate > 0.10:
+              errors.append(
+                  f"false-positive-rate {false_positive_rate:.4f} exceeds threshold 0.10"
+              )
+
+          if errors:
+              summary["status"] = "fail"
+              summary["errors"] = errors
+
+          Path("phase6-artifacts/raptorq-g2/summary.json").write_text(
+              json.dumps(summary, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          if errors:
+              for err in errors:
+                  print(f"::error::{err}")
+              sys.exit(1)
+          PY
+
+      - name: RAPTORQ – Deterministic full E2E profile gate (G2)
+        run: |
+          set -euo pipefail
+          NO_PREFLIGHT=1 bash ./scripts/run_raptorq_e2e.sh --profile full
+          latest_dir="$(ls -1dt target/e2e-results/raptorq/full_* | head -n1)"
+          mkdir -p phase6-artifacts/raptorq-full
+          cp "$latest_dir/summary.json" phase6-artifacts/raptorq-full/summary.json
+          cp "$latest_dir/scenarios.ndjson" phase6-artifacts/raptorq-full/scenarios.ndjson
+
       - name: RAPTORQ – Forensic logging contract gate (D3)
         run: |
           NO_PREFLIGHT=1 bash ./scripts/run_raptorq_e2e.sh --profile forensics --scenario RQ-E2E-FAILURE-INSUFFICIENT
@@ -974,6 +1099,62 @@ jobs:
           mkdir -p phase6-artifacts/raptorq-forensics
           cp "$latest_dir/summary.json" phase6-artifacts/raptorq-forensics/summary.json
           cp "$latest_dir/scenarios.ndjson" phase6-artifacts/raptorq-forensics/scenarios.ndjson
+
+      - name: RAPTORQ – Perf smoke regression gate (G2)
+        run: |
+          set -euo pipefail
+          mkdir -p phase6-artifacts/raptorq-perf
+          set +e
+          ./scripts/run_perf_e2e.sh \
+            --bench raptorq_benchmark \
+            --bench phase0_baseline \
+            --seed 424242 \
+            --compare baselines/baseline_latest.json \
+            --metric median_ns \
+            --max-regression-pct 10 \
+            --timeout 1200 2>&1 | tee phase6-artifacts/raptorq-perf/run.log
+          perf_rc=${PIPESTATUS[0]}
+          set -e
+
+          latest_perf_dir="$(ls -1dt target/perf-results/perf_* | head -n1)"
+          if [[ -n "$latest_perf_dir" && -d "$latest_perf_dir" ]]; then
+            cp "$latest_perf_dir/report.json" phase6-artifacts/raptorq-perf/report.json || true
+            cp "$latest_perf_dir/artifacts/baseline_current.json" phase6-artifacts/raptorq-perf/baseline_current.json || true
+            cp "$latest_perf_dir/artifacts/compare.log" phase6-artifacts/raptorq-perf/compare.log || true
+            cp "$latest_perf_dir/artifacts/compare.txt" phase6-artifacts/raptorq-perf/compare.txt || true
+            cp "$latest_perf_dir/artifacts/gate_events.ndjson" phase6-artifacts/raptorq-perf/gate_events.ndjson || true
+          fi
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("phase6-artifacts/raptorq-perf/report.json")
+          summary_path = Path("phase6-artifacts/raptorq-perf/summary.json")
+          summary = {
+              "schema_version": "raptorq-g2-perf-smoke-summary-v1",
+              "suite_id": "RQ-G2-PERF-SMOKE",
+              "scenario_id": "RQ-G2-PERF-SMOKE-424242",
+              "status": "unknown",
+              "artifact_path": str(report_path),
+              "repro_command": "./scripts/run_perf_e2e.sh --bench raptorq_benchmark --bench phase0_baseline --seed 424242 --compare baselines/baseline_latest.json --metric median_ns --max-regression-pct 10 --timeout 1200",
+          }
+          if report_path.exists():
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+              bench_failures = [
+                  b["name"] for b in report.get("benchmarks", []) if b.get("exit_code", 1) != 0
+              ]
+              compare_exit = int(report.get("baseline", {}).get("compare_exit", 1))
+              summary["bench_failures"] = bench_failures
+              summary["compare_exit"] = compare_exit
+              summary["status"] = "pass" if not bench_failures and compare_exit == 0 else "fail"
+          summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+          PY
+
+          if [[ "$perf_rc" -ne 0 ]]; then
+            echo "::error::RAPTORQ perf smoke regression gate failed (exit ${perf_rc})"
+            exit "$perf_rc"
+          fi
 
       - name: E2E scenario-matrix completeness gate (D4)
         run: |
