@@ -1678,4 +1678,26 @@ mod tests {
 
         assert_eq!(result.minimized_len, 1);
     }
+
+    // =========================================================================
+    // Wave 59 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn diagnostic_config_debug_clone() {
+        let cfg = DiagnosticConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("DiagnosticConfig"), "{dbg}");
+        let cloned = cfg.clone();
+        assert_eq!(cloned.context_before, 10);
+    }
+
+    #[test]
+    fn affected_entities_debug_clone_default() {
+        let ae = AffectedEntities::default();
+        let dbg = format!("{ae:?}");
+        assert!(dbg.contains("AffectedEntities"), "{dbg}");
+        let cloned = ae.clone();
+        assert!(cloned.tasks.is_empty());
+    }
 }

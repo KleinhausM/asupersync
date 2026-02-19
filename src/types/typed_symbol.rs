@@ -1220,4 +1220,19 @@ mod tests {
             assert_eq!(format, recovered);
         }
     }
+
+    // =========================================================================
+    // Wave 59 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn serialization_format_debug_clone_copy_eq() {
+        let fmt = SerializationFormat::Json;
+        let dbg = format!("{fmt:?}");
+        assert!(dbg.contains("Json"), "{dbg}");
+        let copied = fmt;
+        let cloned = fmt.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(fmt, SerializationFormat::Bincode);
+    }
 }

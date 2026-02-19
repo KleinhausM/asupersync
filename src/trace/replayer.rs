@@ -920,4 +920,28 @@ mod tests {
         assert_eq!(e1, e2);
         assert_eq!(replayer.current_index(), 0);
     }
+
+    // =========================================================================
+    // Wave 59 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn replay_mode_debug_clone_eq_default() {
+        let mode = ReplayMode::default();
+        let dbg = format!("{mode:?}");
+        assert!(dbg.contains("Run"), "{dbg}");
+        let cloned = mode.clone();
+        assert_eq!(mode, cloned);
+        assert_ne!(mode, ReplayMode::Step);
+    }
+
+    #[test]
+    fn breakpoint_debug_clone_eq() {
+        let bp = Breakpoint::Tick(42);
+        let dbg = format!("{bp:?}");
+        assert!(dbg.contains("Tick"), "{dbg}");
+        let cloned = bp.clone();
+        assert_eq!(bp, cloned);
+        assert_ne!(bp, Breakpoint::EventIndex(7));
+    }
 }

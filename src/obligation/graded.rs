@@ -1308,4 +1308,44 @@ mod tests {
 
         crate::test_complete!("all_four_token_kinds");
     }
+
+    // =========================================================================
+    // Wave 59 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn resolution_debug_clone_copy_eq() {
+        let r = Resolution::Commit;
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("Commit"), "{dbg}");
+        let copied = r;
+        let cloned = r.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(r, Resolution::Abort);
+    }
+
+    #[test]
+    fn resolved_proof_debug_clone_eq() {
+        let rp = ResolvedProof {
+            kind: ObligationKind::SendPermit,
+            resolution: Resolution::Commit,
+        };
+        let dbg = format!("{rp:?}");
+        assert!(dbg.contains("ResolvedProof"), "{dbg}");
+        let cloned = rp.clone();
+        assert_eq!(rp, cloned);
+    }
+
+    #[test]
+    fn scope_proof_debug_clone() {
+        let sp = ScopeProof {
+            label: "test".to_string(),
+            total_reserved: 5,
+            total_resolved: 5,
+        };
+        let dbg = format!("{sp:?}");
+        assert!(dbg.contains("ScopeProof"), "{dbg}");
+        let cloned = sp.clone();
+        assert_eq!(cloned.label, "test");
+    }
 }
