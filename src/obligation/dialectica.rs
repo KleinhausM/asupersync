@@ -1382,4 +1382,49 @@ mod tests {
         crate::assert_with_log!(count >= 1, "duplicate reserve violation", true, count >= 1);
         crate::test_complete!("duplicate_reserve_detected");
     }
+
+    #[test]
+    fn dialectica_contract_debug_clone_copy_eq() {
+        let c = DialecticaContract::ExhaustiveResolution;
+        let dbg = format!("{:?}", c);
+        assert!(dbg.contains("ExhaustiveResolution"));
+
+        let c2 = c.clone();
+        assert_eq!(c, c2);
+
+        let c3 = c;
+        assert_eq!(c, c3);
+
+        assert_ne!(
+            DialecticaContract::ExhaustiveResolution,
+            DialecticaContract::NoPartialCommit
+        );
+    }
+
+    #[test]
+    fn contract_checker_debug_default() {
+        let cc = ContractChecker::default();
+        let dbg = format!("{:?}", cc);
+        assert!(dbg.contains("ContractChecker"));
+
+        let cc2 = ContractChecker::new();
+        let dbg2 = format!("{:?}", cc2);
+        assert!(dbg2.contains("ContractChecker"));
+    }
+
+    #[test]
+    fn dialectica_morphism_debug_clone_copy_eq() {
+        let m = DialecticaMorphism::new(ObligationKind::SendPermit);
+        let dbg = format!("{:?}", m);
+        assert!(dbg.contains("DialecticaMorphism"));
+
+        let m2 = m.clone();
+        assert_eq!(m, m2);
+
+        let m3 = m;
+        assert_eq!(m, m3);
+
+        assert!(!m.forward_taken);
+        assert!(!m.backward_taken);
+    }
 }

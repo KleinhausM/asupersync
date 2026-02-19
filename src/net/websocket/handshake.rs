@@ -998,4 +998,53 @@ mod tests {
             .unwrap();
         assert_eq!(decoded.len(), 16);
     }
+
+    #[test]
+    fn ws_url_debug_clone_eq() {
+        let u = WsUrl {
+            host: "example.com".into(),
+            port: 80,
+            path: "/chat".into(),
+            tls: false,
+        };
+        let dbg = format!("{:?}", u);
+        assert!(dbg.contains("WsUrl"));
+        assert!(dbg.contains("example.com"));
+
+        let u2 = u.clone();
+        assert_eq!(u, u2);
+
+        let u3 = WsUrl {
+            host: "other.com".into(),
+            port: 443,
+            path: "/".into(),
+            tls: true,
+        };
+        assert_ne!(u, u3);
+    }
+
+    #[test]
+    fn server_handshake_debug_clone_default() {
+        let s = ServerHandshake::default();
+        let dbg = format!("{:?}", s);
+        assert!(dbg.contains("ServerHandshake"));
+
+        let s2 = s.clone();
+        let dbg2 = format!("{:?}", s2);
+        assert_eq!(dbg, dbg2);
+    }
+
+    #[test]
+    fn http_request_debug_clone() {
+        let r = HttpRequest::parse(
+            b"GET /test HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        )
+        .unwrap();
+        let dbg = format!("{:?}", r);
+        assert!(dbg.contains("HttpRequest"));
+
+        let r2 = r.clone();
+        assert_eq!(r2.method, "GET");
+        assert_eq!(r2.path, "/test");
+    }
 }

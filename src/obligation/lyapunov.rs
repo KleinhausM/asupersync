@@ -2234,4 +2234,69 @@ mod tests {
 
         crate::test_complete!("lab_quiescence_snapshot_zero_with_obligations");
     }
+
+    #[test]
+    fn potential_weights_debug_clone_copy_default() {
+        let w = PotentialWeights::default();
+        let dbg = format!("{:?}", w);
+        assert!(dbg.contains("PotentialWeights"));
+
+        let w2 = w.clone();
+        assert!((w2.w_tasks - 1.0).abs() < f64::EPSILON);
+
+        // Copy
+        let w3 = w;
+        assert!((w3.w_obligation_age - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn scheduling_suggestion_debug_clone_copy_eq() {
+        let s = SchedulingSuggestion::DrainObligations;
+        let dbg = format!("{:?}", s);
+        assert!(dbg.contains("DrainObligations"));
+
+        let s2 = s.clone();
+        assert_eq!(s, s2);
+
+        let s3 = s;
+        assert_eq!(s, s3);
+
+        assert_ne!(
+            SchedulingSuggestion::DrainObligations,
+            SchedulingSuggestion::MeetDeadlines
+        );
+    }
+
+    #[test]
+    fn potential_record_debug_clone() {
+        let snap = StateSnapshot {
+            time: Time::ZERO,
+            live_tasks: 0,
+            pending_obligations: 0,
+            obligation_age_sum_ns: 0,
+            draining_regions: 0,
+            deadline_pressure: 0.0,
+            pending_send_permits: 0,
+            pending_acks: 0,
+            pending_leases: 0,
+            pending_io_ops: 0,
+            cancel_requested_tasks: 0,
+            cancelling_tasks: 0,
+            finalizing_tasks: 0,
+            ready_queue_depth: 0,
+        };
+        let rec = PotentialRecord {
+            snapshot: snap,
+            total: 0.0,
+            task_component: 0.0,
+            obligation_component: 0.0,
+            region_component: 0.0,
+            deadline_component: 0.0,
+        };
+        let dbg = format!("{:?}", rec);
+        assert!(dbg.contains("PotentialRecord"));
+
+        let rec2 = rec.clone();
+        assert!(rec2.is_zero());
+    }
 }

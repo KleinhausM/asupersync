@@ -1221,4 +1221,50 @@ mod tests {
         assert_eq!(exec.coordination_barrier_count(), 2); // Commit + Release
         assert_eq!(exec.coordination_free_batch_count(), 2); // [Reserve,Send] + [Acquire,Renew]
     }
+
+    #[test]
+    fn saga_op_kind_debug_clone_copy_eq_hash() {
+        let op = SagaOpKind::Reserve;
+        let dbg = format!("{:?}", op);
+        assert!(dbg.contains("Reserve"));
+
+        let op2 = op.clone();
+        assert_eq!(op, op2);
+
+        let op3 = op;
+        assert_eq!(op, op3);
+
+        assert_ne!(SagaOpKind::Reserve, SagaOpKind::Commit);
+
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(SagaOpKind::Reserve);
+        set.insert(SagaOpKind::Send);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn saga_step_debug_clone() {
+        let s = SagaStep::new(SagaOpKind::Acquire, "lease");
+        let dbg = format!("{:?}", s);
+        assert!(dbg.contains("SagaStep"));
+
+        let s2 = s.clone();
+        assert_eq!(s2.label, "lease");
+        assert_eq!(s2.op, SagaOpKind::Acquire);
+    }
+
+    #[test]
+    fn step_result_debug_clone_eq() {
+        let r = StepResult {
+            label: "r1".into(),
+            op: SagaOpKind::Reserve,
+            state: LatticeState::Reserved,
+        };
+        let dbg = format!("{:?}", r);
+        assert!(dbg.contains("StepResult"));
+
+        let r2 = r.clone();
+        assert_eq!(r, r2);
+    }
 }
