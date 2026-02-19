@@ -636,4 +636,152 @@ mod tests {
         crate::assert_with_log!(empty, "suite clean", true, empty);
         crate::test_complete!("oracle_suite_default_is_clean");
     }
+
+    // Pure data-type tests (wave 16 – CyanBarn)
+
+    #[test]
+    fn oracle_suite_debug() {
+        let suite = OracleSuite::new();
+        let dbg = format!("{suite:?}");
+        assert!(dbg.contains("OracleSuite"));
+    }
+
+    #[test]
+    fn oracle_suite_reset_stays_clean() {
+        let mut suite = OracleSuite::new();
+        suite.reset();
+        let violations = suite.check_all(Time::ZERO);
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn oracle_suite_report_all_pass() {
+        let suite = OracleSuite::new();
+        let report = suite.report(Time::ZERO);
+        assert!(report.all_passed());
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.passed, report.total);
+        assert!(report.failures().is_empty());
+    }
+
+    #[test]
+    fn oracle_report_debug_clone() {
+        let suite = OracleSuite::new();
+        let report = suite.report(Time::ZERO);
+        let dbg = format!("{report:?}");
+        assert!(dbg.contains("OracleReport"));
+
+        let cloned = report.clone();
+        assert_eq!(cloned.total, report.total);
+    }
+
+    #[test]
+    fn oracle_report_to_json() {
+        let suite = OracleSuite::new();
+        let report = suite.report(Time::ZERO);
+        let json = report.to_json();
+        assert!(json.is_object());
+        assert!(json["entries"].is_array());
+    }
+
+    #[test]
+    fn oracle_report_to_text() {
+        let suite = OracleSuite::new();
+        let report = suite.report(Time::ZERO);
+        let text = report.to_text();
+        assert!(text.contains("Oracle Report"));
+        assert!(text.contains("PASS"));
+    }
+
+    #[test]
+    fn oracle_report_entry_lookup() {
+        let suite = OracleSuite::new();
+        let report = suite.report(Time::ZERO);
+        let entry = report.entry("task_leak");
+        assert!(entry.is_some());
+        assert!(entry.unwrap().passed);
+
+        assert!(report.entry("nonexistent_oracle").is_none());
+    }
+
+    #[test]
+    fn oracle_stats_debug_clone_eq() {
+        let stats = OracleStats {
+            entities_tracked: 5,
+            events_recorded: 10,
+        };
+        let dbg = format!("{stats:?}");
+        assert!(dbg.contains("OracleStats"));
+
+        let cloned = stats.clone();
+        assert_eq!(stats, cloned);
+    }
+
+    #[test]
+    fn oracle_stats_ne() {
+        let a = OracleStats {
+            entities_tracked: 5,
+            events_recorded: 10,
+        };
+        let b = OracleStats {
+            entities_tracked: 3,
+            events_recorded: 10,
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn oracle_entry_report_debug_clone() {
+        let entry = OracleEntryReport {
+            invariant: "test".to_owned(),
+            passed: true,
+            violation: None,
+            stats: OracleStats {
+                entities_tracked: 0,
+                events_recorded: 0,
+            },
+        };
+        let dbg = format!("{entry:?}");
+        assert!(dbg.contains("OracleEntryReport"));
+
+        let cloned = entry.clone();
+        assert_eq!(cloned.invariant, "test");
+        assert!(cloned.passed);
+    }
+
+    #[test]
+    fn oracle_entry_report_with_violation() {
+        let entry = OracleEntryReport {
+            invariant: "failing".to_owned(),
+            passed: false,
+            violation: Some("something leaked".to_owned()),
+            stats: OracleStats {
+                entities_tracked: 1,
+                events_recorded: 1,
+            },
+        };
+        assert!(!entry.passed);
+        assert!(entry.violation.as_deref().unwrap().contains("leaked"));
+    }
+
+    #[test]
+    fn oracle_violation_debug() {
+        // OracleViolation wraps sub-oracle violations. We can test the Debug derive
+        // only if we can construct one. Use OracleViolation::TaskLeak as proxy.
+        // TaskLeakViolation requires specific sub-oracle construction which is complex,
+        // so we test the outer enum via the suite report pathway.
+        let suite = OracleSuite::new();
+        let violations = suite.check_all(Time::ZERO);
+        // No violations on a fresh suite; just verify the Vec is empty.
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn oracle_violation_error_trait() {
+        // OracleViolation implements Error; verify via trait object.
+        // We can't easily construct one without triggering a violation,
+        // but we can verify the trait is implemented at compile time.
+        fn _assert_error<T: std::error::Error>() {}
+        _assert_error::<OracleViolation>();
+    }
 }

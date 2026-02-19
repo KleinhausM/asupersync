@@ -709,4 +709,150 @@ mod tests {
         assert_eq!(report.minimized_count, 4);
         assert!(report.is_minimal);
     }
+
+    // Pure data-type tests (wave 16 – CyanBarn)
+
+    #[test]
+    fn scenario_element_debug() {
+        let elem = ScenarioElement::AdvanceTime { nanos: 100 };
+        let dbg = format!("{elem:?}");
+        assert!(dbg.contains("AdvanceTime"));
+    }
+
+    #[test]
+    fn scenario_element_clone_eq() {
+        let a = ScenarioElement::CreateRegion {
+            region_idx: 1,
+            parent_idx: 0,
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn scenario_element_ne() {
+        let a = ScenarioElement::AdvanceTime { nanos: 100 };
+        let b = ScenarioElement::AdvanceTime { nanos: 200 };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn scenario_element_display_all() {
+        let cases: Vec<ScenarioElement> = vec![
+            ScenarioElement::CreateRegion {
+                region_idx: 1,
+                parent_idx: 0,
+            },
+            ScenarioElement::SpawnTask {
+                task_idx: 5,
+                region_idx: 2,
+                lane: 3,
+            },
+            ScenarioElement::CreateObligation {
+                task_idx: 1,
+                region_idx: 0,
+                kind: ObligationKind::SendPermit,
+                commit: true,
+                is_late: false,
+            },
+            ScenarioElement::CreateObligation {
+                task_idx: 2,
+                region_idx: 0,
+                kind: ObligationKind::SendPermit,
+                commit: false,
+                is_late: true,
+            },
+            ScenarioElement::AdvanceTime { nanos: 1000 },
+            ScenarioElement::CancelRegion { region_idx: 3 },
+        ];
+
+        let displays: Vec<String> = cases.iter().map(|e| e.to_string()).collect();
+        assert!(displays[0].contains("create_region"));
+        assert!(displays[1].contains("spawn_task"));
+        assert!(displays[2].contains("obligation"));
+        assert!(displays[2].contains("commit"));
+        assert!(displays[3].contains("abort"));
+        assert!(displays[3].contains("LATE"));
+        assert!(displays[4].contains("advance_time"));
+        assert!(displays[5].contains("cancel_region"));
+    }
+
+    #[test]
+    fn scenario_element_region_idx() {
+        assert_eq!(
+            ScenarioElement::CreateRegion {
+                region_idx: 5,
+                parent_idx: 0
+            }
+            .region_idx(),
+            Some(5)
+        );
+        assert_eq!(
+            ScenarioElement::SpawnTask {
+                task_idx: 0,
+                region_idx: 3,
+                lane: 0
+            }
+            .region_idx(),
+            Some(3)
+        );
+        assert_eq!(
+            ScenarioElement::CancelRegion { region_idx: 7 }.region_idx(),
+            Some(7)
+        );
+        assert_eq!(
+            ScenarioElement::AdvanceTime { nanos: 100 }.region_idx(),
+            None
+        );
+    }
+
+    #[test]
+    fn step_kind_debug_clone_copy_eq() {
+        let kind = StepKind::TopDownPrune;
+        let cloned = kind.clone();
+        let copied = kind;
+        assert_eq!(cloned, copied);
+        assert_eq!(kind, StepKind::TopDownPrune);
+        assert_ne!(kind, StepKind::BottomUpRemove);
+    }
+
+    #[test]
+    fn step_kind_display_all() {
+        assert_eq!(StepKind::TopDownPrune.to_string(), "top_down_prune");
+        assert_eq!(StepKind::BottomUpRemove.to_string(), "bottom_up_remove");
+        assert_eq!(StepKind::MinimalityCheck.to_string(), "minimality_check");
+    }
+
+    #[test]
+    fn minimization_step_debug_clone() {
+        let step = MinimizationStep {
+            kind: StepKind::BottomUpRemove,
+            events_remaining: 10,
+            events_removed: 3,
+            replay_result: true,
+            replay_time_ms: 42,
+        };
+        let dbg = format!("{step:?}");
+        assert!(dbg.contains("MinimizationStep"));
+
+        let cloned = step.clone();
+        assert_eq!(cloned.events_remaining, 10);
+        assert_eq!(cloned.replay_time_ms, 42);
+    }
+
+    #[test]
+    fn minimization_report_debug() {
+        let elems = make_scenario(5, 1);
+        let report = TraceMinimizer::minimize(&elems, leak_checker(1));
+        let dbg = format!("{report:?}");
+        assert!(dbg.contains("MinimizationReport"));
+    }
+
+    #[test]
+    fn minimization_report_minimized_elements() {
+        let elems = make_scenario(5, 1);
+        let report = TraceMinimizer::minimize(&elems, leak_checker(1));
+        let minimized = report.minimized_elements();
+        assert_eq!(minimized.len(), report.minimized_count);
+    }
 }

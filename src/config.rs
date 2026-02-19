@@ -1211,4 +1211,203 @@ default_timeout_ms = 5000
         let err = ConfigError::InvalidSampleRate(1.5);
         assert!(format!("{err}").contains("sample_rate"));
     }
+
+    // Pure data-type tests (wave 16 – CyanBarn)
+
+    #[test]
+    fn config_error_debug() {
+        let err = ConfigError::InvalidRepairOverhead;
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("InvalidRepairOverhead"));
+    }
+
+    #[test]
+    fn config_error_display_io() {
+        let err = ConfigError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
+        assert!(err.to_string().contains("I/O"));
+    }
+
+    #[test]
+    fn config_error_display_parse() {
+        let err = ConfigError::Parse("bad value".into());
+        assert!(err.to_string().contains("parse error"));
+    }
+
+    #[test]
+    fn config_error_display_invalid_override() {
+        let err = ConfigError::InvalidOverride("BAD_KEY".into());
+        assert!(err.to_string().contains("BAD_KEY"));
+    }
+
+    #[test]
+    fn config_error_source() {
+        use std::error::Error;
+
+        let err = ConfigError::InvalidRepairOverhead;
+        assert!(err.source().is_none());
+
+        // ConfigError has a blanket Error impl with no source override.
+        let err =
+            ConfigError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn config_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let config_err = ConfigError::from(io_err);
+        assert!(matches!(config_err, ConfigError::Io(_)));
+    }
+
+    #[test]
+    fn raptorq_config_debug_clone() {
+        let config = RaptorQConfig::default();
+        let dbg = format!("{config:?}");
+        assert!(dbg.contains("RaptorQConfig"));
+
+        let cloned = config.clone();
+        assert_eq!(cloned.encoding.symbol_size, config.encoding.symbol_size);
+    }
+
+    #[test]
+    fn encoding_config_default() {
+        let enc = EncodingConfig::default();
+        assert!((enc.repair_overhead - 1.05).abs() < f64::EPSILON);
+        assert_eq!(enc.symbol_size, 256);
+        assert_eq!(enc.encoding_parallelism, 2);
+    }
+
+    #[test]
+    fn transport_config_default() {
+        let tc = TransportConfig::default();
+        assert_eq!(tc.max_paths, 4);
+        assert_eq!(tc.max_symbols_in_flight, 256);
+    }
+
+    #[test]
+    fn backoff_config_debug_clone_default() {
+        let bc = BackoffConfig::default();
+        let dbg = format!("{bc:?}");
+        assert!(dbg.contains("BackoffConfig"));
+
+        let cloned = bc.clone();
+        assert_eq!(cloned.initial_delay, Duration::from_millis(100));
+        assert_eq!(cloned.max_delay, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn adaptive_config_debug_clone_default() {
+        let ac = AdaptiveConfig::default();
+        let dbg = format!("{ac:?}");
+        assert!(dbg.contains("AdaptiveConfig"));
+
+        let cloned = ac.clone();
+        assert_eq!(cloned.min_samples, 16);
+    }
+
+    #[test]
+    fn path_selection_strategy_debug_clone() {
+        let s = PathSelectionStrategy::RoundRobin;
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("RoundRobin"));
+
+        let s = PathSelectionStrategy::Adaptive(AdaptiveConfig::default());
+        let cloned = s.clone();
+        let dbg = format!("{cloned:?}");
+        assert!(dbg.contains("Adaptive"));
+    }
+
+    #[test]
+    fn resource_config_debug_clone_default() {
+        let rc = ResourceConfig::default();
+        let dbg = format!("{rc:?}");
+        assert!(dbg.contains("ResourceConfig"));
+
+        let cloned = rc.clone();
+        assert_eq!(cloned.max_encoding_ops, 8);
+    }
+
+    #[test]
+    fn timeout_config_debug_clone_default() {
+        let tc = TimeoutConfig::default();
+        let dbg = format!("{tc:?}");
+        assert!(dbg.contains("TimeoutConfig"));
+
+        let cloned = tc.clone();
+        assert_eq!(cloned.default_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn security_config_debug_clone_default() {
+        let sc = SecurityConfig::default();
+        let dbg = format!("{sc:?}");
+        assert!(dbg.contains("SecurityConfig"));
+
+        let cloned = sc.clone();
+        assert!(cloned.reject_unauthenticated);
+        assert!(cloned.auth_key_seed.is_none());
+    }
+
+    #[test]
+    fn server_profile_debug_clone_copy_eq() {
+        let p = ServerProfile::Development;
+        let cloned = p.clone();
+        let copied = p;
+        assert_eq!(cloned, copied);
+        assert_ne!(p, ServerProfile::Production);
+    }
+
+    #[test]
+    fn runtime_profile_custom() {
+        let config = RaptorQConfig::default();
+        let profile = RuntimeProfile::Custom(Box::new(config.clone()));
+        let expanded = profile.to_config();
+        assert_eq!(expanded.encoding.symbol_size, config.encoding.symbol_size);
+    }
+
+    #[test]
+    fn runtime_profile_debug_clone() {
+        let p = RuntimeProfile::Development;
+        let dbg = format!("{p:?}");
+        assert!(dbg.contains("Development"));
+
+        let cloned = p.clone();
+        let dbg2 = format!("{cloned:?}");
+        assert!(dbg2.contains("Development"));
+    }
+
+    #[test]
+    fn config_loader_debug_clone_default() {
+        let loader = ConfigLoader::new();
+        let dbg = format!("{loader:?}");
+        assert!(dbg.contains("ConfigLoader"));
+
+        let cloned = loader.clone();
+        let dbg2 = format!("{cloned:?}");
+        assert!(dbg2.contains("ConfigLoader"));
+
+        let default_loader = ConfigLoader::default();
+        let dbg3 = format!("{default_loader:?}");
+        assert!(dbg3.contains("ConfigLoader"));
+    }
+
+    #[test]
+    fn config_loader_builder_chain() {
+        let loader = ConfigLoader::new()
+            .profile(RuntimeProfile::Testing)
+            .override_value("encoding.symbol_size", "128");
+
+        let dbg = format!("{loader:?}");
+        assert!(dbg.contains("Testing"));
+    }
+
+    #[test]
+    fn server_config_debug_clone() {
+        let config = ServerConfig::default();
+        let dbg = format!("{config:?}");
+        assert!(dbg.contains("ServerConfig"));
+
+        let cloned = config.clone();
+        assert_eq!(cloned.bind_addr, config.bind_addr);
+    }
 }
