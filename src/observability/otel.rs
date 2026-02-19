@@ -1091,9 +1091,9 @@ mod tests {
     fn metric_names(finished: &[ResourceMetrics]) -> HashSet<String> {
         let mut names = HashSet::new();
         for resource_metrics in finished {
-            for scope_metrics in &resource_metrics.scope_metrics {
-                for metric in &scope_metrics.metrics {
-                    names.insert(metric.name.to_string());
+            for scope_metrics in resource_metrics.scope_metrics() {
+                for metric in scope_metrics.metrics() {
+                    names.insert(metric.name().to_string());
                 }
             }
         }
@@ -1443,5 +1443,113 @@ mod exporter_tests {
     fn export_error_display() {
         let err = ExportError::new("test error");
         assert!(err.to_string().contains("test error"));
+    }
+
+    // Pure data-type tests (wave 38 – CyanBarn)
+
+    #[test]
+    fn cardinality_overflow_debug_clone_copy_eq_default() {
+        let overflow = CardinalityOverflow::default();
+        assert_eq!(overflow, CardinalityOverflow::Drop);
+        let dbg = format!("{overflow:?}");
+        assert!(dbg.contains("Drop"));
+
+        let aggregate = CardinalityOverflow::Aggregate;
+        let cloned = aggregate;
+        assert_eq!(cloned, CardinalityOverflow::Aggregate);
+        assert_ne!(aggregate, CardinalityOverflow::Warn);
+
+        let warn = CardinalityOverflow::Warn;
+        let copied = warn;
+        assert_eq!(copied, warn);
+    }
+
+    #[test]
+    fn metrics_config_debug_clone_default() {
+        let config = MetricsConfig::default();
+        assert_eq!(config.max_cardinality, 1000);
+        assert_eq!(config.overflow_strategy, CardinalityOverflow::Drop);
+        assert!(config.drop_labels.is_empty());
+        assert!(config.sampling.is_none());
+
+        let dbg = format!("{config:?}");
+        assert!(dbg.contains("MetricsConfig"));
+
+        let cloned = config.clone();
+        assert_eq!(cloned.max_cardinality, 1000);
+    }
+
+    #[test]
+    fn sampling_config_debug_clone_default() {
+        let config = SamplingConfig::default();
+        assert!((config.sample_rate - 1.0).abs() < f64::EPSILON);
+        assert!(config.sampled_metrics.is_empty());
+
+        let dbg = format!("{config:?}");
+        assert!(dbg.contains("SamplingConfig"));
+
+        let cloned = config.clone();
+        assert!((cloned.sample_rate - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn metrics_snapshot_debug_clone_default() {
+        let snapshot = MetricsSnapshot::default();
+        assert!(snapshot.counters.is_empty());
+        assert!(snapshot.gauges.is_empty());
+        assert!(snapshot.histograms.is_empty());
+
+        let dbg = format!("{snapshot:?}");
+        assert!(dbg.contains("MetricsSnapshot"));
+
+        let mut s = MetricsSnapshot::new();
+        s.add_counter("c", vec![], 1);
+        let cloned = s.clone();
+        assert_eq!(cloned.counters.len(), 1);
+    }
+
+    #[test]
+    fn export_error_debug_clone() {
+        let err = ExportError::new("something failed");
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("ExportError"));
+
+        let cloned = err.clone();
+        assert_eq!(cloned.to_string(), err.to_string());
+    }
+
+    #[test]
+    fn stdout_exporter_debug_default() {
+        let exporter = StdoutExporter::default();
+        let dbg = format!("{exporter:?}");
+        assert!(dbg.contains("StdoutExporter"));
+
+        let with_prefix = StdoutExporter::with_prefix("[test] ");
+        let dbg2 = format!("{with_prefix:?}");
+        assert!(dbg2.contains("StdoutExporter"));
+    }
+
+    #[test]
+    fn null_exporter_debug_default() {
+        let exporter = NullExporter::default();
+        let dbg = format!("{exporter:?}");
+        assert!(dbg.contains("NullExporter"));
+    }
+
+    #[test]
+    fn multi_exporter_debug_default() {
+        let exporter = MultiExporter::default();
+        assert!(exporter.is_empty());
+        assert_eq!(exporter.len(), 0);
+        let dbg = format!("{exporter:?}");
+        assert!(dbg.contains("MultiExporter"));
+    }
+
+    #[test]
+    fn in_memory_exporter_debug_default() {
+        let exporter = InMemoryExporter::default();
+        assert_eq!(exporter.total_metrics(), 0);
+        let dbg = format!("{exporter:?}");
+        assert!(dbg.contains("InMemoryExporter"));
     }
 }

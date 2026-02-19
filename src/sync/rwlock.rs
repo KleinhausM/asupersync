@@ -1677,4 +1677,61 @@ mod tests {
 
         crate::test_complete!("rwlock_poison_propagation");
     }
+
+    // Pure data-type tests (wave 38 – CyanBarn)
+
+    #[test]
+    fn rwlock_error_debug_clone_copy_eq_display() {
+        let poisoned = RwLockError::Poisoned;
+        let cancelled = RwLockError::Cancelled;
+
+        let dbg = format!("{poisoned:?}");
+        assert!(dbg.contains("Poisoned"));
+
+        let cloned = poisoned;
+        assert_eq!(cloned, RwLockError::Poisoned);
+        assert_ne!(poisoned, cancelled);
+
+        assert!(poisoned.to_string().contains("poisoned"));
+        assert!(cancelled.to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn try_read_error_debug_clone_copy_eq_display() {
+        let locked = TryReadError::Locked;
+        let poisoned = TryReadError::Poisoned;
+
+        let dbg = format!("{locked:?}");
+        assert!(dbg.contains("Locked"));
+
+        let copied = locked;
+        assert_eq!(copied, TryReadError::Locked);
+        assert_ne!(locked, poisoned);
+
+        assert!(locked.to_string().contains("write-locked"));
+        assert!(poisoned.to_string().contains("poisoned"));
+    }
+
+    #[test]
+    fn try_write_error_debug_clone_copy_eq_display() {
+        let locked = TryWriteError::Locked;
+        let poisoned = TryWriteError::Poisoned;
+
+        let dbg = format!("{locked:?}");
+        assert!(dbg.contains("Locked"));
+
+        let copied = locked;
+        assert_eq!(copied, TryWriteError::Locked);
+        assert_ne!(locked, poisoned);
+
+        assert!(locked.to_string().contains("locked"));
+        assert!(poisoned.to_string().contains("poisoned"));
+    }
+
+    #[test]
+    fn rwlock_debug() {
+        let lock = RwLock::new(42_i32);
+        let dbg = format!("{lock:?}");
+        assert!(dbg.contains("RwLock"));
+    }
 }
