@@ -1368,7 +1368,7 @@ impl PgConnection {
                 }
                 b'D' => {
                     // DataRow
-                    if let (Some(ref cols), Some(ref indices)) = (&columns, &column_indices) {
+                    if let (Some(cols), Some(indices)) = (&columns, &column_indices) {
                         match self.parse_data_row(&data, cols) {
                             Ok(values) => {
                                 rows.push(PgRow {
@@ -2053,5 +2053,810 @@ mod tests {
             }
             other => panic!("expected Protocol error, got: {other}"),
         }
+    }
+
+    // ================================================================
+    // PgConnectOptions::parse edge cases
+    // ================================================================
+
+    #[test]
+    fn connect_options_postgresql_prefix() {
+        let opts = PgConnectOptions::parse("postgresql://alice@db.host:5433/prod").unwrap();
+        assert_eq!(opts.user, "alice");
+        assert_eq!(opts.password, None);
+        assert_eq!(opts.host, "db.host");
+        assert_eq!(opts.port, 5433);
+        assert_eq!(opts.database, "prod");
+    }
+
+    #[test]
+    fn connect_options_ipv6_host() {
+        let opts = PgConnectOptions::parse("postgres://user:pw@[::1]:5432/testdb").unwrap();
+        assert_eq!(opts.host, "::1");
+        assert_eq!(opts.port, 5432);
+        assert_eq!(opts.user, "user");
+        assert_eq!(opts.password, Some("pw".to_string()));
+    }
+
+    #[test]
+    fn connect_options_ipv6_default_port() {
+        let opts = PgConnectOptions::parse("postgres://[::1]/testdb").unwrap();
+        assert_eq!(opts.host, "::1");
+        assert_eq!(opts.port, 5432);
+    }
+
+    #[test]
+    fn connect_options_rejects_missing_scheme() {
+        let result = PgConnectOptions::parse("mysql://localhost/db");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PgError::InvalidUrl(msg) => {
+                assert!(msg.contains("postgres://"), "got: {msg}");
+            }
+            other => panic!("expected InvalidUrl, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn connect_options_rejects_missing_database() {
+        let result = PgConnectOptions::parse("postgres://localhost");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PgError::InvalidUrl(msg) => {
+                assert!(msg.contains("database"), "got: {msg}");
+            }
+            other => panic!("expected InvalidUrl, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn connect_options_default_port_no_port_specified() {
+        let opts = PgConnectOptions::parse("postgres://user@host/db").unwrap();
+        assert_eq!(opts.port, 5432);
+        assert_eq!(opts.host, "host");
+    }
+
+    // ================================================================
+    // PgValue accessor coverage
+    // ================================================================
+
+    #[test]
+    fn pg_value_null_is_null() {
+        assert!(PgValue::Null.is_null());
+        assert!(!PgValue::Bool(true).is_null());
+        assert!(!PgValue::Int4(0).is_null());
+        assert!(!PgValue::Text(String::new()).is_null());
+    }
+
+    #[test]
+    fn pg_value_as_bool_returns_none_for_wrong_type() {
+        assert_eq!(PgValue::Int4(1).as_bool(), None);
+        assert_eq!(PgValue::Null.as_bool(), None);
+        assert_eq!(PgValue::Text("true".to_string()).as_bool(), None);
+    }
+
+    #[test]
+    fn pg_value_as_i32_widens_from_i16() {
+        assert_eq!(PgValue::Int2(42).as_i32(), Some(42));
+        assert_eq!(PgValue::Int4(42).as_i32(), Some(42));
+        assert_eq!(PgValue::Int4(i32::MIN).as_i32(), Some(i32::MIN));
+        assert_eq!(PgValue::Int8(1).as_i32(), None);
+        assert_eq!(PgValue::Null.as_i32(), None);
+    }
+
+    #[test]
+    fn pg_value_as_i64_widens_from_smaller_ints() {
+        assert_eq!(PgValue::Int2(10).as_i64(), Some(10));
+        assert_eq!(PgValue::Int4(100).as_i64(), Some(100));
+        assert_eq!(PgValue::Int8(i64::MAX).as_i64(), Some(i64::MAX));
+        assert_eq!(PgValue::Float8(1.0).as_i64(), None);
+    }
+
+    #[test]
+    fn pg_value_as_f64_widens_from_f32() {
+        assert_eq!(PgValue::Float8(3.14).as_f64(), Some(3.14));
+        assert_eq!(PgValue::Float4(1.0).as_f64(), Some(1.0));
+        assert_eq!(PgValue::Int4(1).as_f64(), None);
+    }
+
+    #[test]
+    fn pg_value_as_str_returns_text_only() {
+        assert_eq!(PgValue::Text("hello".to_string()).as_str(), Some("hello"));
+        assert_eq!(PgValue::Int4(42).as_str(), None);
+        assert_eq!(PgValue::Null.as_str(), None);
+    }
+
+    #[test]
+    fn pg_value_as_bytes_returns_bytes_only() {
+        assert_eq!(
+            PgValue::Bytes(vec![1, 2, 3]).as_bytes(),
+            Some([1, 2, 3].as_slice())
+        );
+        assert_eq!(PgValue::Text("x".to_string()).as_bytes(), None);
+        assert_eq!(PgValue::Null.as_bytes(), None);
+    }
+
+    // ================================================================
+    // PgValue Display
+    // ================================================================
+
+    #[test]
+    fn pg_value_display_all_variants() {
+        assert_eq!(format!("{}", PgValue::Null), "NULL");
+        assert_eq!(format!("{}", PgValue::Bool(true)), "true");
+        assert_eq!(format!("{}", PgValue::Bool(false)), "false");
+        assert_eq!(format!("{}", PgValue::Int2(100)), "100");
+        assert_eq!(format!("{}", PgValue::Int4(-1)), "-1");
+        assert_eq!(
+            format!("{}", PgValue::Int8(999_999_999_999i64)),
+            "999999999999"
+        );
+        assert_eq!(format!("{}", PgValue::Text("abc".to_string())), "abc");
+        assert!(format!("{}", PgValue::Bytes(vec![1, 2])).contains("2 len"));
+    }
+
+    // ================================================================
+    // PgRow accessors
+    // ================================================================
+
+    fn make_test_row(names: &[&str], values: Vec<PgValue>) -> PgRow {
+        let columns: Vec<PgColumn> = names
+            .iter()
+            .map(|name| PgColumn {
+                name: name.to_string(),
+                table_oid: 0,
+                column_id: 0,
+                type_oid: oid::TEXT,
+                type_size: -1,
+                type_modifier: -1,
+                format_code: 0,
+            })
+            .collect();
+        let mut indices = BTreeMap::new();
+        for (i, name) in names.iter().enumerate() {
+            indices.insert(name.to_string(), i);
+        }
+        PgRow {
+            columns: Arc::new(columns),
+            column_indices: Arc::new(indices),
+            values,
+        }
+    }
+
+    #[test]
+    fn pg_row_get_valid_column() {
+        let row = make_test_row(
+            &["id", "name"],
+            vec![PgValue::Int4(1), PgValue::Text("alice".to_string())],
+        );
+        assert_eq!(row.get("id").unwrap(), &PgValue::Int4(1));
+        assert_eq!(
+            row.get("name").unwrap(),
+            &PgValue::Text("alice".to_string())
+        );
+    }
+
+    #[test]
+    fn pg_row_get_missing_column_returns_error() {
+        let row = make_test_row(&["id"], vec![PgValue::Int4(1)]);
+        match row.get("nonexistent").unwrap_err() {
+            PgError::ColumnNotFound(name) => assert_eq!(name, "nonexistent"),
+            other => panic!("expected ColumnNotFound, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn pg_row_get_idx_valid_and_out_of_bounds() {
+        let row = make_test_row(&["x"], vec![PgValue::Bool(true)]);
+        assert_eq!(row.get_idx(0).unwrap(), &PgValue::Bool(true));
+        assert!(row.get_idx(1).is_err());
+    }
+
+    #[test]
+    fn pg_row_typed_getters_match_and_mismatch() {
+        let row = make_test_row(
+            &["i", "b", "s", "big"],
+            vec![
+                PgValue::Int4(42),
+                PgValue::Bool(false),
+                PgValue::Text("hello".to_string()),
+                PgValue::Int8(99),
+            ],
+        );
+        assert_eq!(row.get_i32("i").unwrap(), 42);
+        assert_eq!(row.get_bool("b").unwrap(), false);
+        assert_eq!(row.get_str("s").unwrap(), "hello");
+        assert_eq!(row.get_i64("big").unwrap(), 99);
+
+        // Type mismatch: i32 on a bool column
+        match row.get_i32("b").unwrap_err() {
+            PgError::TypeConversion {
+                column, expected, ..
+            } => {
+                assert_eq!(column, "b");
+                assert_eq!(expected, "i32");
+            }
+            other => panic!("expected TypeConversion, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn pg_row_len_and_is_empty() {
+        let row = make_test_row(&["a", "b"], vec![PgValue::Null, PgValue::Null]);
+        assert_eq!(row.len(), 2);
+        assert!(!row.is_empty());
+
+        let empty_row = make_test_row(&[], vec![]);
+        assert_eq!(empty_row.len(), 0);
+        assert!(empty_row.is_empty());
+    }
+
+    #[test]
+    fn pg_row_columns_returns_metadata() {
+        let row = make_test_row(&["id", "name"], vec![PgValue::Null, PgValue::Null]);
+        let cols = row.columns();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].name, "id");
+        assert_eq!(cols[1].name, "name");
+    }
+
+    // ================================================================
+    // MessageBuffer construction
+    // ================================================================
+
+    #[test]
+    fn message_buffer_build_message_wire_format() {
+        let mut buf = MessageBuffer::new();
+        buf.write_byte(b'Q');
+        buf.write_cstring("SELECT 1");
+        let msg = buf.build_message(b'Q');
+        // byte 0: msg type 'Q'
+        assert_eq!(msg[0], b'Q');
+        // bytes 1-4: length = body_len + 4
+        let len = i32::from_be_bytes([msg[1], msg[2], msg[3], msg[4]]);
+        assert_eq!(len as usize, msg.len() - 1);
+    }
+
+    #[test]
+    fn message_buffer_startup_no_type_byte() {
+        let mut buf = MessageBuffer::new();
+        buf.write_i32(196608); // protocol version 3.0
+        buf.write_cstring("user");
+        buf.write_cstring("test");
+        buf.write_byte(0);
+        let msg = buf.build_startup_message();
+        // bytes 0-3: length (includes itself)
+        let len = i32::from_be_bytes([msg[0], msg[1], msg[2], msg[3]]);
+        assert_eq!(len as usize, msg.len());
+        // protocol version at bytes 4-7
+        let version = i32::from_be_bytes([msg[4], msg[5], msg[6], msg[7]]);
+        assert_eq!(version, 196608);
+    }
+
+    #[test]
+    fn message_buffer_write_i16_big_endian() {
+        let mut buf = MessageBuffer::new();
+        buf.write_i16(0x0102);
+        let inner = buf.into_inner();
+        assert_eq!(inner, vec![0x01, 0x02]);
+    }
+
+    #[test]
+    fn message_buffer_clear_resets() {
+        let mut buf = MessageBuffer::new();
+        buf.write_byte(0xFF);
+        buf.clear();
+        assert!(buf.into_inner().is_empty());
+    }
+
+    #[test]
+    fn message_buffer_with_capacity() {
+        let buf = MessageBuffer::with_capacity(1024);
+        assert!(buf.into_inner().is_empty());
+    }
+
+    // ================================================================
+    // Wire protocol: parse_row_description valid cases
+    // ================================================================
+
+    #[test]
+    fn parse_row_description_single_column() {
+        let conn = make_test_connection();
+        let mut data = Vec::new();
+        // num_fields = 1
+        data.extend_from_slice(&1i16.to_be_bytes());
+        // name: "id\0"
+        data.extend_from_slice(b"id\0");
+        // table_oid
+        data.extend_from_slice(&1234u32.to_be_bytes());
+        // column_id
+        data.extend_from_slice(&1i16.to_be_bytes());
+        // type_oid (INT4)
+        data.extend_from_slice(&(oid::INT4 as u32).to_be_bytes());
+        // type_size
+        data.extend_from_slice(&4i16.to_be_bytes());
+        // type_modifier
+        data.extend_from_slice(&(-1i32).to_be_bytes());
+        // format_code (text)
+        data.extend_from_slice(&0i16.to_be_bytes());
+
+        let (columns, indices) = conn.parse_row_description(&data).unwrap();
+        assert_eq!(columns.len(), 1);
+        assert_eq!(columns[0].name, "id");
+        assert_eq!(columns[0].type_oid, oid::INT4);
+        assert_eq!(columns[0].table_oid, 1234);
+        assert_eq!(columns[0].format_code, 0);
+        assert_eq!(*indices.get("id").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_row_description_multiple_columns() {
+        let conn = make_test_connection();
+        let mut data = Vec::new();
+        data.extend_from_slice(&2i16.to_be_bytes());
+        // Column 1: "name" TEXT
+        data.extend_from_slice(b"name\0");
+        data.extend_from_slice(&0u32.to_be_bytes()); // table_oid
+        data.extend_from_slice(&0i16.to_be_bytes()); // column_id
+        data.extend_from_slice(&(oid::TEXT as u32).to_be_bytes());
+        data.extend_from_slice(&(-1i16).to_be_bytes()); // type_size
+        data.extend_from_slice(&(-1i32).to_be_bytes()); // type_modifier
+        data.extend_from_slice(&0i16.to_be_bytes()); // format_code
+        // Column 2: "age" INT4
+        data.extend_from_slice(b"age\0");
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&0i16.to_be_bytes());
+        data.extend_from_slice(&(oid::INT4 as u32).to_be_bytes());
+        data.extend_from_slice(&4i16.to_be_bytes());
+        data.extend_from_slice(&(-1i32).to_be_bytes());
+        data.extend_from_slice(&0i16.to_be_bytes());
+
+        let (columns, indices) = conn.parse_row_description(&data).unwrap();
+        assert_eq!(columns.len(), 2);
+        assert_eq!(columns[0].name, "name");
+        assert_eq!(columns[1].name, "age");
+        assert_eq!(*indices.get("name").unwrap(), 0);
+        assert_eq!(*indices.get("age").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_row_description_zero_columns() {
+        let conn = make_test_connection();
+        let data: Vec<u8> = 0i16.to_be_bytes().to_vec();
+        let (columns, indices) = conn.parse_row_description(&data).unwrap();
+        assert!(columns.is_empty());
+        assert!(indices.is_empty());
+    }
+
+    // ================================================================
+    // Wire protocol: parse_data_row valid cases
+    // ================================================================
+
+    #[test]
+    fn parse_data_row_text_int4() {
+        let conn = make_test_connection();
+        let columns = vec![PgColumn {
+            name: "n".to_string(),
+            table_oid: 0,
+            column_id: 0,
+            type_oid: oid::INT4,
+            type_size: 4,
+            type_modifier: -1,
+            format_code: 0, // text
+        }];
+        let mut data = Vec::new();
+        data.extend_from_slice(&1i16.to_be_bytes()); // num_values
+        let val_bytes = b"42";
+        data.extend_from_slice(&(val_bytes.len() as i32).to_be_bytes());
+        data.extend_from_slice(val_bytes);
+
+        let values = conn.parse_data_row(&data, &columns).unwrap();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], PgValue::Int4(42));
+    }
+
+    #[test]
+    fn parse_data_row_null_value() {
+        let conn = make_test_connection();
+        let columns = vec![PgColumn {
+            name: "x".to_string(),
+            table_oid: 0,
+            column_id: 0,
+            type_oid: oid::TEXT,
+            type_size: -1,
+            type_modifier: -1,
+            format_code: 0,
+        }];
+        let mut data = Vec::new();
+        data.extend_from_slice(&1i16.to_be_bytes()); // num_values
+        data.extend_from_slice(&(-1i32).to_be_bytes()); // NULL
+
+        let values = conn.parse_data_row(&data, &columns).unwrap();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], PgValue::Null);
+    }
+
+    #[test]
+    fn parse_data_row_binary_int4() {
+        let conn = make_test_connection();
+        let columns = vec![PgColumn {
+            name: "n".to_string(),
+            table_oid: 0,
+            column_id: 0,
+            type_oid: oid::INT4,
+            type_size: 4,
+            type_modifier: -1,
+            format_code: 1, // binary
+        }];
+        let mut data = Vec::new();
+        data.extend_from_slice(&1i16.to_be_bytes());
+        data.extend_from_slice(&4i32.to_be_bytes()); // 4 bytes
+        data.extend_from_slice(&42i32.to_be_bytes()); // value = 42
+
+        let values = conn.parse_data_row(&data, &columns).unwrap();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], PgValue::Int4(42));
+    }
+
+    // ================================================================
+    // parse_text_value for each type OID
+    // ================================================================
+
+    #[test]
+    fn parse_text_value_bool() {
+        let conn = make_test_connection();
+        assert_eq!(
+            conn.parse_text_value(b"t", oid::BOOL).unwrap(),
+            PgValue::Bool(true)
+        );
+        assert_eq!(
+            conn.parse_text_value(b"f", oid::BOOL).unwrap(),
+            PgValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn parse_text_value_int2() {
+        let conn = make_test_connection();
+        assert_eq!(
+            conn.parse_text_value(b"32767", oid::INT2).unwrap(),
+            PgValue::Int2(32767)
+        );
+        assert_eq!(
+            conn.parse_text_value(b"-1", oid::INT2).unwrap(),
+            PgValue::Int2(-1)
+        );
+    }
+
+    #[test]
+    fn parse_text_value_int4() {
+        let conn = make_test_connection();
+        assert_eq!(
+            conn.parse_text_value(b"2147483647", oid::INT4).unwrap(),
+            PgValue::Int4(i32::MAX)
+        );
+    }
+
+    #[test]
+    fn parse_text_value_int8() {
+        let conn = make_test_connection();
+        assert_eq!(
+            conn.parse_text_value(b"9223372036854775807", oid::INT8)
+                .unwrap(),
+            PgValue::Int8(i64::MAX)
+        );
+    }
+
+    #[test]
+    fn parse_text_value_float4() {
+        let conn = make_test_connection();
+        let v = conn.parse_text_value(b"3.14", oid::FLOAT4).unwrap();
+        match v {
+            PgValue::Float4(f) => assert!((f - 3.14).abs() < 0.001),
+            other => panic!("expected Float4, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn parse_text_value_float8() {
+        let conn = make_test_connection();
+        assert_eq!(
+            conn.parse_text_value(b"2.718281828", oid::FLOAT8).unwrap(),
+            PgValue::Float8(2.718281828)
+        );
+    }
+
+    #[test]
+    fn parse_text_value_bytea_hex_format() {
+        let conn = make_test_connection();
+        let v = conn.parse_text_value(b"\\x48656c6c6f", oid::BYTEA).unwrap();
+        assert_eq!(v, PgValue::Bytes(b"Hello".to_vec()));
+    }
+
+    #[test]
+    fn parse_text_value_bytea_raw_fallback() {
+        let conn = make_test_connection();
+        let v = conn.parse_text_value(b"raw", oid::BYTEA).unwrap();
+        assert_eq!(v, PgValue::Bytes(b"raw".to_vec()));
+    }
+
+    #[test]
+    fn parse_text_value_unknown_oid_returns_text() {
+        let conn = make_test_connection();
+        let v = conn.parse_text_value(b"anything", 99999).unwrap();
+        assert_eq!(v, PgValue::Text("anything".to_string()));
+    }
+
+    #[test]
+    fn parse_text_value_oid_type_maps_to_int4() {
+        let conn = make_test_connection();
+        assert_eq!(
+            conn.parse_text_value(b"12345", oid::OID).unwrap(),
+            PgValue::Int4(12345)
+        );
+    }
+
+    #[test]
+    fn parse_text_value_invalid_int_returns_protocol_error() {
+        let conn = make_test_connection();
+        let result = conn.parse_text_value(b"notanumber", oid::INT4);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PgError::Protocol(msg) => assert!(msg.contains("invalid int4"), "got: {msg}"),
+            other => panic!("expected Protocol error, got: {other}"),
+        }
+    }
+
+    // ================================================================
+    // parse_binary_value for each type OID
+    // ================================================================
+
+    #[test]
+    fn parse_binary_value_bool() {
+        let conn = make_test_connection();
+        assert_eq!(
+            conn.parse_binary_value(&[1], oid::BOOL).unwrap(),
+            PgValue::Bool(true)
+        );
+        assert_eq!(
+            conn.parse_binary_value(&[0], oid::BOOL).unwrap(),
+            PgValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn parse_binary_value_int2() {
+        let conn = make_test_connection();
+        let v = conn
+            .parse_binary_value(&256i16.to_be_bytes(), oid::INT2)
+            .unwrap();
+        assert_eq!(v, PgValue::Int2(256));
+    }
+
+    #[test]
+    fn parse_binary_value_int4() {
+        let conn = make_test_connection();
+        let v = conn
+            .parse_binary_value(&(-1i32).to_be_bytes(), oid::INT4)
+            .unwrap();
+        assert_eq!(v, PgValue::Int4(-1));
+    }
+
+    #[test]
+    fn parse_binary_value_int8() {
+        let conn = make_test_connection();
+        let v = conn
+            .parse_binary_value(&i64::MAX.to_be_bytes(), oid::INT8)
+            .unwrap();
+        assert_eq!(v, PgValue::Int8(i64::MAX));
+    }
+
+    #[test]
+    fn parse_binary_value_float4() {
+        let conn = make_test_connection();
+        let v = conn
+            .parse_binary_value(&1.5f32.to_be_bytes(), oid::FLOAT4)
+            .unwrap();
+        assert_eq!(v, PgValue::Float4(1.5));
+    }
+
+    #[test]
+    fn parse_binary_value_float8() {
+        let conn = make_test_connection();
+        let v = conn
+            .parse_binary_value(&2.5f64.to_be_bytes(), oid::FLOAT8)
+            .unwrap();
+        assert_eq!(v, PgValue::Float8(2.5));
+    }
+
+    #[test]
+    fn parse_binary_value_bytea() {
+        let conn = make_test_connection();
+        let v = conn.parse_binary_value(&[0xDE, 0xAD], oid::BYTEA).unwrap();
+        assert_eq!(v, PgValue::Bytes(vec![0xDE, 0xAD]));
+    }
+
+    #[test]
+    fn parse_binary_value_unknown_oid_valid_utf8_returns_text() {
+        let conn = make_test_connection();
+        let v = conn.parse_binary_value(b"hello", 99999).unwrap();
+        assert_eq!(v, PgValue::Text("hello".to_string()));
+    }
+
+    #[test]
+    fn parse_binary_value_unknown_oid_invalid_utf8_returns_bytes() {
+        let conn = make_test_connection();
+        let v = conn.parse_binary_value(&[0xFF, 0xFE], 99999).unwrap();
+        assert_eq!(v, PgValue::Bytes(vec![0xFF, 0xFE]));
+    }
+
+    // ================================================================
+    // parse_error_response
+    // ================================================================
+
+    #[test]
+    fn parse_error_response_all_fields() {
+        let conn = make_test_connection();
+        let mut data = Vec::new();
+        // Code field
+        data.push(b'C');
+        data.extend_from_slice(b"42P01\0");
+        // Message field
+        data.push(b'M');
+        data.extend_from_slice(b"relation does not exist\0");
+        // Detail field
+        data.push(b'D');
+        data.extend_from_slice(b"Table \"users\" not found\0");
+        // Hint field
+        data.push(b'H');
+        data.extend_from_slice(b"Check table name\0");
+        // Terminator
+        data.push(0);
+
+        let err = conn.parse_error_response(&data).unwrap_err();
+        match err {
+            PgError::Server {
+                code,
+                message,
+                detail,
+                hint,
+            } => {
+                assert_eq!(code, "42P01");
+                assert_eq!(message, "relation does not exist");
+                assert_eq!(detail.as_deref(), Some("Table \"users\" not found"));
+                assert_eq!(hint.as_deref(), Some("Check table name"));
+            }
+            other => panic!("expected Server error, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn parse_error_response_minimal_fields() {
+        let conn = make_test_connection();
+        let mut data = Vec::new();
+        data.push(b'M');
+        data.extend_from_slice(b"syntax error\0");
+        data.push(0);
+
+        let err = conn.parse_error_response(&data).unwrap_err();
+        match err {
+            PgError::Server {
+                code,
+                message,
+                detail,
+                hint,
+            } => {
+                assert!(code.is_empty());
+                assert_eq!(message, "syntax error");
+                assert!(detail.is_none());
+                assert!(hint.is_none());
+            }
+            other => panic!("expected Server error, got: {other}"),
+        }
+    }
+
+    // ================================================================
+    // PgError Display coverage
+    // ================================================================
+
+    #[test]
+    fn pg_error_display_all_variants() {
+        let io_err = PgError::Io(io::Error::new(io::ErrorKind::BrokenPipe, "pipe"));
+        assert!(format!("{io_err}").contains("I/O error"));
+
+        let proto = PgError::Protocol("bad msg".to_string());
+        assert!(format!("{proto}").contains("protocol error"));
+        assert!(format!("{proto}").contains("bad msg"));
+
+        let auth = PgError::AuthenticationFailed("wrong pass".to_string());
+        assert!(format!("{auth}").contains("authentication failed"));
+
+        let server = PgError::Server {
+            code: "23505".to_string(),
+            message: "duplicate key".to_string(),
+            detail: Some("Key exists".to_string()),
+            hint: Some("Use upsert".to_string()),
+        };
+        let s = format!("{server}");
+        assert!(s.contains("23505"));
+        assert!(s.contains("duplicate key"));
+        assert!(s.contains("Key exists"));
+        assert!(s.contains("Use upsert"));
+
+        let server_no_extras = PgError::Server {
+            code: "42000".to_string(),
+            message: "error".to_string(),
+            detail: None,
+            hint: None,
+        };
+        let s = format!("{server_no_extras}");
+        assert!(s.contains("42000"));
+        assert!(!s.contains("detail"));
+        assert!(!s.contains("hint"));
+
+        let closed = PgError::ConnectionClosed;
+        assert!(format!("{closed}").contains("closed"));
+
+        let col = PgError::ColumnNotFound("foo".to_string());
+        assert!(format!("{col}").contains("foo"));
+
+        let tc = PgError::TypeConversion {
+            column: "bar".to_string(),
+            expected: "i32",
+            actual_oid: 25,
+        };
+        let s = format!("{tc}");
+        assert!(s.contains("bar"));
+        assert!(s.contains("i32"));
+        assert!(s.contains("25"));
+
+        let url = PgError::InvalidUrl("bad".to_string());
+        assert!(format!("{url}").contains("bad"));
+
+        let tls = PgError::TlsRequired;
+        assert!(format!("{tls}").contains("TLS"));
+
+        let txn = PgError::TransactionFinished;
+        assert!(format!("{txn}").contains("finished"));
+
+        let unsup = PgError::UnsupportedAuth("md5".to_string());
+        assert!(format!("{unsup}").contains("md5"));
+    }
+
+    #[test]
+    fn pg_error_source_io_only() {
+        use std::error::Error;
+        let io_err = PgError::Io(io::Error::new(io::ErrorKind::Other, "test"));
+        assert!(io_err.source().is_some());
+
+        let proto = PgError::Protocol("x".to_string());
+        assert!(proto.source().is_none());
+    }
+
+    // ================================================================
+    // hex::decode edge cases
+    // ================================================================
+
+    #[test]
+    fn hex_decode_uppercase() {
+        assert_eq!(
+            hex::decode("DEADBEEF").unwrap(),
+            vec![0xDE, 0xAD, 0xBE, 0xEF]
+        );
+    }
+
+    #[test]
+    fn hex_decode_mixed_case() {
+        assert_eq!(hex::decode("aAbBcC").unwrap(), vec![0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn hex_decode_invalid_char() {
+        assert!(hex::decode("ZZZZ").is_err());
+    }
+
+    #[test]
+    fn hex_decode_single_byte() {
+        assert_eq!(hex::decode("FF").unwrap(), vec![0xFF]);
     }
 }

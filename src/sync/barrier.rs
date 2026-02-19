@@ -433,6 +433,7 @@ mod tests {
     /// generations.  This is the most common real-world cancel pattern
     /// (e.g. `select!` drops the losing branch without a final poll).
     #[test]
+    #[allow(unsafe_code)]
     fn barrier_drop_mid_wait_decrements_arrived() {
         init_test("barrier_drop_mid_wait_decrements_arrived");
         let barrier = Arc::new(Barrier::new(3));
@@ -468,14 +469,23 @@ mod tests {
         let cx: Cx = Cx::for_testing();
         let result = block_on(barrier.wait(&cx)).expect("final wait failed");
         // Exactly one leader per generation.
-        let handle_result = handle.join().expect("party 1 thread failed");
-        let handle2_result = handle2.join().expect("party 3 thread failed");
+        let first_party = handle.join().expect("party 1 thread failed");
+        let third_party = handle2.join().expect("party 3 thread failed");
 
-        let total_leaders = [result.is_leader(), handle_result.is_leader(), handle2_result.is_leader()]
-            .iter()
-            .filter(|&&b| b)
-            .count();
-        crate::assert_with_log!(total_leaders == 1, "exactly 1 leader", 1usize, total_leaders);
+        let total_leaders = [
+            result.is_leader(),
+            first_party.is_leader(),
+            third_party.is_leader(),
+        ]
+        .iter()
+        .filter(|&&b| b)
+        .count();
+        crate::assert_with_log!(
+            total_leaders == 1,
+            "exactly 1 leader",
+            1usize,
+            total_leaders
+        );
         crate::test_complete!("barrier_drop_mid_wait_decrements_arrived");
     }
 
@@ -483,6 +493,7 @@ mod tests {
     /// Init-cancelled) must decrement `arrived` and remove its waker,
     /// leaving the barrier functional for replacement parties.
     #[test]
+    #[allow(unsafe_code)]
     fn barrier_cancel_after_poll_arrival_cleans_state() {
         init_test("barrier_cancel_after_poll_arrival_cleans_state");
         let barrier = Barrier::new(2);
@@ -518,14 +529,21 @@ mod tests {
         let result = block_on(barrier.wait(&cx2)).expect("replacement wait 2 failed");
         let handle_result = handle.join().expect("thread failed");
 
-        let total_leaders = usize::from(result.is_leader()) + usize::from(handle_result.is_leader());
-        crate::assert_with_log!(total_leaders == 1, "exactly 1 leader", 1usize, total_leaders);
+        let total_leaders =
+            usize::from(result.is_leader()) + usize::from(handle_result.is_leader());
+        crate::assert_with_log!(
+            total_leaders == 1,
+            "exactly 1 leader",
+            1usize,
+            total_leaders
+        );
         crate::test_complete!("barrier_cancel_after_poll_arrival_cleans_state");
     }
 
     /// Invariant: when one of multiple registered waiters is dropped,
     /// the remaining waiters can still trip the barrier with a replacement.
     #[test]
+    #[allow(unsafe_code)]
     fn barrier_drop_one_of_multiple_waiters_allows_trip() {
         init_test("barrier_drop_one_of_multiple_waiters_allows_trip");
         let barrier = Arc::new(Barrier::new(3));
@@ -567,7 +585,12 @@ mod tests {
             .iter()
             .filter(|&&b| b)
             .count();
-        crate::assert_with_log!(total_leaders == 1, "exactly 1 leader", 1usize, total_leaders);
+        crate::assert_with_log!(
+            total_leaders == 1,
+            "exactly 1 leader",
+            1usize,
+            total_leaders
+        );
         crate::test_complete!("barrier_drop_one_of_multiple_waiters_allows_trip");
     }
 }

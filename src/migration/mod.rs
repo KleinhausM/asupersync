@@ -408,4 +408,164 @@ mod tests {
             MigrationMode::PreferTraditional
         );
     }
+
+    // ---- DualValueError ----
+
+    #[test]
+    fn dual_value_error_display_serialization() {
+        let err = DualValueError::SerializationFailed("bad input".into());
+        assert_eq!(err.to_string(), "serialization failed: bad input");
+    }
+
+    #[test]
+    fn dual_value_error_display_deserialization() {
+        let err = DualValueError::DeserializationFailed("unexpected EOF".into());
+        assert_eq!(err.to_string(), "deserialization failed: unexpected EOF");
+    }
+
+    #[test]
+    fn dual_value_error_source_is_none() {
+        use std::error::Error;
+        let err = DualValueError::SerializationFailed("x".into());
+        assert!(err.source().is_none());
+    }
+
+    // ---- DualValue predicates ----
+
+    #[test]
+    fn dual_value_is_traditional() {
+        let val = DualValue::Traditional(100u32);
+        assert!(val.is_traditional());
+        assert!(!val.uses_raptorq());
+    }
+
+    #[test]
+    fn dual_value_uses_raptorq_after_ensure_symbols() {
+        let mut val = DualValue::Traditional(42u32);
+        let config = EncodingConfig::default();
+        val.ensure_symbols(&config);
+        assert!(val.uses_raptorq());
+        assert!(!val.is_traditional());
+    }
+
+    #[test]
+    fn dual_value_ensure_symbols_idempotent() {
+        let mut val = DualValue::Traditional(42u32);
+        let config = EncodingConfig::default();
+        val.ensure_symbols(&config);
+        assert!(val.uses_raptorq());
+        // Second call should be a no-op (already SymbolNative)
+        val.ensure_symbols(&config);
+        assert!(val.uses_raptorq());
+        assert_eq!(val.get().unwrap(), 42u32);
+    }
+
+    #[test]
+    fn dual_value_get_deserialization_failure() {
+        // Construct a SymbolNative with garbage bytes that won't parse as u32
+        let bad = DualValue::<u32>::SymbolNative {
+            serialized: b"not valid json".to_vec(),
+            object_id: ObjectId::new_for_test(0),
+            _phantom: PhantomData,
+        };
+        let err = bad.get().unwrap_err();
+        assert!(matches!(err, DualValueError::DeserializationFailed(_)));
+    }
+
+    #[test]
+    fn dual_value_debug_traditional() {
+        let val = DualValue::Traditional(99i32);
+        let dbg = format!("{val:?}");
+        assert!(dbg.contains("Traditional"), "{dbg}");
+        assert!(dbg.contains("99"), "{dbg}");
+    }
+
+    #[test]
+    fn dual_value_debug_symbol_native() {
+        let mut val = DualValue::Traditional("hello".to_string());
+        let config = EncodingConfig::default();
+        val.ensure_symbols(&config);
+        let dbg = format!("{val:?}");
+        assert!(dbg.contains("SymbolNative"), "{dbg}");
+        assert!(dbg.contains("bytes"), "{dbg}");
+    }
+
+    // ---- MigrationConfig ----
+
+    #[test]
+    fn migration_config_enabled_features_returns_set() {
+        let config = configure_migration()
+            .enable(MigrationFeature::EpochBarriers)
+            .enable(MigrationFeature::SymbolCancellation)
+            .build();
+
+        let features = config.enabled_features();
+        assert_eq!(features.len(), 2);
+        assert!(features.contains(&MigrationFeature::EpochBarriers));
+        assert!(features.contains(&MigrationFeature::SymbolCancellation));
+    }
+
+    #[test]
+    fn migration_config_default_has_no_features() {
+        let config = MigrationConfig::default();
+        assert!(config.enabled_features().is_empty());
+        assert_eq!(config.mode(), MigrationMode::PreferTraditional);
+    }
+
+    // ---- MigrationMode::Adaptive boundary ----
+
+    #[test]
+    fn adaptive_mode_boundary_at_1024() {
+        // Exactly 1024 should NOT trigger RaptorQ (condition is > 1024)
+        assert!(!MigrationMode::Adaptive.should_use_raptorq(None, 1024));
+        // 1025 should trigger it
+        assert!(MigrationMode::Adaptive.should_use_raptorq(None, 1025));
+    }
+
+    #[test]
+    fn prefer_symbol_native_without_hint() {
+        assert!(MigrationMode::PreferSymbolNative.should_use_raptorq(None, 0));
+        assert!(MigrationMode::PreferSymbolNative.should_use_raptorq(None, 9999));
+    }
+
+    // ---- MigrationFeature ----
+
+    #[test]
+    fn migration_feature_all_has_six_items() {
+        assert_eq!(MigrationFeature::all().count(), 6);
+    }
+
+    #[test]
+    fn migration_feature_all_roundtrip_via_full_raptorq() {
+        let config = configure_migration().full_raptorq().build();
+        assert_eq!(config.mode(), MigrationMode::SymbolNativeOnly);
+        for feature in MigrationFeature::all() {
+            assert!(
+                config.is_enabled(feature),
+                "full_raptorq should enable {feature:?}"
+            );
+        }
+    }
+
+    // ---- MigrationBuilder ----
+
+    #[test]
+    fn migration_builder_with_mode() {
+        let config = MigrationBuilder::new()
+            .with_mode(MigrationMode::Adaptive)
+            .build();
+        assert_eq!(config.mode(), MigrationMode::Adaptive);
+    }
+
+    #[test]
+    fn migration_builder_multiple_overrides() {
+        let config = configure_migration()
+            .override_operation("op_a", MigrationMode::SymbolNativeOnly)
+            .override_operation("op_b", MigrationMode::TraditionalOnly)
+            .build();
+        assert_eq!(config.mode_for("op_a"), MigrationMode::SymbolNativeOnly);
+        assert_eq!(config.mode_for("op_b"), MigrationMode::TraditionalOnly);
+        // Fallback to global default
+        assert_eq!(config.mode_for("op_c"), MigrationMode::PreferTraditional);
+    }
 }

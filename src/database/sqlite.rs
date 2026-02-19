@@ -858,6 +858,260 @@ mod tests {
         assert!(row.get("missing").is_err());
     }
 
+    // ---- SqliteError Display ----
+
+    #[test]
+    fn sqlite_error_display_sqlite() {
+        let err = SqliteError::Sqlite("connection refused".into());
+        assert_eq!(err.to_string(), "SQLite error: connection refused");
+    }
+
+    #[test]
+    fn sqlite_error_display_cancelled() {
+        let err = SqliteError::Cancelled(CancelReason::user("timeout"));
+        let msg = err.to_string();
+        assert!(msg.starts_with("SQLite operation cancelled:"), "{msg}");
+    }
+
+    #[test]
+    fn sqlite_error_display_connection_closed() {
+        assert_eq!(
+            SqliteError::ConnectionClosed.to_string(),
+            "SQLite connection is closed"
+        );
+    }
+
+    #[test]
+    fn sqlite_error_display_column_not_found() {
+        let err = SqliteError::ColumnNotFound("missing_col".into());
+        assert_eq!(err.to_string(), "Column not found: missing_col");
+    }
+
+    #[test]
+    fn sqlite_error_display_type_mismatch() {
+        let err = SqliteError::TypeMismatch {
+            column: "age".into(),
+            expected: "integer",
+            actual: "Text(\"hello\")".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Type mismatch for column age: expected integer, got Text(\"hello\")"
+        );
+    }
+
+    #[test]
+    fn sqlite_error_display_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let err = SqliteError::Io(io_err);
+        assert!(err.to_string().starts_with("SQLite I/O error:"), "{err}");
+    }
+
+    #[test]
+    fn sqlite_error_display_transaction_finished() {
+        assert_eq!(
+            SqliteError::TransactionFinished.to_string(),
+            "Transaction already finished"
+        );
+    }
+
+    #[test]
+    fn sqlite_error_display_lock_poisoned() {
+        assert_eq!(
+            SqliteError::LockPoisoned.to_string(),
+            "SQLite connection lock poisoned"
+        );
+    }
+
+    // ---- SqliteError source() ----
+
+    #[test]
+    fn sqlite_error_source_io_returns_some() {
+        use std::error::Error;
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk failure");
+        let err = SqliteError::Io(io_err);
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn sqlite_error_source_non_io_returns_none() {
+        use std::error::Error;
+        assert!(SqliteError::ConnectionClosed.source().is_none());
+        assert!(SqliteError::Sqlite("oops".into()).source().is_none());
+        assert!(SqliteError::LockPoisoned.source().is_none());
+        assert!(SqliteError::TransactionFinished.source().is_none());
+        assert!(SqliteError::ColumnNotFound("x".into()).source().is_none());
+    }
+
+    // ---- SqliteError From<io::Error> ----
+
+    #[test]
+    fn sqlite_error_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let err: SqliteError = io_err.into();
+        assert!(matches!(err, SqliteError::Io(_)));
+    }
+
+    // ---- SqliteValue PartialEq ----
+
+    #[test]
+    fn sqlite_value_partial_eq() {
+        assert_eq!(SqliteValue::Null, SqliteValue::Null);
+        assert_eq!(SqliteValue::Integer(10), SqliteValue::Integer(10));
+        assert_ne!(SqliteValue::Integer(10), SqliteValue::Integer(20));
+        assert_eq!(SqliteValue::Real(1.5), SqliteValue::Real(1.5));
+        assert_eq!(SqliteValue::Text("a".into()), SqliteValue::Text("a".into()));
+        assert_ne!(SqliteValue::Text("a".into()), SqliteValue::Text("b".into()));
+        assert_eq!(SqliteValue::Blob(vec![1, 2]), SqliteValue::Blob(vec![1, 2]));
+        assert_ne!(SqliteValue::Null, SqliteValue::Integer(0));
+    }
+
+    // ---- SqliteValue accessor edge cases ----
+
+    #[test]
+    fn sqlite_value_as_real_returns_none_for_text() {
+        assert_eq!(SqliteValue::Text("nope".into()).as_real(), None);
+    }
+
+    #[test]
+    fn sqlite_value_as_real_returns_none_for_blob() {
+        assert_eq!(SqliteValue::Blob(vec![1]).as_real(), None);
+    }
+
+    #[test]
+    fn sqlite_value_as_real_returns_none_for_null() {
+        assert_eq!(SqliteValue::Null.as_real(), None);
+    }
+
+    #[test]
+    fn sqlite_value_as_integer_returns_none_for_real() {
+        assert_eq!(SqliteValue::Real(3.14).as_integer(), None);
+    }
+
+    #[test]
+    fn sqlite_value_as_text_returns_none_for_blob() {
+        assert_eq!(SqliteValue::Blob(vec![0]).as_text(), None);
+    }
+
+    #[test]
+    fn sqlite_value_as_blob_returns_none_for_text() {
+        assert_eq!(SqliteValue::Text("x".into()).as_blob(), None);
+    }
+
+    #[test]
+    fn sqlite_value_as_blob_returns_none_for_null() {
+        assert_eq!(SqliteValue::Null.as_blob(), None);
+    }
+
+    #[test]
+    fn sqlite_value_display_empty_blob() {
+        assert_eq!(SqliteValue::Blob(vec![]).to_string(), "<blob 0 bytes>");
+    }
+
+    #[test]
+    fn sqlite_value_display_negative_integer() {
+        assert_eq!(SqliteValue::Integer(-99).to_string(), "-99");
+    }
+
+    // ---- SqliteRow ----
+
+    fn make_test_sqlite_row(names: &[&str], values: Vec<SqliteValue>) -> SqliteRow {
+        let mut columns = BTreeMap::new();
+        for (i, name) in names.iter().enumerate() {
+            columns.insert(name.to_string(), i);
+        }
+        SqliteRow::new(Arc::new(columns), values)
+    }
+
+    #[test]
+    fn sqlite_row_get_idx_valid() {
+        let row = make_test_sqlite_row(
+            &["a", "b"],
+            vec![SqliteValue::Integer(1), SqliteValue::Text("two".into())],
+        );
+        assert_eq!(row.get_idx(0).unwrap(), &SqliteValue::Integer(1));
+        assert_eq!(row.get_idx(1).unwrap(), &SqliteValue::Text("two".into()));
+    }
+
+    #[test]
+    fn sqlite_row_get_idx_out_of_bounds() {
+        let row = make_test_sqlite_row(&["a"], vec![SqliteValue::Null]);
+        assert!(row.get_idx(5).is_err());
+    }
+
+    #[test]
+    fn sqlite_row_get_f64_success() {
+        let row = make_test_sqlite_row(&["pi"], vec![SqliteValue::Real(3.14)]);
+        assert!((row.get_f64("pi").unwrap() - 3.14).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn sqlite_row_get_f64_widens_from_integer() {
+        let row = make_test_sqlite_row(&["val"], vec![SqliteValue::Integer(7)]);
+        assert!((row.get_f64("val").unwrap() - 7.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn sqlite_row_get_f64_type_mismatch() {
+        let row = make_test_sqlite_row(&["name"], vec![SqliteValue::Text("alice".into())]);
+        let err = row.get_f64("name").unwrap_err();
+        assert!(matches!(err, SqliteError::TypeMismatch { .. }));
+    }
+
+    #[test]
+    fn sqlite_row_get_blob_success() {
+        let row = make_test_sqlite_row(&["data"], vec![SqliteValue::Blob(vec![0xDE, 0xAD])]);
+        assert_eq!(row.get_blob("data").unwrap(), &[0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn sqlite_row_get_blob_type_mismatch() {
+        let row = make_test_sqlite_row(&["num"], vec![SqliteValue::Integer(42)]);
+        let err = row.get_blob("num").unwrap_err();
+        assert!(matches!(err, SqliteError::TypeMismatch { .. }));
+    }
+
+    #[test]
+    fn sqlite_row_get_i64_type_mismatch() {
+        let row = make_test_sqlite_row(&["name"], vec![SqliteValue::Text("not_a_number".into())]);
+        let err = row.get_i64("name").unwrap_err();
+        assert!(matches!(err, SqliteError::TypeMismatch { .. }));
+    }
+
+    #[test]
+    fn sqlite_row_get_str_type_mismatch() {
+        let row = make_test_sqlite_row(&["id"], vec![SqliteValue::Integer(1)]);
+        let err = row.get_str("id").unwrap_err();
+        assert!(matches!(err, SqliteError::TypeMismatch { .. }));
+    }
+
+    #[test]
+    fn sqlite_row_column_names() {
+        let row = make_test_sqlite_row(
+            &["alpha", "beta", "gamma"],
+            vec![SqliteValue::Null, SqliteValue::Null, SqliteValue::Null],
+        );
+        let names: Vec<&str> = row.column_names().collect();
+        // BTreeMap yields sorted order
+        assert_eq!(names, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn sqlite_row_empty() {
+        let row = make_test_sqlite_row(&[], vec![]);
+        assert_eq!(row.len(), 0);
+        assert!(row.is_empty());
+        assert!(row.get_idx(0).is_err());
+        assert_eq!(row.column_names().count(), 0);
+    }
+
+    #[test]
+    fn sqlite_row_get_column_not_found() {
+        let row = make_test_sqlite_row(&["exists"], vec![SqliteValue::Integer(1)]);
+        let err = row.get("nope").unwrap_err();
+        assert!(matches!(err, SqliteError::ColumnNotFound(_)));
+    }
+
     #[test]
     fn test_open_in_memory_exec_query_round_trip() {
         let cx = create_test_cx();
