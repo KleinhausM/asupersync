@@ -3243,4 +3243,135 @@ mod tests {
             .oracle_violations(vec!["balance-invariant".to_string()])
             .build()
     }
+
+    // --- wave 75 trait coverage ---
+
+    #[test]
+    fn crash_pack_config_debug_clone_eq_default() {
+        let c = CrashPackConfig::default();
+        assert_eq!(c.seed, 0);
+        assert_eq!(c.config_hash, 0);
+        assert_eq!(c.worker_count, 1);
+        assert_eq!(c.max_steps, None);
+        assert_eq!(c.commit_hash, None);
+        let c2 = c.clone();
+        assert_eq!(c, c2);
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("CrashPackConfig"));
+    }
+
+    #[test]
+    fn failure_outcome_debug_clone_eq() {
+        let e = FailureOutcome::Err;
+        let e2 = e.clone();
+        assert_eq!(e, e2);
+        assert_ne!(
+            e,
+            FailureOutcome::Panicked {
+                message: "boom".into()
+            }
+        );
+        let c = FailureOutcome::Cancelled {
+            cancel_kind: CancelKind::User,
+        };
+        let c2 = c.clone();
+        assert_eq!(c, c2);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Err"));
+    }
+
+    #[test]
+    fn attachment_kind_debug_clone_eq() {
+        let a = AttachmentKind::CanonicalPrefix;
+        let a2 = a.clone();
+        assert_eq!(a, a2);
+        assert_ne!(a, AttachmentKind::DivergentPrefix);
+        assert_ne!(a, AttachmentKind::EvidenceLedger);
+        assert_ne!(a, AttachmentKind::SupervisionLog);
+        assert_ne!(a, AttachmentKind::OracleViolations);
+        let custom = AttachmentKind::Custom {
+            tag: "my_data".into(),
+        };
+        let custom2 = custom.clone();
+        assert_eq!(custom, custom2);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("CanonicalPrefix"));
+    }
+
+    #[test]
+    fn manifest_validation_error_debug_clone_eq() {
+        let e = ManifestValidationError::VersionTooNew {
+            manifest_version: 5,
+            supported_version: 1,
+        };
+        let e2 = e.clone();
+        assert_eq!(e, e2);
+        assert_ne!(
+            e,
+            ManifestValidationError::VersionTooOld {
+                manifest_version: 0,
+                minimum_version: 1,
+            }
+        );
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("VersionTooNew"));
+    }
+
+    #[test]
+    fn evidence_entry_snapshot_debug_clone_eq() {
+        let s = EvidenceEntrySnapshot {
+            birth: 0,
+            death: 5,
+            is_novel: true,
+            persistence: Some(5),
+        };
+        let s2 = s.clone();
+        assert_eq!(s, s2);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("EvidenceEntrySnapshot"));
+    }
+
+    #[test]
+    fn supervision_snapshot_debug_clone_eq() {
+        let s = SupervisionSnapshot {
+            virtual_time: Time::from_secs(1),
+            task: tid(1),
+            region: rid(0),
+            decision: "restart".into(),
+            context: Some("attempt 2".into()),
+        };
+        let s2 = s.clone();
+        assert_eq!(s, s2);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("SupervisionSnapshot"));
+    }
+
+    #[test]
+    fn manifest_attachment_debug_clone_eq() {
+        let a = ManifestAttachment {
+            kind: AttachmentKind::EvidenceLedger,
+            item_count: 10,
+            size_hint_bytes: 256,
+        };
+        let a2 = a.clone();
+        assert_eq!(a, a2);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("ManifestAttachment"));
+    }
+
+    #[test]
+    fn crash_pack_manifest_debug_clone_eq() {
+        let m = CrashPackManifest {
+            schema_version: CRASHPACK_SCHEMA_VERSION,
+            config: CrashPackConfig::default(),
+            fingerprint: 0xABCD,
+            event_count: 100,
+            created_at: 0,
+            attachments: vec![],
+        };
+        let m2 = m.clone();
+        assert_eq!(m, m2);
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("CrashPackManifest"));
+    }
 }

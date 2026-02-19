@@ -8223,4 +8223,62 @@ mod tests {
 
         crate::test_complete!("gate_compiled_ops_share_arcs_with_plan");
     }
+
+    // ── derive-trait coverage (wave 75) ──────────────────────────────────
+
+    #[test]
+    fn supervision_strategy_debug_clone_eq_default() {
+        let s = SupervisionStrategy::default();
+        assert_eq!(s, SupervisionStrategy::Stop);
+        let s2 = s.clone();
+        assert_eq!(s, s2);
+        assert_ne!(s, SupervisionStrategy::Escalate);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Stop"));
+    }
+
+    #[test]
+    fn restart_policy_debug_clone_copy_eq_default() {
+        let p = RestartPolicy::default();
+        assert_eq!(p, RestartPolicy::OneForOne);
+        let p2 = p; // Copy
+        let p3 = p.clone();
+        assert_eq!(p2, p3);
+        assert_ne!(p, RestartPolicy::OneForAll);
+        let dbg = format!("{p:?}");
+        assert!(dbg.contains("OneForOne"));
+    }
+
+    #[test]
+    fn escalation_policy_debug_clone_copy_eq_default() {
+        let e = EscalationPolicy::default();
+        assert_eq!(e, EscalationPolicy::Stop);
+        let e2 = e; // Copy
+        assert_eq!(e, e2);
+        assert_ne!(e, EscalationPolicy::Escalate);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Stop"));
+    }
+
+    #[test]
+    fn name_collision_policy_debug_clone_copy_eq_default() {
+        let n = NameCollisionPolicy::default();
+        assert_eq!(n, NameCollisionPolicy::Fail);
+        let n2 = n; // Copy
+        assert_eq!(n, n2);
+        assert_ne!(n, NameCollisionPolicy::Replace);
+        let dbg = format!("{n:?}");
+        assert!(dbg.contains("Fail"));
+    }
+
+    #[test]
+    fn start_tie_break_debug_clone_copy_eq_default() {
+        let t = StartTieBreak::default();
+        assert_eq!(t, StartTieBreak::InsertionOrder);
+        let t2 = t; // Copy
+        assert_eq!(t, t2);
+        assert_ne!(t, StartTieBreak::NameLex);
+        let dbg = format!("{t:?}");
+        assert!(dbg.contains("InsertionOrder"));
+    }
 }

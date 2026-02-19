@@ -3601,4 +3601,90 @@ mod tests {
         assert_eq!(saga.state(), SagaState::Aborted);
         assert!(saga.compensation_results().is_empty());
     }
+
+    // --- wave 75 trait coverage ---
+
+    #[test]
+    fn remote_task_id_debug_clone_copy_eq_ord_hash() {
+        use std::collections::HashSet;
+        let a = RemoteTaskId::from_raw(42);
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, RemoteTaskId::from_raw(99));
+        assert!(a < RemoteTaskId::from_raw(100));
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("42"));
+        let mut set = HashSet::new();
+        set.insert(a);
+        assert!(set.contains(&b));
+    }
+
+    #[test]
+    fn idempotency_key_debug_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let k = IdempotencyKey::from_raw(12345);
+        let k2 = k; // Copy
+        let k3 = k.clone();
+        assert_eq!(k, k2);
+        assert_eq!(k, k3);
+        assert_ne!(k, IdempotencyKey::from_raw(99999));
+        let dbg = format!("{k:?}");
+        assert!(dbg.contains("12345"));
+        let mut set = HashSet::new();
+        set.insert(k);
+        assert!(set.contains(&k2));
+    }
+
+    #[test]
+    fn lease_state_debug_clone_copy_eq() {
+        let s = LeaseState::Active;
+        let s2 = s; // Copy
+        let s3 = s.clone();
+        assert_eq!(s, s2);
+        assert_eq!(s, s3);
+        assert_ne!(s, LeaseState::Released);
+        assert_ne!(s, LeaseState::Expired);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Active"));
+    }
+
+    #[test]
+    fn saga_state_debug_clone_copy_eq() {
+        let s = SagaState::Running;
+        let s2 = s; // Copy
+        let s3 = s.clone();
+        assert_eq!(s, s2);
+        assert_eq!(s, s3);
+        assert_ne!(s, SagaState::Completed);
+        assert_ne!(s, SagaState::Compensating);
+        assert_ne!(s, SagaState::Aborted);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Running"));
+    }
+
+    #[test]
+    fn remote_task_state_debug_clone_eq() {
+        let s = RemoteTaskState::Pending;
+        let s2 = s.clone();
+        assert_eq!(s, s2);
+        assert_ne!(s, RemoteTaskState::Running);
+        assert_ne!(s, RemoteTaskState::Completed);
+        assert_ne!(s, RemoteTaskState::Failed);
+        assert_ne!(s, RemoteTaskState::Cancelled);
+        assert_ne!(s, RemoteTaskState::LeaseExpired);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Pending"));
+    }
+
+    #[test]
+    fn remote_error_debug_clone_eq() {
+        let e = RemoteError::NoCapability;
+        let e2 = e.clone();
+        assert_eq!(e, e2);
+        assert_ne!(e, RemoteError::LeaseExpired);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("NoCapability"));
+    }
 }
