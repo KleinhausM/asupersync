@@ -3867,4 +3867,137 @@ mod tests {
 
         crate::test_complete!("replay_records_correct_severity_for_cancelled_task");
     }
+
+    // =========================================================================
+    // Pure data-type tests (wave 40 – CyanBarn)
+    // =========================================================================
+
+    #[test]
+    fn lab_trace_certificate_summary_debug_clone_copy_eq() {
+        let summary = LabTraceCertificateSummary {
+            event_hash: 123,
+            event_count: 456,
+            schedule_hash: 789,
+        };
+        let copied = summary;
+        let cloned = summary.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(
+            summary,
+            LabTraceCertificateSummary {
+                event_hash: 0,
+                event_count: 456,
+                schedule_hash: 789,
+            }
+        );
+        let dbg = format!("{summary:?}");
+        assert!(dbg.contains("LabTraceCertificateSummary"));
+    }
+
+    #[test]
+    fn virtual_time_report_debug_clone_copy_eq() {
+        let report = VirtualTimeReport {
+            steps: 100,
+            auto_advances: 5,
+            total_wakeups: 10,
+            time_start: Time::ZERO,
+            time_end: Time::from_millis(500),
+            virtual_elapsed_nanos: 500_000_000,
+        };
+        let copied = report;
+        assert_eq!(copied, report);
+        assert_eq!(report.virtual_elapsed_ms(), 500);
+        assert_eq!(report.virtual_elapsed_secs(), 0);
+        let dbg = format!("{report:?}");
+        assert!(dbg.contains("VirtualTimeReport"));
+    }
+
+    #[test]
+    fn harness_attachment_kind_debug_clone_copy_eq_hash_ord_display() {
+        use std::collections::HashSet;
+        let kinds = [
+            HarnessAttachmentKind::CrashPack,
+            HarnessAttachmentKind::ReplayTrace,
+            HarnessAttachmentKind::Trace,
+            HarnessAttachmentKind::Other,
+        ];
+        // Display
+        assert_eq!(format!("{}", kinds[0]), "crashpack");
+        assert_eq!(format!("{}", kinds[1]), "replay_trace");
+        assert_eq!(format!("{}", kinds[2]), "trace");
+        assert_eq!(format!("{}", kinds[3]), "other");
+        // Copy/Clone/Eq
+        for &k in &kinds {
+            let copied = k;
+            let cloned = k.clone();
+            assert_eq!(copied, cloned);
+        }
+        // Hash
+        let mut set = HashSet::new();
+        for &k in &kinds {
+            set.insert(k);
+        }
+        assert_eq!(set.len(), 4);
+        // Ord (derive ordering: CrashPack < ReplayTrace < Trace < Other)
+        assert!(HarnessAttachmentKind::CrashPack < HarnessAttachmentKind::ReplayTrace);
+        assert!(HarnessAttachmentKind::ReplayTrace < HarnessAttachmentKind::Trace);
+        assert!(HarnessAttachmentKind::Trace < HarnessAttachmentKind::Other);
+        let mut sorted = [kinds[3], kinds[0], kinds[2], kinds[1]];
+        sorted.sort();
+        assert_eq!(sorted, kinds);
+    }
+
+    #[test]
+    fn harness_attachment_ref_debug_clone_eq_hash() {
+        use std::collections::HashSet;
+        let ref1 = HarnessAttachmentRef::crashpack("crash.bin");
+        let ref2 = HarnessAttachmentRef::replay_trace("replay.bin");
+        let ref3 = HarnessAttachmentRef::trace("trace.ndjson");
+        assert_eq!(ref1.kind, HarnessAttachmentKind::CrashPack);
+        assert_eq!(ref2.kind, HarnessAttachmentKind::ReplayTrace);
+        assert_eq!(ref3.kind, HarnessAttachmentKind::Trace);
+        let cloned = ref1.clone();
+        assert_eq!(cloned, ref1);
+        assert_ne!(ref1, ref2);
+        let dbg = format!("{ref1:?}");
+        assert!(dbg.contains("HarnessAttachmentRef"));
+        let mut set = HashSet::new();
+        set.insert(ref1.clone());
+        set.insert(ref2);
+        set.insert(ref1); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn chaos_config_summary_debug_clone_copy_partial_eq() {
+        let summary = ChaosConfigSummary {
+            seed: 42,
+            cancel_probability: 0.1,
+            delay_probability: 0.2,
+            io_error_probability: 0.05,
+            wakeup_storm_probability: 0.01,
+            budget_exhaust_probability: 0.03,
+        };
+        let copied = summary;
+        let cloned = summary.clone();
+        assert_eq!(copied, cloned);
+        let dbg = format!("{summary:?}");
+        assert!(dbg.contains("ChaosConfigSummary"));
+    }
+
+    #[test]
+    fn obligation_leak_debug_clone_eq_display() {
+        let leak = ObligationLeak {
+            obligation: ObligationId::new_for_test(1, 0),
+            kind: ObligationKind::SendPermit,
+            holder: TaskId::from_arena(crate::util::ArenaIndex::new(1, 0)),
+            region: RegionId::new_for_test(0, 0),
+        };
+        let cloned = leak.clone();
+        assert_eq!(cloned, leak);
+        let dbg = format!("{leak:?}");
+        assert!(dbg.contains("ObligationLeak"));
+        let display = format!("{leak}");
+        assert!(!display.is_empty());
+    }
 }

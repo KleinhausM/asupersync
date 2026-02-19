@@ -909,6 +909,81 @@ mod tests {
         crate::test_phase!(name);
     }
 
+    // =========================================================================
+    // Pure data-type tests (wave 40 – CyanBarn)
+    // =========================================================================
+
+    #[test]
+    fn timer_wheel_config_debug_clone_default() {
+        let def = TimerWheelConfig::default();
+        assert_eq!(def.max_wheel_duration, Duration::from_hours(24));
+        assert_eq!(def.max_timer_duration, Duration::from_hours(168));
+        let cloned = def.clone();
+        assert_eq!(cloned.max_wheel_duration, def.max_wheel_duration);
+        let dbg = format!("{def:?}");
+        assert!(dbg.contains("TimerWheelConfig"));
+        // Builder
+        let custom = TimerWheelConfig::new()
+            .max_wheel_duration(Duration::from_hours(12))
+            .max_timer_duration(Duration::from_hours(48));
+        assert_eq!(custom.max_wheel_duration, Duration::from_hours(12));
+        assert_eq!(custom.max_timer_duration, Duration::from_hours(48));
+    }
+
+    #[test]
+    fn coalescing_config_debug_clone_default() {
+        let def = CoalescingConfig::default();
+        assert_eq!(def.coalesce_window, Duration::from_millis(1));
+        assert_eq!(def.min_group_size, 1);
+        assert!(!def.enabled);
+        let cloned = def.clone();
+        assert_eq!(cloned.coalesce_window, def.coalesce_window);
+        let dbg = format!("{def:?}");
+        assert!(dbg.contains("CoalescingConfig"));
+        // Builder chain
+        let enabled = CoalescingConfig::enabled_with_window(Duration::from_millis(5));
+        assert!(enabled.enabled);
+        assert_eq!(enabled.coalesce_window, Duration::from_millis(5));
+    }
+
+    #[test]
+    fn timer_duration_exceeded_debug_clone_display() {
+        let err = TimerDurationExceeded {
+            duration: Duration::from_secs(7200),
+            max: Duration::from_secs(3600),
+        };
+        let cloned = err.clone();
+        assert_eq!(cloned.duration, err.duration);
+        assert_eq!(cloned.max, err.max);
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("TimerDurationExceeded"));
+        let display = format!("{err}");
+        assert!(display.contains("exceeds"));
+    }
+
+    #[test]
+    fn timer_handle_debug_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        // Create handles via TimerWheel::register
+        let mut wheel = TimerWheel::new();
+        let waker1 = counter_waker(Arc::new(AtomicU64::new(0)));
+        let waker2 = counter_waker(Arc::new(AtomicU64::new(0)));
+        let h1 = wheel.register(Time::from_millis(10), waker1);
+        let h2 = wheel.register(Time::from_millis(20), waker2);
+        assert_ne!(h1, h2);
+        let copied = h1;
+        let cloned = h1.clone();
+        assert_eq!(copied, cloned);
+        let dbg = format!("{h1:?}");
+        assert!(dbg.contains("TimerHandle"));
+        // Hash
+        let mut set = HashSet::new();
+        set.insert(h1);
+        set.insert(h2);
+        set.insert(h1); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
     #[test]
     fn wheel_register_and_fire() {
         init_test("wheel_register_and_fire");

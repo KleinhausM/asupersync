@@ -1218,6 +1218,50 @@ mod tests {
         ]
     }
 
+    // =========================================================================
+    // Pure data-type tests (wave 40 – CyanBarn)
+    // =========================================================================
+
+    #[test]
+    fn compression_mode_debug_clone_copy_eq_default() {
+        let def = CompressionMode::default();
+        assert_eq!(def, CompressionMode::None);
+        let copied = def;
+        let cloned = def.clone();
+        assert_eq!(copied, cloned);
+        assert!(!def.is_compressed());
+        let dbg = format!("{def:?}");
+        assert!(dbg.contains("None"));
+    }
+
+    #[test]
+    fn trace_file_config_debug_clone_default() {
+        let def = TraceFileConfig::default();
+        assert_eq!(def.compression, CompressionMode::None);
+        assert_eq!(def.chunk_size, DEFAULT_COMPRESSION_CHUNK_SIZE);
+        assert!(def.max_events.is_none());
+        let cloned = def.clone();
+        assert_eq!(cloned.compression, CompressionMode::None);
+        let dbg = format!("{def:?}");
+        assert!(dbg.contains("TraceFileConfig"));
+    }
+
+    #[test]
+    fn trace_file_error_debug_display() {
+        let err = TraceFileError::InvalidMagic;
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("InvalidMagic"));
+        let display = format!("{err}");
+        assert!(display.contains("magic"));
+
+        let version_err = TraceFileError::UnsupportedVersion {
+            expected: 2,
+            found: 99,
+        };
+        let display2 = format!("{version_err}");
+        assert!(display2.contains("99"));
+    }
+
     #[test]
     fn write_and_read_roundtrip() {
         let temp = NamedTempFile::new().expect("create temp file");

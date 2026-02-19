@@ -2175,6 +2175,98 @@ mod tests {
         }
     }
 
+    // =========================================================================
+    // Pure data-type tests (wave 40 – CyanBarn)
+    // =========================================================================
+
+    #[test]
+    fn gf256_debug_display_format() {
+        let elem = Gf256(42);
+        assert_eq!(format!("{elem:?}"), "GF(42)");
+        assert_eq!(format!("{elem}"), "42");
+        let zero = Gf256::ZERO;
+        assert_eq!(format!("{zero:?}"), "GF(0)");
+        assert_eq!(format!("{zero}"), "0");
+    }
+
+    #[test]
+    fn gf256_default_is_zero() {
+        let def = Gf256::default();
+        assert_eq!(def, Gf256::ZERO);
+        assert_eq!(def.0, 0);
+    }
+
+    #[test]
+    fn gf256_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let a = Gf256(100);
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, Gf256(101));
+
+        let mut set = HashSet::new();
+        set.insert(Gf256(1));
+        set.insert(Gf256(2));
+        set.insert(Gf256(1)); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn gf256_kernel_debug_clone_copy_eq() {
+        let k = Gf256Kernel::Scalar;
+        let copied = k;
+        let cloned = k.clone();
+        assert_eq!(copied, cloned);
+        assert_eq!(copied, Gf256Kernel::Scalar);
+        let dbg = format!("{k:?}");
+        assert!(dbg.contains("Scalar"));
+    }
+
+    #[test]
+    fn dual_kernel_mode_debug_clone_copy_eq() {
+        for mode in [DualKernelMode::Auto, DualKernelMode::Sequential, DualKernelMode::Fused] {
+            let copied = mode;
+            let cloned = mode.clone();
+            assert_eq!(copied, cloned);
+            let dbg = format!("{mode:?}");
+            assert!(!dbg.is_empty());
+        }
+        assert_ne!(DualKernelMode::Auto, DualKernelMode::Sequential);
+        assert_ne!(DualKernelMode::Sequential, DualKernelMode::Fused);
+    }
+
+    #[test]
+    fn dual_kernel_decision_debug_clone_copy_eq() {
+        let seq = DualKernelDecision::Sequential;
+        let fused = DualKernelDecision::Fused;
+        assert_ne!(seq, fused);
+        assert_eq!(seq, DualKernelDecision::Sequential);
+        assert!(fused.is_fused());
+        assert!(!seq.is_fused());
+        let dbg = format!("{seq:?}");
+        assert!(dbg.contains("Sequential"));
+    }
+
+    #[test]
+    fn dual_kernel_policy_snapshot_debug_clone_copy_eq() {
+        let snap = DualKernelPolicySnapshot {
+            kernel: Gf256Kernel::Scalar,
+            mode: DualKernelMode::Auto,
+            mul_min_total: 8192,
+            mul_max_total: 24576,
+            addmul_min_total: 8192,
+            addmul_max_total: 16384,
+            max_lane_ratio: 8,
+        };
+        let copied = snap;
+        let cloned = snap.clone();
+        assert_eq!(copied, cloned);
+        let dbg = format!("{snap:?}");
+        assert!(dbg.contains("DualKernelPolicySnapshot"));
+    }
+
     #[test]
     fn dual_policy_decisions_are_symmetric_under_lane_swap() {
         let seed = 0u64;
