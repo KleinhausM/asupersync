@@ -126,4 +126,38 @@ mod tests {
         crate::assert_with_log!(ok, "poll 1", "Poll::Ready(Some(\"1\"))", poll);
         crate::test_complete!("map_type_change");
     }
+
+    /// Invariant: map of empty stream produces None immediately.
+    #[test]
+    fn map_empty_stream() {
+        init_test("map_empty_stream");
+        let mut stream = Map::new(iter(Vec::<i32>::new()), |x: i32| x * 2);
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let is_none = matches!(poll, Poll::Ready(None));
+        crate::assert_with_log!(is_none, "empty map yields None", true, is_none);
+        crate::test_complete!("map_empty_stream");
+    }
+
+    /// Invariant: Map accessors (get_ref, get_mut, into_inner) work correctly.
+    #[test]
+    fn map_accessors() {
+        init_test("map_accessors");
+        let mut stream = Map::new(iter(vec![1, 2, 3]), |x: i32| x + 10);
+
+        let _inner_ref = stream.get_ref();
+        let _inner_mut = stream.get_mut();
+
+        let recovered = stream.into_inner();
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut recovered = recovered;
+        let poll = Pin::new(&mut recovered).poll_next(&mut cx);
+        let got_1 = matches!(poll, Poll::Ready(Some(1)));
+        crate::assert_with_log!(got_1, "into_inner preserves items", true, got_1);
+
+        crate::test_complete!("map_accessors");
+    }
 }
