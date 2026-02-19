@@ -240,17 +240,17 @@ Determinism is treated as a first-class algorithmic constraint across the codeba
 | **Bounded cleanup** | ✅ Budgeted | ❌ Best-effort | ❌ Best-effort |
 | **Deterministic testing** | ✅ Built-in | ❌ External tools | ❌ External tools |
 | **Obligation tracking** | ✅ Linear tokens | ❌ None | ❌ None |
-| **Ecosystem** | 🔜 Growing | ⚠️ Medium | ⚠️ Small |
-| **Maturity** | 🔜 Active dev | ✅ Production | ✅ Production |
+| **Ecosystem** | ✅ Tokio-scale built-in surface (runtime, net, HTTP/1.1+H2, TLS, WebSocket, gRPC, DB, distributed) | ⚠️ Medium | ⚠️ Small |
+| **Maturity** | ✅ Feature-complete runtime surface, actively hardened | ✅ Production | ✅ Production |
 
 **When to use Asupersync:**
-- Internal applications where correctness > ecosystem
+- Systems that want a broad, integrated async stack without pulling in Tokio
 - Systems where cancel-correctness is non-negotiable (financial, medical, infrastructure)
 - Projects that need deterministic concurrency testing
 - Distributed systems with structured shutdown requirements
 
 **When to consider alternatives:**
-- You need broad ecosystem library compatibility (we're building native equivalents)
+- You need strict drop-in compatibility with libraries that are hard-wired to Tokio runtime traits
 - Rapid prototyping where correctness guarantees aren't yet critical
 
 ---
@@ -416,8 +416,13 @@ Scheduler behavior is intentionally explicit:
 - Workers track fairness telemetry (`fairness_yields`, `max_cancel_streak`) so starvation claims can be checked against runtime counters, not guesses (`src/runtime/scheduler/three_lane.rs`).
 - Local dispatch uses single-lock multi-lane pops (`try_local_any_lane` and `pop_any_lane_with_hint`) to reduce lock traffic on the hot path while keeping lane ordering rules intact (`src/runtime/scheduler/three_lane.rs`).
 - An optional Lyapunov governor can steer lane ordering from periodic runtime snapshots. It is off by default, and when enabled it runs at a configurable interval (`governor_interval`, default `32`) (`src/runtime/config.rs`, `src/runtime/builder.rs`, `src/runtime/scheduler/three_lane.rs`).
+- When governor mode is enabled, scheduling suggestions can be modulated by a decision contract with Bayesian posterior updates over `healthy`, `congested`, `unstable`, and `partitioned` runtime states (`src/runtime/scheduler/decision_contract.rs`, `src/runtime/scheduler/three_lane.rs`).
+- Dispatch follows an explicit multi-phase path: global lanes, fast ready paths, one local-lane lock acquisition, steal attempts, then fallback cancel handling (`src/runtime/scheduler/three_lane.rs`).
+- Worker wakeups are coordinated through round-robin targeted unparks, with a bitmask fast path when worker count is a power of two (`src/runtime/scheduler/three_lane.rs`).
+- I/O polling uses a leader/follower turn: the worker that acquires the I/O driver lock runs the reactor turn while peers continue scheduling (`src/runtime/scheduler/three_lane.rs`).
 - Local `!Send` tasks are pinned to owner workers and routed through non-stealable queues; steal paths explicitly reject moving them across workers (`src/runtime/scheduler/three_lane.rs`, `src/runtime/scheduler/local_queue.rs`).
 - Local queue discipline is asymmetric on purpose: owner operations are LIFO for cache locality, while thief operations are FIFO to keep stolen work older and reduce starvation pressure (`src/runtime/scheduler/local_queue.rs`).
+- Idle-worker parking uses a permit-style `Parker` and explicit queue rechecks after wakeups, which closes lost-wakeup races between work injection and parking (`src/runtime/scheduler/worker.rs`, `src/runtime/scheduler/three_lane.rs`).
 
 ### Sharded Runtime State and Lock Discipline
 
@@ -430,6 +435,46 @@ Runtime state is split into independently locked shards so hot-path polling can 
 - Shard E (`config`): immutable runtime config.
 
 Multi-shard operations use `ShardGuard` with canonical acquisition order `E -> D -> B -> A -> C`, and debug checks enforce that order to prevent deadlocks (`src/runtime/sharded_state.rs`). Shard locks are `ContendedMutex` instances, and optional `lock-metrics` instrumentation can measure wait/hold behavior (`src/sync/contended_mutex.rs`).
+
+### Region Heap Handles and Quiescent Reclamation
+
+Region memory uses stable handles (`HeapIndex`) with slot index, generation, and type tag metadata instead of exposing raw allocation addresses.
+
+- Generation increments on slot reuse, so stale handles fail closed and ABA-style reuse bugs are blocked (`src/runtime/region_heap.rs`).
+- Reuse order is deterministic for identical allocation/deallocation sequences, which keeps trace behavior stable across runs (`src/runtime/region_heap.rs`).
+- Heap reclamation is wired to region close/quiescence, not opportunistic frees, and stats track live vs. reclaimed objects for runtime auditing (`src/runtime/region_heap.rs`).
+
+### Runtime Control Surfaces: Causal Time, Cancel Attribution, and Deadline Signals
+
+Asupersync exposes runtime controls that are usually hidden behind ad hoc instrumentation. These controls are wired into scheduler and trace behavior directly.
+
+| Control | API | Runtime Behavior |
+|---------|-----|------------------|
+| Logical clock mode | `RuntimeBuilder::logical_clock_mode(...)` | Select Lamport, Vector, or Hybrid logical clocks for causal ordering; defaults are chosen from runtime context and carried into event timelines (`src/runtime/config.rs`, `src/trace/distributed/vclock.rs`, `src/runtime/state.rs`) |
+| Cancel attribution bounds | `RuntimeBuilder::cancel_attribution_config(...)` | Bound cancellation cause-chain depth and memory while preserving root-cause lineage and explicit truncation metadata when limits are hit (`src/types/cancel.rs`, `src/runtime/state.rs`) |
+| Deadline monitor | `RuntimeBuilder::deadline_monitoring(...)` | Run a background monitor with configurable check cadence, warning thresholds, adaptive history percentiles, and custom warning callbacks (`src/runtime/deadline_monitor.rs`, `src/runtime/builder.rs`) |
+
+- Deadline checks are logical-time aware and fall back to wall-clock progression when logical time is stable, so stalled-task warnings work in both lab and production-style runs (`src/runtime/deadline_monitor.rs`).
+- Warning emission is per-task deduplicated until task removal, so deadline diagnostics stay high-signal under repeated scans (`src/runtime/deadline_monitor.rs`).
+
+## How We Made It Fast
+
+This runtime got fast through many small, verified runtime changes by the project owner and collaborating coding agents. The method stayed consistent: profile the hot paths, remove one source of contention or allocation at a time, then keep cancellation and determinism guarantees intact.
+
+- **Scheduler lock traffic**: dispatch uses a multi-phase path, and local cancel/timed/ready checks run under one local lock acquisition instead of repeated lock round-trips (`src/runtime/scheduler/three_lane.rs`).
+- **Hot-path task isolation**: scheduler queues can run against a dedicated sharded `TaskTable`, so push/pop/steal paths avoid full runtime-state lock pressure (`src/runtime/task_table.rs`, `src/runtime/scheduler/local_queue.rs`, `src/runtime/scheduler/three_lane.rs`).
+- **Targeted wake coordination**: worker wakeups go through a coordinator with round-robin unparks and a power-of-two bitmask fast path, so wake selection avoids heavier arithmetic in steady state (`src/runtime/scheduler/three_lane.rs`).
+- **Centralized wake dedup**: scheduling paths route through `wake_state.notify()` so duplicate enqueue attempts collapse early, including local-vs-global routing guards for `!Send` tasks (`src/runtime/scheduler/three_lane.rs`, `src/runtime/scheduler/worker.rs`).
+- **Cheaper wake bookkeeping**: waiter registration paths use `Waker::will_wake` guards to skip redundant clones and refresh only when the executor context actually changes (`src/transport/sink.rs`, `src/transport/mock.rs`).
+- **Lost-wakeup hardening without busy spin**: parking uses permit-style semantics, and queue/capacity rechecks close races between waiter registration and wakeups (`src/runtime/scheduler/worker.rs`, `src/runtime/scheduler/three_lane.rs`, `src/transport/sink.rs`).
+- **Allocation pressure reduction**: hot paths moved away from per-dispatch temporary `Vec` usage toward `SmallVec` and pre-sized structures (`src/runtime/scheduler/three_lane.rs`, `src/transport/router.rs`, `src/transport/aggregator.rs`).
+- **Lower mutex overhead across the stack**: runtime, scheduler, I/O, lab, networking, and transport internals were migrated to `parking_lot` primitives where it improves lock-path cost (`src/runtime/*`, `src/transport/*`, `src/lab/*`).
+- **Atomic and counter-path tuning**: scheduler and runtime counters use tighter CAS/ordering behavior and lock-free paths where possible, including timed-count handling (`src/runtime/scheduler/*`, `src/runtime/state.rs`).
+- **Backpressure without silent drops**: global ready-queue limits emit capacity warnings while still scheduling work, preserving structured-concurrency guarantees instead of dropping tasks (`src/runtime/scheduler/three_lane.rs`, `src/runtime/config.rs`).
+- **Reactor fast paths**: I/O registration rearm paths cache waker state, and stale token/fd cleanup is explicit, which keeps event loops moving under churn (`src/runtime/io_driver.rs`, `src/runtime/reactor/*`).
+- **Timer wheel tuned for real cancellation workloads**: timer cancel is generation-based O(1), long deadlines spill into overflow and are promoted back in range, and coalescing windows can batch nearby wakeups with minimum-group gating (`src/time/wheel.rs`, `src/time/driver.rs`).
+- **Stable memory handles with deterministic reuse**: region-heap generation indices prevent ABA-style stale-handle reuse while preserving deterministic allocation/reuse patterns (`src/runtime/region_heap.rs`).
+- **Continuous measurement**: the repository carries dedicated benchmark surfaces for scheduler, reactor, timer wheel, cancel/drain, and tracing overhead (`benches/scheduler_benchmark.rs`, `benches/reactor_benchmark.rs`, `benches/timer_wheel.rs`, `benches/cancel_drain_bench.rs`, `benches/tracing_overhead.rs`).
 
 ---
 
@@ -482,6 +527,8 @@ Both layers integrate with connection pooling (`src/http/pool.rs`) and optional 
 - `router.rs` tracks endpoint health and routing state with atomics (`EndpointState`, connection counters, failure counters) and uses RAII guards for active connection/dispatch accounting, including cancel/panic paths.
 - `aggregator.rs` handles multipath symbol intake with dedup windows, reorder handling, and per-path statistics for loss/duplicate tracking.
 - `sink.rs` and `stream.rs` use queued waiters with atomic flags and explicit wakeup bookkeeping to avoid lost-wakeup edge cases in bounded channel transport.
+- `sink.rs` deduplicates waiter updates with `Waker::will_wake` checks and re-checks capacity after waiter registration, which closes the capacity-check/registration lost-wakeup race (`src/transport/sink.rs`).
+- Shared channel close paths wake both send and receive waiters, so shutdown does not strand pending channel operations (`src/transport/mod.rs`).
 
 ---
 
@@ -604,6 +651,13 @@ On the decode side, the runtime uses a policy-driven deterministic planner inste
 ## Stream Combinators
 
 `src/stream/` provides a composable stream library with the standard functional operators: `map`, `filter`, `take`, `skip`, `chunks`, `chain`, `merge`, `zip`, `fold`, `for_each`, `inspect`, `enumerate`, `any_all`, `count`, `fuse`, `buffered`, and `try_stream`. Streams integrate with channels (`broadcast_stream`, `receiver_stream`) and participate in cancellation; a dropped stream cleanly aborts any pending I/O.
+
+## Lab Runtime Failure Forensics
+
+The lab runtime includes dedicated failure detectors and recovery artifacts, so concurrency failures carry structured evidence instead of vague timeouts.
+
+- Futurelock detection tracks tasks that still hold pending obligations but stop being polled for longer than `futurelock_max_idle_steps`. Detection emits `TraceEventKind::FuturelockDetected` with task, region, and held-obligation details, and can optionally panic immediately (`panic_on_futurelock`) (`src/lab/runtime.rs`, `src/lab/config.rs`).
+- Restorable snapshots include deterministic content hashes over full serialized runtime state (`verify_integrity()`), plus structural validation (`validate()`) that checks reference validity, region-tree acyclicity, closed-region quiescence, and timestamp consistency before restore (`src/lab/snapshot_restore.rs`).
 
 ---
 
@@ -923,6 +977,7 @@ Futurelock detection is tied to held obligations and poll progress, not just ela
 Lab snapshots also support structural validation and integrity checks. `RestorableSnapshot` computes a deterministic content hash over the full serialized snapshot, so semantic tampering is detectable before replay analysis (`src/lab/snapshot_restore.rs`).
 
 Runtime leak handling is configurable via `ObligationLeakResponse` (`Panic`, `Log`, `Silent`, `Recover`) with optional threshold-based escalation (`LeakEscalation`), and zero thresholds are normalized to one to avoid invalid policy states (`src/runtime/config.rs`).
+If a leak is detected while the thread is already unwinding, a `Panic` response is downgraded to `Log` to avoid double-panic aborts; leak counting is also guarded against reentrant inflation (`src/runtime/state.rs`).
 
 ### Budget Configuration
 
