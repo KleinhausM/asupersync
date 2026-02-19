@@ -409,4 +409,36 @@ mod tests {
         crate::assert_with_log!(has_two, "contains 2", true, has_two);
         crate::test_complete!("violation_display");
     }
+
+    // --- wave 76 trait coverage ---
+
+    #[test]
+    fn finalizer_id_debug_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let id = FinalizerId(42);
+        let id2 = id; // Copy
+        let id3 = id.clone();
+        assert_eq!(id, id2);
+        assert_eq!(id, id3);
+        assert_ne!(id, FinalizerId(99));
+        let dbg = format!("{id:?}");
+        assert!(dbg.contains("42"));
+        let mut set = HashSet::new();
+        set.insert(id);
+        assert!(set.contains(&id2));
+    }
+
+    #[test]
+    fn finalizer_violation_debug_clone() {
+        let v = FinalizerViolation {
+            region: region(0),
+            unrun_finalizers: vec![FinalizerId(1), FinalizerId(2)],
+            region_close_time: t(100),
+        };
+        let v2 = v.clone();
+        assert_eq!(v.region, v2.region);
+        assert_eq!(v.unrun_finalizers, v2.unrun_finalizers);
+        let dbg = format!("{v:?}");
+        assert!(dbg.contains("FinalizerViolation"));
+    }
 }

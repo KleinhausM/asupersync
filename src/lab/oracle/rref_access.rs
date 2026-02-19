@@ -571,4 +571,63 @@ mod tests {
             assert!(!msg.is_empty(), "violation display should not be empty");
         }
     }
+
+    // --- wave 76 trait coverage ---
+
+    #[test]
+    fn rref_id_debug_clone_copy_eq_ord_hash() {
+        use std::collections::HashSet;
+        let id = rref(0, 5);
+        let id2 = id; // Copy
+        let id3 = id.clone();
+        assert_eq!(id, id2);
+        assert_eq!(id, id3);
+        assert_ne!(id, rref(0, 6));
+        assert!(id < rref(0, 6));
+        let dbg = format!("{id:?}");
+        assert!(dbg.contains("RRefId"));
+        let mut set = HashSet::new();
+        set.insert(id);
+        assert!(set.contains(&id2));
+    }
+
+    #[test]
+    fn rref_access_violation_kind_debug_clone_eq() {
+        let r_a = region(0);
+        let r_b = region(1);
+        let k = RRefAccessViolationKind::CrossRegionAccess {
+            rref_region: r_a,
+            task_region: r_b,
+        };
+        let k2 = k.clone();
+        assert_eq!(k, k2);
+        assert_ne!(
+            k,
+            RRefAccessViolationKind::WitnessMismatch {
+                rref_region: r_a,
+                witness_region: r_b,
+            }
+        );
+        let dbg = format!("{k:?}");
+        assert!(dbg.contains("CrossRegionAccess"));
+    }
+
+    #[test]
+    fn rref_access_violation_debug_clone() {
+        let v = RRefAccessViolation {
+            rref: rref(0, 1),
+            task: task(2),
+            time: t(100),
+            kind: RRefAccessViolationKind::PostCloseAccess {
+                region: region(0),
+                close_time: t(50),
+                access_time: t(100),
+            },
+        };
+        let v2 = v.clone();
+        assert_eq!(v.rref, v2.rref);
+        assert_eq!(v.task, v2.task);
+        let dbg = format!("{v:?}");
+        assert!(dbg.contains("RRefAccessViolation"));
+    }
 }

@@ -1824,4 +1824,54 @@ mod tests {
         );
         crate::test_complete!("into_data_no_params_errors");
     }
+
+    // --- wave 76 trait coverage ---
+
+    #[test]
+    fn reject_reason_debug_clone_copy_eq() {
+        let r = RejectReason::WrongObjectId;
+        let r2 = r; // Copy
+        let r3 = r.clone();
+        assert_eq!(r, r2);
+        assert_eq!(r, r3);
+        assert_ne!(r, RejectReason::AuthenticationFailed);
+        assert_ne!(r, RejectReason::SymbolSizeMismatch);
+        assert_ne!(r, RejectReason::BlockAlreadyDecoded);
+        assert_ne!(r, RejectReason::InsufficientRank);
+        assert_ne!(r, RejectReason::InconsistentEquations);
+        assert_ne!(r, RejectReason::InvalidMetadata);
+        assert_ne!(r, RejectReason::MemoryLimitReached);
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("WrongObjectId"));
+    }
+
+    #[test]
+    fn symbol_accept_result_debug_clone_eq() {
+        let a = SymbolAcceptResult::Accepted {
+            received: 3,
+            needed: 5,
+        };
+        let a2 = a.clone();
+        assert_eq!(a, a2);
+        assert_ne!(a, SymbolAcceptResult::Duplicate);
+        let r = SymbolAcceptResult::Rejected(RejectReason::InvalidMetadata);
+        let r2 = r.clone();
+        assert_eq!(r, r2);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Accepted"));
+    }
+
+    #[test]
+    fn block_state_kind_debug_clone_copy_eq() {
+        let s = BlockStateKind::Collecting;
+        let s2 = s; // Copy
+        let s3 = s.clone();
+        assert_eq!(s, s2);
+        assert_eq!(s, s3);
+        assert_ne!(s, BlockStateKind::Decoding);
+        assert_ne!(s, BlockStateKind::Decoded);
+        assert_ne!(s, BlockStateKind::Failed);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Collecting"));
+    }
 }

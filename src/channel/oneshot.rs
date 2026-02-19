@@ -1472,4 +1472,42 @@ mod tests {
         );
         crate::test_complete!("recv_repoll_same_waker_keeps_waiter_identity");
     }
+
+    // --- wave 76 trait coverage ---
+
+    #[test]
+    fn send_error_debug_clone_copy_eq() {
+        let e = SendError::Disconnected(42_i32);
+        let e2 = e; // Copy
+        let e3 = e.clone();
+        assert_eq!(e, e2);
+        assert_eq!(e, e3);
+        assert_ne!(e, SendError::Disconnected(99));
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Disconnected"));
+    }
+
+    #[test]
+    fn recv_error_debug_clone_copy_eq() {
+        let e = RecvError::Closed;
+        let e2 = e; // Copy
+        let e3 = e.clone();
+        assert_eq!(e, e2);
+        assert_eq!(e, e3);
+        assert_ne!(e, RecvError::Cancelled);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Closed"));
+    }
+
+    #[test]
+    fn try_recv_error_debug_clone_copy_eq() {
+        let e = TryRecvError::Empty;
+        let e2 = e; // Copy
+        let e3 = e.clone();
+        assert_eq!(e, e2);
+        assert_eq!(e, e3);
+        assert_ne!(e, TryRecvError::Closed);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Empty"));
+    }
 }
