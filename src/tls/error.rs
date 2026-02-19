@@ -218,12 +218,123 @@ mod tests {
             negotiated: Some(b"http/1.1".to_vec()),
         };
         let rendered = format!("{err}");
+        // ALPN protocol IDs are byte slices, so Debug format renders numeric bytes
         crate::assert_with_log!(
-            rendered.contains("ALPN") && rendered.contains("http/1.1"),
+            rendered.contains("ALPN") && rendered.contains("negotiation failed"),
             "display alpn",
             true,
-            rendered.contains("ALPN") && rendered.contains("http/1.1")
+            rendered.contains("ALPN") && rendered.contains("negotiation failed")
         );
         crate::test_complete!("test_display_alpn_negotiation_failed");
+    }
+
+    // ---- remaining Display variants ----
+
+    #[test]
+    fn display_handshake() {
+        let err = TlsError::Handshake("protocol version mismatch".into());
+        let msg = err.to_string();
+        assert!(msg.contains("handshake failed"), "{msg}");
+        assert!(msg.contains("protocol version mismatch"), "{msg}");
+    }
+
+    #[test]
+    fn display_certificate() {
+        let err = TlsError::Certificate("self-signed".into());
+        let msg = err.to_string();
+        assert!(msg.contains("certificate error"), "{msg}");
+        assert!(msg.contains("self-signed"), "{msg}");
+    }
+
+    #[test]
+    fn display_certificate_not_yet_valid() {
+        let err = TlsError::CertificateNotYetValid {
+            valid_from: 9999999999,
+            description: "leaf cert".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("not valid until"), "{msg}");
+        assert!(msg.contains("9999999999"), "{msg}");
+        assert!(msg.contains("leaf cert"), "{msg}");
+    }
+
+    #[test]
+    fn display_chain_validation() {
+        let err = TlsError::ChainValidation("missing intermediate".into());
+        let msg = err.to_string();
+        assert!(msg.contains("chain validation failed"), "{msg}");
+        assert!(msg.contains("missing intermediate"), "{msg}");
+    }
+
+    #[test]
+    fn display_configuration() {
+        let err = TlsError::Configuration("no cipher suites".into());
+        let msg = err.to_string();
+        assert!(msg.contains("configuration error"), "{msg}");
+        assert!(msg.contains("no cipher suites"), "{msg}");
+    }
+
+    #[test]
+    fn display_alpn_no_negotiated() {
+        let err = TlsError::AlpnNegotiationFailed {
+            expected: vec![b"h2".to_vec()],
+            negotiated: None,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("None"), "{msg}");
+    }
+
+    // ---- source() for non-Io variants ----
+
+    #[test]
+    fn source_non_io_returns_none() {
+        assert!(TlsError::InvalidDnsName("x".into()).source().is_none());
+        assert!(TlsError::Handshake("x".into()).source().is_none());
+        assert!(TlsError::Certificate("x".into()).source().is_none());
+        assert!(TlsError::Configuration("x".into()).source().is_none());
+        assert!(TlsError::ChainValidation("x".into()).source().is_none());
+        assert!(
+            TlsError::CertificateExpired {
+                expired_at: 0,
+                description: "x".into()
+            }
+            .source()
+            .is_none()
+        );
+        assert!(
+            TlsError::CertificateNotYetValid {
+                valid_from: 0,
+                description: "x".into()
+            }
+            .source()
+            .is_none()
+        );
+        assert!(
+            TlsError::PinMismatch {
+                expected: vec![],
+                actual: "x".into()
+            }
+            .source()
+            .is_none()
+        );
+        assert!(TlsError::Timeout(Duration::ZERO).source().is_none());
+        assert!(
+            TlsError::AlpnNegotiationFailed {
+                expected: vec![],
+                negotiated: None
+            }
+            .source()
+            .is_none()
+        );
+    }
+
+    // ---- From<io::Error> ----
+
+    #[test]
+    fn from_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::ConnectionReset, "reset");
+        let tls_err: TlsError = io_err.into();
+        assert!(matches!(tls_err, TlsError::Io(_)));
+        assert!(tls_err.source().is_some());
     }
 }

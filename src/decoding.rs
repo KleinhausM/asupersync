@@ -1126,4 +1126,259 @@ mod tests {
         crate::assert_with_log!(insufficient, "insufficient symbols", true, insufficient);
         crate::test_complete!("into_data_reports_insufficient_symbols");
     }
+
+    // ---- DecodingError Display ----
+
+    #[test]
+    fn decoding_error_display_authentication_failed() {
+        let err = DecodingError::AuthenticationFailed {
+            symbol_id: SymbolId::new(ObjectId::new_for_test(1), 0, 0),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("authentication failed"), "{msg}");
+    }
+
+    #[test]
+    fn decoding_error_display_insufficient_symbols() {
+        let err = DecodingError::InsufficientSymbols {
+            received: 3,
+            needed: 10,
+        };
+        assert_eq!(err.to_string(), "insufficient symbols: have 3, need 10");
+    }
+
+    #[test]
+    fn decoding_error_display_matrix_inversion() {
+        let err = DecodingError::MatrixInversionFailed {
+            reason: "rank deficient".into(),
+        };
+        assert_eq!(err.to_string(), "matrix inversion failed: rank deficient");
+    }
+
+    #[test]
+    fn decoding_error_display_block_timeout() {
+        let err = DecodingError::BlockTimeout {
+            sbn: 2,
+            elapsed: Duration::from_millis(1500),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("block timeout"), "{msg}");
+        assert!(msg.contains("1.5"), "{msg}");
+    }
+
+    #[test]
+    fn decoding_error_display_inconsistent_metadata() {
+        let err = DecodingError::InconsistentMetadata {
+            sbn: 0,
+            details: "mismatch".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("inconsistent block metadata"), "{msg}");
+        assert!(msg.contains("mismatch"), "{msg}");
+    }
+
+    #[test]
+    fn decoding_error_display_symbol_size_mismatch() {
+        let err = DecodingError::SymbolSizeMismatch {
+            expected: 256,
+            actual: 128,
+        };
+        assert_eq!(
+            err.to_string(),
+            "symbol size mismatch: expected 256, got 128"
+        );
+    }
+
+    // ---- DecodingError -> Error conversion ----
+
+    #[test]
+    fn decoding_error_into_error_auth() {
+        let err = DecodingError::AuthenticationFailed {
+            symbol_id: SymbolId::new(ObjectId::new_for_test(1), 0, 0),
+        };
+        let error: crate::error::Error = err.into();
+        assert_eq!(error.kind(), crate::error::ErrorKind::CorruptedSymbol);
+    }
+
+    #[test]
+    fn decoding_error_into_error_insufficient() {
+        let err = DecodingError::InsufficientSymbols {
+            received: 1,
+            needed: 5,
+        };
+        let error: crate::error::Error = err.into();
+        assert_eq!(error.kind(), crate::error::ErrorKind::InsufficientSymbols);
+    }
+
+    #[test]
+    fn decoding_error_into_error_matrix() {
+        let err = DecodingError::MatrixInversionFailed {
+            reason: "singular".into(),
+        };
+        let error: crate::error::Error = err.into();
+        assert_eq!(error.kind(), crate::error::ErrorKind::DecodingFailed);
+    }
+
+    #[test]
+    fn decoding_error_into_error_timeout() {
+        let err = DecodingError::BlockTimeout {
+            sbn: 0,
+            elapsed: Duration::from_secs(30),
+        };
+        let error: crate::error::Error = err.into();
+        assert_eq!(error.kind(), crate::error::ErrorKind::ThresholdTimeout);
+    }
+
+    #[test]
+    fn decoding_error_into_error_inconsistent() {
+        let err = DecodingError::InconsistentMetadata {
+            sbn: 1,
+            details: "x".into(),
+        };
+        let error: crate::error::Error = err.into();
+        assert_eq!(error.kind(), crate::error::ErrorKind::DecodingFailed);
+    }
+
+    #[test]
+    fn decoding_error_into_error_size_mismatch() {
+        let err = DecodingError::SymbolSizeMismatch {
+            expected: 256,
+            actual: 64,
+        };
+        let error: crate::error::Error = err.into();
+        assert_eq!(error.kind(), crate::error::ErrorKind::DecodingFailed);
+    }
+
+    // ---- RejectReason ----
+
+    #[test]
+    fn reject_reason_variants_are_eq() {
+        assert_eq!(RejectReason::WrongObjectId, RejectReason::WrongObjectId);
+        assert_ne!(
+            RejectReason::AuthenticationFailed,
+            RejectReason::SymbolSizeMismatch
+        );
+    }
+
+    #[test]
+    fn reject_reason_debug() {
+        let dbg = format!("{:?}", RejectReason::BlockAlreadyDecoded);
+        assert_eq!(dbg, "BlockAlreadyDecoded");
+    }
+
+    // ---- SymbolAcceptResult ----
+
+    #[test]
+    fn symbol_accept_result_accepted_eq() {
+        let a = SymbolAcceptResult::Accepted {
+            received: 3,
+            needed: 5,
+        };
+        let b = SymbolAcceptResult::Accepted {
+            received: 3,
+            needed: 5,
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn symbol_accept_result_duplicate_eq() {
+        assert_eq!(SymbolAcceptResult::Duplicate, SymbolAcceptResult::Duplicate);
+    }
+
+    #[test]
+    fn symbol_accept_result_rejected_eq() {
+        let a = SymbolAcceptResult::Rejected(RejectReason::MemoryLimitReached);
+        let b = SymbolAcceptResult::Rejected(RejectReason::MemoryLimitReached);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn symbol_accept_result_variants_ne() {
+        assert_ne!(
+            SymbolAcceptResult::Duplicate,
+            SymbolAcceptResult::Rejected(RejectReason::WrongObjectId)
+        );
+    }
+
+    // ---- DecodingConfig default ----
+
+    #[test]
+    fn decoding_config_default_values() {
+        let cfg = DecodingConfig::default();
+        assert_eq!(cfg.symbol_size, 256);
+        assert_eq!(cfg.max_block_size, 1024 * 1024);
+        assert!((cfg.repair_overhead - 1.05).abs() < f64::EPSILON);
+        assert_eq!(cfg.min_overhead, 0);
+        assert_eq!(cfg.max_buffered_symbols, 0);
+        assert_eq!(cfg.block_timeout, Duration::from_secs(30));
+        assert!(!cfg.verify_auth);
+    }
+
+    // ---- BlockStateKind ----
+
+    #[test]
+    fn block_state_kind_eq_and_debug() {
+        assert_eq!(BlockStateKind::Collecting, BlockStateKind::Collecting);
+        assert_ne!(BlockStateKind::Collecting, BlockStateKind::Decoded);
+        assert_eq!(format!("{:?}", BlockStateKind::Failed), "Failed");
+        assert_eq!(format!("{:?}", BlockStateKind::Decoding), "Decoding");
+    }
+
+    // ---- DecodingPipeline construction ----
+
+    #[test]
+    fn pipeline_new_starts_empty() {
+        let pipeline = DecodingPipeline::new(DecodingConfig::default());
+        let progress = pipeline.progress();
+        assert_eq!(progress.blocks_complete, 0);
+        assert_eq!(progress.symbols_received, 0);
+    }
+
+    #[test]
+    fn pipeline_set_object_params_rejects_mismatched_symbol_size() {
+        let mut pipeline = DecodingPipeline::new(DecodingConfig {
+            symbol_size: 256,
+            ..DecodingConfig::default()
+        });
+        let params = ObjectParams::new(ObjectId::new_for_test(1), 1024, 128, 1, 8);
+        let err = pipeline.set_object_params(params).unwrap_err();
+        assert!(matches!(err, DecodingError::SymbolSizeMismatch { .. }));
+    }
+
+    #[test]
+    fn pipeline_set_object_params_rejects_inconsistent_object_id() {
+        let config = encoding_config();
+        let oid1 = ObjectId::new_for_test(1);
+        let oid2 = ObjectId::new_for_test(2);
+
+        let mut pipeline = DecodingPipeline::new(DecodingConfig {
+            symbol_size: config.symbol_size,
+            ..DecodingConfig::default()
+        });
+        pipeline
+            .set_object_params(ObjectParams::new(oid1, 512, config.symbol_size, 1, 2))
+            .expect("first set_object_params");
+        let err = pipeline
+            .set_object_params(ObjectParams::new(oid2, 512, config.symbol_size, 1, 2))
+            .unwrap_err();
+        assert!(matches!(err, DecodingError::InconsistentMetadata { .. }));
+    }
+
+    #[test]
+    fn pipeline_set_object_params_same_id_is_ok() {
+        let config = encoding_config();
+        let oid = ObjectId::new_for_test(1);
+
+        let mut pipeline = DecodingPipeline::new(DecodingConfig {
+            symbol_size: config.symbol_size,
+            ..DecodingConfig::default()
+        });
+        pipeline
+            .set_object_params(ObjectParams::new(oid, 512, config.symbol_size, 1, 2))
+            .expect("first");
+        pipeline
+            .set_object_params(ObjectParams::new(oid, 512, config.symbol_size, 1, 2))
+            .expect("second with same id should succeed");
+    }
 }

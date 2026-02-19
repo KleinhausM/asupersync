@@ -569,4 +569,48 @@ mod tests {
         assert_ne!(TlsState::Ready, TlsState::ShuttingDown);
         assert_ne!(TlsState::ShuttingDown, TlsState::Closed);
     }
+
+    #[test]
+    fn tls_state_self_equality() {
+        assert_eq!(TlsState::Handshaking, TlsState::Handshaking);
+        assert_eq!(TlsState::Ready, TlsState::Ready);
+        assert_eq!(TlsState::ShuttingDown, TlsState::ShuttingDown);
+        assert_eq!(TlsState::Closed, TlsState::Closed);
+    }
+
+    #[test]
+    fn tls_state_exhaustive_inequality() {
+        let states = [
+            TlsState::Handshaking,
+            TlsState::Ready,
+            TlsState::ShuttingDown,
+            TlsState::Closed,
+        ];
+        for (i, a) in states.iter().enumerate() {
+            for (j, b) in states.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tls_state_debug() {
+        assert_eq!(format!("{:?}", TlsState::Handshaking), "Handshaking");
+        assert_eq!(format!("{:?}", TlsState::Ready), "Ready");
+        assert_eq!(format!("{:?}", TlsState::ShuttingDown), "ShuttingDown");
+        assert_eq!(format!("{:?}", TlsState::Closed), "Closed");
+    }
+
+    #[test]
+    fn tls_state_clone_and_copy() {
+        let state = TlsState::Ready;
+        let copied = state; // Copy
+        let cloned = state.clone(); // Clone
+        assert_eq!(state, copied);
+        assert_eq!(state, cloned);
+    }
 }

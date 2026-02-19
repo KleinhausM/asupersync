@@ -316,4 +316,162 @@ mod tests {
         assert_eq!(entries[0].component, "scheduler");
         assert_eq!(entries[1].component, "cancel");
     }
+
+    // ---- emit helpers ----
+
+    #[test]
+    fn emit_scheduler_evidence_populates_fields() {
+        let sink = CollectorSink::new();
+        emit_scheduler_evidence(&sink, "cancel_lane", 10, 5, 3, false);
+
+        assert_eq!(sink.len(), 1);
+        let entry = &sink.entries()[0];
+        assert_eq!(entry.component, "scheduler");
+        assert_eq!(entry.action, "cancel_lane");
+        assert!(!entry.fallback_active);
+        assert_eq!(entry.calibration_score, 1.0);
+        // posterior should sum to ~1.0
+        let sum: f64 = entry.posterior.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-9, "posterior sum={sum}");
+        // top_features should include depth values
+        assert_eq!(entry.top_features.len(), 3);
+    }
+
+    #[test]
+    fn emit_scheduler_evidence_fallback_sets_calibration_zero() {
+        let sink = CollectorSink::new();
+        emit_scheduler_evidence(&sink, "ready_lane", 0, 0, 1, true);
+
+        let entry = &sink.entries()[0];
+        assert!(entry.fallback_active);
+        assert_eq!(entry.calibration_score, 0.0);
+    }
+
+    #[test]
+    fn emit_scheduler_evidence_all_zero_depths() {
+        let sink = CollectorSink::new();
+        emit_scheduler_evidence(&sink, "idle", 0, 0, 0, false);
+
+        let entry = &sink.entries()[0];
+        // All-zero depths: posterior should be [0, 0, 0] (0/max(1,0))
+        assert_eq!(entry.posterior.len(), 3);
+        // denominator is max(1, 0+0+0) = 1, so all zeros
+        for &p in &entry.posterior {
+            assert_eq!(p, 0.0);
+        }
+    }
+
+    #[test]
+    fn emit_cancel_evidence_populates_fields() {
+        let sink = CollectorSink::new();
+        emit_cancel_evidence(&sink, "user", 5, 2);
+
+        assert_eq!(sink.len(), 1);
+        let entry = &sink.entries()[0];
+        assert_eq!(entry.component, "cancellation");
+        assert_eq!(entry.action, "cancel_user");
+        assert_eq!(entry.posterior, vec![1.0]);
+        assert!(!entry.fallback_active);
+        assert_eq!(entry.top_features.len(), 2);
+        assert_eq!(entry.top_features[0].0, "cleanup_poll_quota");
+        assert_eq!(entry.top_features[0].1, 5.0);
+        assert_eq!(entry.top_features[1].0, "cleanup_priority");
+        assert_eq!(entry.top_features[1].1, 2.0);
+    }
+
+    #[test]
+    fn emit_budget_evidence_with_deadline() {
+        let sink = CollectorSink::new();
+        emit_budget_evidence(&sink, "poll", 0, Some(500));
+
+        assert_eq!(sink.len(), 1);
+        let entry = &sink.entries()[0];
+        assert_eq!(entry.component, "budget");
+        assert_eq!(entry.action, "exhausted_poll");
+        assert_eq!(entry.top_features[0].1, 0.0); // polls_remaining
+        assert_eq!(entry.top_features[1].1, 500.0); // deadline_remaining_ms
+    }
+
+    #[test]
+    fn emit_budget_evidence_without_deadline() {
+        let sink = CollectorSink::new();
+        emit_budget_evidence(&sink, "time", 10, None);
+
+        let entry = &sink.entries()[0];
+        assert_eq!(entry.action, "exhausted_time");
+        // None deadline -> u64::MAX as f64
+        assert_eq!(entry.top_features[1].1, u64::MAX as f64);
+    }
+
+    // ---- CollectorSink ----
+
+    #[test]
+    fn collector_sink_default_is_empty() {
+        let sink = CollectorSink::default();
+        assert!(sink.is_empty());
+        assert_eq!(sink.len(), 0);
+        assert!(sink.entries().is_empty());
+    }
+
+    #[test]
+    fn collector_sink_debug_impl() {
+        let sink = CollectorSink::new();
+        let dbg = format!("{sink:?}");
+        assert!(dbg.contains("CollectorSink"), "{dbg}");
+    }
+
+    // ---- NullSink ----
+
+    #[test]
+    fn null_sink_is_clone_and_copy() {
+        let a = NullSink;
+        let b = a;
+        let c = a.clone();
+        // All are usable (Copy + Clone)
+        b.emit(&test_entry("x"));
+        c.emit(&test_entry("y"));
+    }
+
+    #[test]
+    fn null_sink_debug_impl() {
+        let dbg = format!("{:?}", NullSink);
+        assert_eq!(dbg, "NullSink");
+    }
+
+    // ---- JsonlSink ----
+
+    #[test]
+    fn jsonl_sink_path_returns_file_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        let sink = JsonlSink::open(path.clone()).unwrap();
+        assert_eq!(sink.path(), path);
+    }
+
+    #[test]
+    fn jsonl_sink_debug_contains_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("debug_test.jsonl");
+        let sink = JsonlSink::open(path).unwrap();
+        let dbg = format!("{sink:?}");
+        assert!(dbg.contains("JsonlSink"), "{dbg}");
+        assert!(dbg.contains("debug_test.jsonl"), "{dbg}");
+    }
+
+    #[test]
+    fn jsonl_sink_appends_multiple_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("append.jsonl");
+
+        let sink = JsonlSink::open(path.clone()).unwrap();
+        for i in 0..5 {
+            sink.emit(&test_entry(&format!("comp_{i}")));
+        }
+
+        let entries = franken_evidence::export::read_jsonl(&path).unwrap();
+        assert_eq!(entries.len(), 5);
+        for i in 0..5 {
+            assert_eq!(entries[i].component, format!("comp_{i}"));
+        }
+    }
 }
