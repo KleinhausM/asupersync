@@ -250,4 +250,67 @@ mod tests {
         crate::assert_with_log!(ok, "ready chunk", "Poll::Ready(Some([1,2]))", poll);
         crate::test_complete!("ready_chunks_returns_immediate_items");
     }
+
+    /// Invariant: empty stream produces `None` with no chunks.
+    #[test]
+    fn chunks_empty_stream_returns_none() {
+        init_test("chunks_empty_stream_returns_none");
+        let mut stream = Chunks::new(iter(Vec::<i32>::new()), 3);
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let is_none = matches!(poll, Poll::Ready(None));
+        crate::assert_with_log!(is_none, "empty stream yields None", true, is_none);
+        crate::test_complete!("chunks_empty_stream_returns_none");
+    }
+
+    /// Invariant: chunk size 1 yields each item as a single-element vec.
+    #[test]
+    fn chunks_size_one_yields_individual_items() {
+        init_test("chunks_size_one_yields_individual_items");
+        let mut stream = Chunks::new(iter(vec![10, 20, 30]), 1);
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let ok = matches!(poll, Poll::Ready(Some(ref c)) if c == &vec![10]);
+        crate::assert_with_log!(ok, "chunk [10]", true, ok);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let ok = matches!(poll, Poll::Ready(Some(ref c)) if c == &vec![20]);
+        crate::assert_with_log!(ok, "chunk [20]", true, ok);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let ok = matches!(poll, Poll::Ready(Some(ref c)) if c == &vec![30]);
+        crate::assert_with_log!(ok, "chunk [30]", true, ok);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let is_none = matches!(poll, Poll::Ready(None));
+        crate::assert_with_log!(is_none, "stream done", true, is_none);
+        crate::test_complete!("chunks_size_one_yields_individual_items");
+    }
+
+    /// Invariant: when stream length is exactly divisible by chunk size,
+    /// no partial chunk is produced.
+    #[test]
+    fn chunks_exact_divisible_no_partial() {
+        init_test("chunks_exact_divisible_no_partial");
+        let mut stream = Chunks::new(iter(vec![1, 2, 3, 4, 5, 6]), 3);
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let ok = matches!(poll, Poll::Ready(Some(ref c)) if c == &vec![1, 2, 3]);
+        crate::assert_with_log!(ok, "chunk [1,2,3]", true, ok);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let ok = matches!(poll, Poll::Ready(Some(ref c)) if c == &vec![4, 5, 6]);
+        crate::assert_with_log!(ok, "chunk [4,5,6]", true, ok);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let is_none = matches!(poll, Poll::Ready(None));
+        crate::assert_with_log!(is_none, "no partial chunk", true, is_none);
+        crate::test_complete!("chunks_exact_divisible_no_partial");
+    }
 }

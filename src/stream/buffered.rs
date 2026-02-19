@@ -344,4 +344,77 @@ mod tests {
         crate::assert_with_log!(ok, "items", vec![1, 2, 3], items);
         crate::test_complete!("buffer_unordered_yields_all");
     }
+
+    /// Invariant: `Buffered` never holds more than `limit` futures in flight.
+    #[test]
+    fn buffered_respects_in_flight_limit() {
+        init_test("buffered_respects_in_flight_limit");
+        let stream = iter(vec![
+            std::future::ready(1),
+            std::future::ready(2),
+            std::future::ready(3),
+            std::future::ready(4),
+            std::future::ready(5),
+        ]);
+        let mut stream = Buffered::new(stream, 2);
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // After first poll, at most `limit` items should be in flight.
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let ok = matches!(poll, Poll::Ready(Some(1)));
+        crate::assert_with_log!(ok, "poll 1", true, ok);
+
+        // in_flight should never exceed limit (2) at any point.
+        let in_flight = stream.in_flight.len();
+        let within_limit = in_flight <= 2;
+        crate::assert_with_log!(within_limit, "in_flight <= limit", true, within_limit);
+
+        // Drain remaining items.
+        let mut count = 1; // already got 1
+        loop {
+            match Pin::new(&mut stream).poll_next(&mut cx) {
+                Poll::Ready(Some(_)) => {
+                    count += 1;
+                    let in_flight = stream.in_flight.len();
+                    let ok = in_flight <= 2;
+                    crate::assert_with_log!(ok, "in_flight <= limit during drain", true, ok);
+                }
+                Poll::Ready(None) => break,
+                Poll::Pending => {}
+            }
+        }
+        crate::assert_with_log!(count == 5, "all items yielded", 5usize, count);
+        crate::test_complete!("buffered_respects_in_flight_limit");
+    }
+
+    /// Invariant: `Buffered` on an empty stream yields `None` immediately.
+    #[test]
+    fn buffered_empty_stream_terminates() {
+        init_test("buffered_empty_stream_terminates");
+        let stream = iter(Vec::<std::future::Ready<i32>>::new());
+        let mut stream = Buffered::new(stream, 4);
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let is_none = matches!(poll, Poll::Ready(None));
+        crate::assert_with_log!(is_none, "empty stream yields None", true, is_none);
+        crate::test_complete!("buffered_empty_stream_terminates");
+    }
+
+    /// Invariant: `BufferUnordered` on an empty stream yields `None` immediately.
+    #[test]
+    fn buffer_unordered_empty_stream_terminates() {
+        init_test("buffer_unordered_empty_stream_terminates");
+        let stream = iter(Vec::<std::future::Ready<i32>>::new());
+        let mut stream = BufferUnordered::new(stream, 4);
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let is_none = matches!(poll, Poll::Ready(None));
+        crate::assert_with_log!(is_none, "empty stream yields None", true, is_none);
+        crate::test_complete!("buffer_unordered_empty_stream_terminates");
+    }
 }

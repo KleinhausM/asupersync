@@ -877,4 +877,115 @@ mod tests {
 
         std::mem::forget(_receiver);
     }
+
+    // -- Duality invariant --
+
+    /// Invariant: `new_session` produces dual endpoints sharing the same
+    /// channel_id and obligation_kind.
+    #[test]
+    fn send_permit_dual_channels_share_identity() {
+        let (sender, receiver) = send_permit::new_session::<u32>(100);
+
+        let ids_match = sender.channel_id() == receiver.channel_id();
+        assert!(ids_match, "channel_id must match across endpoints");
+
+        let kinds_match = sender.obligation_kind() == receiver.obligation_kind();
+        assert!(kinds_match, "obligation_kind must match across endpoints");
+
+        assert_eq!(sender.obligation_kind(), ObligationKind::SendPermit);
+
+        // Drive both to End to avoid drop bombs.
+        let sender = sender.send(send_permit::ReserveMsg);
+        let sender = sender.select_left();
+        let sender = sender.send(42_u32);
+        let _proof = sender.close();
+
+        let (_, receiver) = receiver.recv(send_permit::ReserveMsg);
+        match receiver.offer(Branch::Left) {
+            Selected::Left(ch) => {
+                let (_, ch) = ch.recv(42_u32);
+                let _proof = ch.close();
+            }
+            Selected::Right(_) => panic!("expected Left"),
+        }
+    }
+
+    // -- Delegation invariant --
+
+    /// Invariant: delegation channel pair preserves metadata and both
+    /// endpoints share the same channel_id and obligation_kind.
+    #[test]
+    fn delegation_pair_preserves_metadata() {
+        use delegation::new_delegation;
+
+        let (delegator_ch, delegatee_ch) =
+            new_delegation::<Initiator, two_phase::InitiatorSession>(201, ObligationKind::SendPermit);
+
+        assert_eq!(delegator_ch.channel_id(), 201);
+        assert_eq!(delegator_ch.obligation_kind(), ObligationKind::SendPermit);
+        assert_eq!(delegatee_ch.channel_id(), 201);
+        assert_eq!(delegatee_ch.obligation_kind(), ObligationKind::SendPermit);
+
+        // Disarm drop bombs — delegation is typestate-only encoding; the
+        // actual Chan<R,S> value cannot pass through send() without triggering
+        // the inner drop bomb, so we verify metadata and type-level correctness.
+        std::mem::forget(delegator_ch);
+        std::mem::forget(delegatee_ch);
+    }
+
+    // -- Multi-renew lease invariant --
+
+    /// Invariant: lease protocol supports multiple renew cycles before release,
+    /// each creating a fresh loop iteration.
+    #[test]
+    fn lease_multiple_renew_cycles() {
+        let (holder, resource) = lease::new_session(300);
+
+        // Holder: Acquire.
+        let holder = holder.send(lease::AcquireMsg);
+
+        // First loop: choose Renew.
+        let holder = holder.select_left();
+        let holder = holder.send(lease::RenewMsg);
+        let _proof1 = holder.close();
+
+        // Resource side first loop.
+        let (_, resource) = resource.recv(lease::AcquireMsg);
+        match resource.offer(Branch::Left) {
+            Selected::Left(ch) => {
+                let (_, ch) = ch.recv(lease::RenewMsg);
+                let _proof = ch.close();
+            }
+            Selected::Right(_) => panic!("expected Renew"),
+        }
+
+        // Second loop iteration.
+        let (holder2, resource2) = lease::renew_loop(300);
+        let holder2 = holder2.select_left(); // Renew again
+        let holder2 = holder2.send(lease::RenewMsg);
+        let _proof2 = holder2.close();
+
+        match resource2.offer(Branch::Left) {
+            Selected::Left(ch) => {
+                let (_, ch) = ch.recv(lease::RenewMsg);
+                let _proof = ch.close();
+            }
+            Selected::Right(_) => panic!("expected Renew 2"),
+        }
+
+        // Third loop: finally Release.
+        let (holder3, resource3) = lease::renew_loop(300);
+        let holder3 = holder3.select_right(); // Release
+        let holder3 = holder3.send(lease::ReleaseMsg);
+        let proof = holder3.close();
+        assert_eq!(proof.obligation_kind, ObligationKind::Lease);
+
+        match resource3.offer(Branch::Right) {
+            Selected::Right(ch) => {
+                let (_, ch) = ch.recv(lease::ReleaseMsg);
+                let _proof = ch.close();
+            }
+            Selected::Left(_) => panic!("expected Release"),
+        }
+    }
 }
