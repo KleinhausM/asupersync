@@ -175,4 +175,25 @@ mod tests {
         let tag = AuthenticationTag::compute(&key, &s1);
         assert!(!tag.verify(&key, &s2));
     }
+
+    // =========================================================================
+    // Wave 54 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn authentication_tag_clone_copy_hash_eq() {
+        use std::collections::HashSet;
+        let t1 = AuthenticationTag::zero();
+        let t2 = AuthenticationTag::from_bytes([1u8; TAG_SIZE]);
+        let copied = t1;
+        let cloned = t1.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(t1, t2);
+
+        let mut set = HashSet::new();
+        set.insert(t1);
+        set.insert(t2);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&t1));
+    }
 }

@@ -329,4 +329,23 @@ mod tests {
     }
 
     // --- Compile-fail doctests for anti-forgery are on HasSpawn and SubsetOf above ---
+
+    // =========================================================================
+    // Wave 54 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn capset_debug_clone_copy_default() {
+        let all = All::default();
+        let dbg = format!("{all:?}");
+        assert!(dbg.contains("CapSet"), "{dbg}");
+        let copied = all;
+        let cloned = all.clone();
+        // ZST so all instances are identical
+        let _ = (copied, cloned);
+
+        let none = None::default();
+        let dbg_none = format!("{none:?}");
+        assert!(dbg_none.contains("CapSet"), "{dbg_none}");
+    }
 }

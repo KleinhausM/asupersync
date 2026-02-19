@@ -1435,4 +1435,29 @@ mod tests {
             PipelineResult::cancelled(CancelReason::shutdown(), FailedStage::new(2, 5));
         assert_eq!(cancelled.stages_executed(), 2); // Stages 0 and 1 completed
     }
+
+    // =========================================================================
+    // Wave 54 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn pipeline_config_debug_clone_copy_eq_default() {
+        let cfg = PipelineConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("PipelineConfig"), "{dbg}");
+        let copied = cfg;
+        let cloned = cfg.clone();
+        assert_eq!(copied, cloned);
+    }
+
+    #[test]
+    fn failed_stage_debug_clone_copy_eq() {
+        let fs = FailedStage::new(2, 5);
+        let dbg = format!("{fs:?}");
+        assert!(dbg.contains("FailedStage"), "{dbg}");
+        let copied = fs;
+        let cloned = fs.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(fs, FailedStage::new(3, 5));
+    }
 }

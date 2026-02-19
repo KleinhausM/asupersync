@@ -152,4 +152,25 @@ mod tests {
         assert!(debug.ends_with("...)"));
         assert!(debug.len() < 30); // Should be short
     }
+
+    // =========================================================================
+    // Wave 54 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn auth_key_clone_copy_hash_eq() {
+        use std::collections::HashSet;
+        let k1 = AuthKey::from_seed(1);
+        let k2 = AuthKey::from_seed(2);
+        let copied = k1;
+        let cloned = k1.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(k1, k2);
+
+        let mut set = HashSet::new();
+        set.insert(k1);
+        set.insert(k2);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&k1));
+    }
 }
