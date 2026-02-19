@@ -2,7 +2,7 @@
 name = "franken-evidence"
 version = "0.2.0"
 edition = "2024"
-license = "MIT"
+license-file = "../LICENSE"
 description = "Canonical EvidenceLedger schema for FrankenSuite decision tracing."
 repository = "https://github.com/Dicklesworthstone/asupersync"
 keywords = ["evidence", "ledger", "decisions", "tracing"]
