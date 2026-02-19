@@ -489,6 +489,7 @@ fn baseline_report_track2_burndown_and_closure_gate_are_well_formed() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn baseline_report_testing_matrix_diff_is_present_and_tracks_unresolved_deltas() {
     let diff: Value =
         serde_json::from_str(TESTING_MATRIX_DIFF_JSON).expect("testing matrix diff must parse");
@@ -603,6 +604,7 @@ fn baseline_report_testing_matrix_diff_is_present_and_tracks_unresolved_deltas()
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn baseline_report_no_mock_inventory_classifies_all_policy_paths() {
     let inventory: Value =
         serde_json::from_str(NO_MOCK_INVENTORY_JSON).expect("test-double inventory must parse");

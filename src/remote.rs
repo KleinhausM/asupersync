@@ -3360,4 +3360,245 @@ mod tests {
         let saga = Saga::default();
         assert_eq!(saga.state(), SagaState::Running);
     }
+
+    // -----------------------------------------------------------------------
+    // Invariant tests — lease boundary conditions (B6: asupersync-3narc.2.6)
+    // -----------------------------------------------------------------------
+
+    /// Invariant: renewing a lease at exactly `now == expires_at` must fail
+    /// with `LeaseError::Expired`, because `is_expired` uses `>=`.
+    #[test]
+    fn lease_renew_at_exact_expiry_boundary_fails() {
+        let now = Time::from_secs(10);
+        let mut lease = Lease::new(
+            test_obligation_id(),
+            test_region_id(),
+            test_task_id(),
+            Duration::from_secs(30),
+            now,
+        );
+        // expires_at == 40; renew at exactly 40
+        let result = lease.renew(Duration::from_secs(30), Time::from_secs(40));
+        assert_eq!(result, Err(LeaseError::Expired));
+        assert_eq!(lease.state(), LeaseState::Expired);
+        // Once expired by renew, subsequent renew must also fail
+        let result2 = lease.renew(Duration::from_secs(30), Time::from_secs(35));
+        assert_eq!(result2, Err(LeaseError::Expired));
+    }
+
+    /// Invariant: a zero-duration lease is immediately expired at its creation time,
+    /// since `expires_at = now + Duration::ZERO = now` and `is_expired` uses `>=`.
+    #[test]
+    fn lease_zero_duration_immediately_expired() {
+        let now = Time::from_secs(100);
+        let lease = Lease::new(
+            test_obligation_id(),
+            test_region_id(),
+            test_task_id(),
+            Duration::ZERO,
+            now,
+        );
+        assert!(
+            lease.is_expired(now),
+            "zero-duration lease must be expired at creation time"
+        );
+        assert!(
+            !lease.is_active(now),
+            "zero-duration lease must not be active at creation time"
+        );
+        assert_eq!(lease.remaining(now), Duration::ZERO);
+    }
+
+    /// Invariant: `is_active` and `is_expired` are complementary for Active-state leases.
+    /// For any time `t`, exactly one of `is_active(t)` or `is_expired(t)` is true
+    /// when the lease state is Active.
+    #[test]
+    fn lease_active_and_expired_are_complementary() {
+        let now = Time::from_secs(10);
+        let lease = Lease::new(
+            test_obligation_id(),
+            test_region_id(),
+            test_task_id(),
+            Duration::from_secs(30),
+            now,
+        );
+        // Test several time points: before, at, and after expiry
+        for t in [0, 5, 10, 20, 39, 40, 41, 100] {
+            let time = Time::from_secs(t);
+            let active = lease.is_active(time);
+            let expired = lease.is_expired(time);
+            assert!(
+                active != expired,
+                "at t={t}: is_active={active}, is_expired={expired} — must be complementary"
+            );
+        }
+    }
+
+    /// Invariant: releasing then trying to renew gives Released, not Expired.
+    /// The state transition Release takes precedence in error reporting.
+    #[test]
+    fn lease_release_then_renew_gives_released_error() {
+        let now = Time::from_secs(10);
+        let mut lease = Lease::new(
+            test_obligation_id(),
+            test_region_id(),
+            test_task_id(),
+            Duration::from_secs(30),
+            now,
+        );
+        lease.release(Time::from_secs(15)).unwrap();
+        let result = lease.renew(Duration::from_secs(30), Time::from_secs(15));
+        assert_eq!(result, Err(LeaseError::Released));
+    }
+
+    // -----------------------------------------------------------------------
+    // Invariant tests — idempotency store (B6: asupersync-3narc.2.6)
+    // -----------------------------------------------------------------------
+
+    /// Invariant: eviction removes completed entries too, not just pending ones.
+    /// Completion status does not exempt an entry from TTL-based eviction.
+    #[test]
+    fn idempotency_store_evicts_completed_entries_on_ttl() {
+        let mut store = IdempotencyStore::new(Duration::from_mins(1));
+        let key = IdempotencyKey::from_raw(1);
+        let comp = ComputationName::new("work");
+
+        // Record at t=10 (expires at t=70)
+        store.record(key, RemoteTaskId::next(), comp.clone(), Time::from_secs(10));
+        // Complete with success
+        store.complete(&key, RemoteOutcome::Success(vec![42]));
+        assert_eq!(store.len(), 1);
+
+        // Evict at t=80 — should remove the completed entry
+        let evicted = store.evict_expired(Time::from_secs(80));
+        assert_eq!(evicted, 1);
+        assert!(store.is_empty());
+
+        // Re-check: the key should be New again
+        let decision = store.check(&key, &comp);
+        assert!(matches!(decision, DedupDecision::New));
+    }
+
+    /// Invariant: checking a completed entry with a Failed outcome still returns
+    /// Duplicate (not New), and the cached outcome is available.
+    #[test]
+    fn idempotency_store_check_after_failed_returns_duplicate_with_outcome() {
+        let mut store = IdempotencyStore::new(Duration::from_mins(5));
+        let key = IdempotencyKey::from_raw(77);
+        let comp = ComputationName::new("fragile_op");
+
+        store.record(key, RemoteTaskId::next(), comp.clone(), Time::from_secs(10));
+        store.complete(&key, RemoteOutcome::Failed("disk full".into()));
+
+        let decision = store.check(&key, &comp);
+        match decision {
+            DedupDecision::Duplicate(record) => {
+                assert!(record.outcome.is_some());
+                let outcome = record.outcome.unwrap();
+                assert!(!outcome.is_success());
+                assert!(matches!(outcome, RemoteOutcome::Failed(msg) if msg.contains("disk full")));
+            }
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+    }
+
+    /// Invariant: completing the same key twice overwrites the outcome.
+    /// The last `complete()` call wins.
+    #[test]
+    fn idempotency_store_complete_overwrites_outcome() {
+        let mut store = IdempotencyStore::new(Duration::from_mins(5));
+        let key = IdempotencyKey::from_raw(88);
+        let comp = ComputationName::new("retry_op");
+
+        store.record(key, RemoteTaskId::next(), comp.clone(), Time::from_secs(10));
+
+        // First complete: Failed
+        store.complete(&key, RemoteOutcome::Failed("transient".into()));
+        // Second complete: Success (overwrites)
+        store.complete(&key, RemoteOutcome::Success(vec![1, 2, 3]));
+
+        let decision = store.check(&key, &comp);
+        match decision {
+            DedupDecision::Duplicate(record) => {
+                let outcome = record.outcome.expect("outcome should be set");
+                assert!(outcome.is_success(), "latest complete should win");
+            }
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Invariant tests — saga (B6: asupersync-3narc.2.6)
+    // -----------------------------------------------------------------------
+
+    /// Invariant: calling `step()` after `complete()` must panic.
+    /// A completed saga must not accept new steps.
+    #[test]
+    #[should_panic(expected = "not Running")]
+    fn saga_step_after_complete_panics() {
+        let mut saga = Saga::new();
+        saga.step("step-0", || Ok(()), || "comp-0".to_string())
+            .unwrap();
+        saga.complete();
+        assert_eq!(saga.state(), SagaState::Completed);
+
+        // This must panic
+        let _: Result<(), _> = saga.step("step-1", || Ok(()), || "comp-1".to_string());
+    }
+
+    /// Invariant: calling `step()` after `abort()` must panic.
+    /// An aborted saga must not accept new steps.
+    #[test]
+    #[should_panic(expected = "not Running")]
+    fn saga_step_after_abort_panics() {
+        let mut saga = Saga::new();
+        saga.step("step-0", || Ok(()), || "comp-0".to_string())
+            .unwrap();
+        saga.abort();
+        assert_eq!(saga.state(), SagaState::Aborted);
+
+        // This must panic
+        let _: Result<(), _> = saga.step("step-1", || Ok(()), || "comp-1".to_string());
+    }
+
+    /// Invariant: calling `complete()` after `abort()` must panic.
+    #[test]
+    #[should_panic(expected = "Running")]
+    fn saga_complete_after_abort_panics() {
+        let mut saga = Saga::new();
+        saga.step("step-0", || Ok(()), || "comp-0".to_string())
+            .unwrap();
+        saga.abort();
+        saga.complete(); // must panic
+    }
+
+    /// Invariant: calling `abort()` after `complete()` must panic.
+    #[test]
+    #[should_panic(expected = "Running")]
+    fn saga_abort_after_complete_panics() {
+        let mut saga = Saga::new();
+        saga.step("step-0", || Ok(()), || "comp-0".to_string())
+            .unwrap();
+        saga.complete();
+        saga.abort(); // must panic
+    }
+
+    /// Invariant: an empty saga can be completed without any steps.
+    #[test]
+    fn saga_empty_complete_is_valid() {
+        let mut saga = Saga::new();
+        assert_eq!(saga.completed_steps(), 0);
+        saga.complete();
+        assert_eq!(saga.state(), SagaState::Completed);
+        assert!(saga.compensation_results().is_empty());
+    }
+
+    /// Invariant: an empty saga can be aborted (no compensations to run).
+    #[test]
+    fn saga_empty_abort_is_valid() {
+        let mut saga = Saga::new();
+        saga.abort();
+        assert_eq!(saga.state(), SagaState::Aborted);
+        assert!(saga.compensation_results().is_empty());
+    }
 }
