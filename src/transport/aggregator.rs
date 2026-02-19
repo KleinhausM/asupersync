@@ -2174,4 +2174,199 @@ mod tests {
 
         crate::test_complete!("flush_timeout_drains_consecutive_after_advance");
     }
+
+    // =========================================================================
+    // Wave 29: Data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn path_id_debug_clone_copy_display() {
+        let id = PathId::new(42);
+        assert!(format!("{id:?}").contains("42"));
+        assert_eq!(format!("{id}"), "Path(42)");
+        let cloned = id.clone();
+        let copied = id; // Copy
+        assert_eq!(cloned, copied);
+        assert_eq!(id.0, 42);
+    }
+
+    #[test]
+    fn path_id_ord_hash() {
+        use std::collections::HashSet;
+        let a = PathId(1);
+        let b = PathId(2);
+        assert!(a < b);
+        assert!(b > a);
+        let mut set = HashSet::new();
+        set.insert(a);
+        set.insert(b);
+        set.insert(a); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn path_state_debug_clone_copy_eq() {
+        let state = PathState::Active;
+        assert!(format!("{state:?}").contains("Active"));
+        let cloned = state.clone();
+        let copied = state; // Copy
+        assert_eq!(cloned, copied);
+        assert_ne!(PathState::Active, PathState::Closed);
+    }
+
+    #[test]
+    fn path_state_from_u8_all_variants() {
+        assert_eq!(PathState::from_u8(0), PathState::Active);
+        assert_eq!(PathState::from_u8(1), PathState::Degraded);
+        assert_eq!(PathState::from_u8(2), PathState::Unavailable);
+        assert_eq!(PathState::from_u8(3), PathState::Closed);
+        assert_eq!(PathState::from_u8(255), PathState::Closed); // fallback
+    }
+
+    #[test]
+    fn path_characteristics_debug_clone_default() {
+        let chars = PathCharacteristics::default();
+        assert!(format!("{chars:?}").contains("PathCharacteristics"));
+        assert_eq!(chars.latency_ms, 50);
+        assert_eq!(chars.bandwidth_bps, 1_000_000);
+        assert!((chars.loss_rate - 0.01).abs() < f64::EPSILON);
+        assert_eq!(chars.jitter_ms, 10);
+        assert!(!chars.is_primary);
+        assert_eq!(chars.priority, 100);
+        let _cloned = chars.clone();
+    }
+
+    #[test]
+    fn path_selection_policy_debug_clone_copy_default() {
+        let policy = PathSelectionPolicy::default();
+        assert_eq!(policy, PathSelectionPolicy::UseAll);
+        assert!(format!("{policy:?}").contains("UseAll"));
+        let cloned = policy.clone();
+        let copied = policy; // Copy
+        assert_eq!(cloned, copied);
+    }
+
+    #[test]
+    fn path_set_stats_debug_clone() {
+        let stats = PathSetStats {
+            path_count: 3,
+            usable_count: 2,
+            total_received: 100,
+            total_lost: 5,
+            total_duplicates: 10,
+            aggregate_bandwidth_bps: 5_000_000,
+        };
+        assert!(format!("{stats:?}").contains("PathSetStats"));
+        let stats2 = stats.clone();
+        assert_eq!(stats2.path_count, 3);
+        assert_eq!(stats2.total_received, 100);
+    }
+
+    #[test]
+    fn deduplicator_config_debug_clone_default() {
+        let config = DeduplicatorConfig::default();
+        assert!(format!("{config:?}").contains("DeduplicatorConfig"));
+        assert_eq!(config.max_symbols_per_object, 10_000);
+        assert_eq!(config.max_objects, 1_000);
+        assert!(config.track_path);
+        let _cloned = config.clone();
+    }
+
+    #[test]
+    fn deduplicator_stats_debug_clone() {
+        let stats = DeduplicatorStats {
+            objects_tracked: 5,
+            symbols_tracked: 50,
+            duplicates_detected: 3,
+            unique_symbols: 47,
+        };
+        assert!(format!("{stats:?}").contains("DeduplicatorStats"));
+        let stats2 = stats.clone();
+        assert_eq!(stats2.objects_tracked, 5);
+    }
+
+    #[test]
+    fn reorderer_config_debug_clone_default() {
+        let config = ReordererConfig::default();
+        assert!(format!("{config:?}").contains("ReordererConfig"));
+        assert_eq!(config.max_buffer_per_object, 1_000);
+        assert!(!config.immediate_delivery);
+        assert_eq!(config.max_sequence_gap, 100);
+        let _cloned = config.clone();
+    }
+
+    #[test]
+    fn reorderer_stats_debug_clone() {
+        let stats = ReordererStats {
+            objects_tracked: 2,
+            symbols_buffered: 10,
+            in_order_deliveries: 50,
+            reordered_deliveries: 5,
+            timeout_deliveries: 1,
+        };
+        assert!(format!("{stats:?}").contains("ReordererStats"));
+        let stats2 = stats.clone();
+        assert_eq!(stats2.symbols_buffered, 10);
+    }
+
+    #[test]
+    fn aggregator_config_debug_clone_default() {
+        let config = AggregatorConfig::default();
+        assert!(format!("{config:?}").contains("AggregatorConfig"));
+        assert!(config.enable_reordering);
+        assert_eq!(config.path_policy, PathSelectionPolicy::UseAll);
+        let _cloned = config.clone();
+    }
+
+    #[test]
+    fn aggregation_error_debug_clone() {
+        let err = AggregationError::PathNotFound { path: PathId(1) };
+        assert!(format!("{err:?}").contains("PathNotFound"));
+        let cloned = err.clone();
+        assert!(format!("{cloned}").contains("not found"));
+    }
+
+    #[test]
+    fn aggregation_error_is_std_error() {
+        let err: &dyn std::error::Error = &AggregationError::PathUnavailable { path: PathId(1) };
+        let _ = format!("{err}");
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn aggregation_error_into_error() {
+        let err = AggregationError::BufferOverflow {
+            object_id: ObjectId::new(0, 1),
+        };
+        let generic: Error = err.into();
+        let msg = format!("{generic}");
+        assert!(msg.contains("buffer overflow") || msg.contains("overflow"));
+    }
+
+    #[test]
+    fn transport_path_state_transitions() {
+        let path = test_path(1);
+        assert_eq!(path.state(), PathState::Active);
+        path.set_state(PathState::Degraded);
+        assert_eq!(path.state(), PathState::Degraded);
+        path.set_state(PathState::Closed);
+        assert_eq!(path.state(), PathState::Closed);
+    }
+
+    #[test]
+    fn transport_path_zero_stats_rates() {
+        let path = test_path(1);
+        assert!((path.effective_loss_rate() - 0.0).abs() < f64::EPSILON);
+        assert!((path.duplicate_rate() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn process_result_debug() {
+        let result = ProcessResult {
+            ready: vec![],
+            was_duplicate: false,
+            path: PathId(1),
+        };
+        assert!(format!("{result:?}").contains("ProcessResult"));
+    }
 }
