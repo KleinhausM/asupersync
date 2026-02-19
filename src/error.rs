@@ -1174,4 +1174,105 @@ mod tests {
         let err = Error::new(ErrorKind::User);
         assert!(err.source().is_none());
     }
+
+    // Pure data-type tests (wave 39 – CyanBarn)
+
+    #[test]
+    fn error_kind_copy_hash() {
+        use std::collections::HashSet;
+        let kind = ErrorKind::Internal;
+        let copied = kind;
+        assert_eq!(copied, ErrorKind::Internal);
+
+        let mut set = HashSet::new();
+        set.insert(ErrorKind::Cancelled);
+        set.insert(ErrorKind::DeadlineExceeded);
+        set.insert(ErrorKind::Cancelled); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn recoverability_copy_hash_eq() {
+        use std::collections::HashSet;
+        let r = Recoverability::Transient;
+        let copied = r;
+        assert_eq!(copied, Recoverability::Transient);
+        assert_ne!(r, Recoverability::Permanent);
+
+        let mut set = HashSet::new();
+        set.insert(Recoverability::Transient);
+        set.insert(Recoverability::Permanent);
+        set.insert(Recoverability::Unknown);
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn recovery_action_copy_hash() {
+        use std::collections::HashSet;
+        let action = RecoveryAction::Propagate;
+        let copied = action;
+        assert_eq!(copied, RecoveryAction::Propagate);
+
+        let mut set = HashSet::new();
+        set.insert(RecoveryAction::RetryImmediately);
+        set.insert(RecoveryAction::Propagate);
+        set.insert(RecoveryAction::Escalate);
+        set.insert(RecoveryAction::Custom);
+        assert_eq!(set.len(), 4);
+    }
+
+    #[test]
+    fn error_category_copy_clone_hash() {
+        use std::collections::HashSet;
+        let cat = ErrorCategory::Transport;
+        let copied = cat;
+        let cloned = cat.clone();
+        assert_eq!(copied, cloned);
+
+        let mut set = HashSet::new();
+        set.insert(ErrorCategory::Cancellation);
+        set.insert(ErrorCategory::Budget);
+        set.insert(ErrorCategory::Channel);
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn backoff_hint_copy_hash_eq() {
+        use std::collections::HashSet;
+        let hint = BackoffHint::DEFAULT;
+        let copied = hint;
+        assert_eq!(copied, BackoffHint::DEFAULT);
+        assert_ne!(hint, BackoffHint::AGGRESSIVE);
+
+        let mut set = HashSet::new();
+        set.insert(BackoffHint::DEFAULT);
+        set.insert(BackoffHint::AGGRESSIVE);
+        set.insert(BackoffHint::QUICK);
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn recv_error_debug_clone_copy() {
+        let err = RecvError::Disconnected;
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("Disconnected"));
+
+        let copied = err;
+        assert_eq!(copied, RecvError::Disconnected);
+
+        let cloned = err.clone();
+        assert_eq!(cloned, err);
+    }
+
+    #[test]
+    fn cancelled_clone_eq() {
+        let c = Cancelled {
+            reason: CancelReason::user("test"),
+        };
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("Cancelled"));
+
+        let cloned = c.clone();
+        assert_eq!(cloned, c);
+    }
 }
