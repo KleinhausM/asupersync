@@ -862,4 +862,28 @@ mod tests {
         // Note: If we did right fold it would be different: (1 - (2 - 3)) = 2
         // Our implementation always does left fold for determinism
     }
+
+    // --- wave 79 trait coverage ---
+
+    #[test]
+    fn map_reduce_error_debug_clone() {
+        let e: MapReduceError<&str> = MapReduceError::Error {
+            error: "bad",
+            index: 2,
+            total_failures: 1,
+            success_count: 3,
+        };
+        let e2 = e.clone();
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Error"));
+        let dbg2 = format!("{e2:?}");
+        assert!(dbg2.contains("Error"));
+
+        let empty: MapReduceError<&str> = MapReduceError::Empty;
+        let empty2 = empty.clone();
+        let dbg3 = format!("{empty:?}");
+        assert!(dbg3.contains("Empty"));
+        let dbg4 = format!("{empty2:?}");
+        assert!(dbg4.contains("Empty"));
+    }
 }

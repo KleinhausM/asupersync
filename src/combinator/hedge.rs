@@ -890,4 +890,39 @@ mod tests {
         let primary_fast: HedgeResult<i32, &str> = HedgeResult::primary_fast(Outcome::Ok(3));
         assert_eq!(primary_fast.winner(), HedgeWinner::Primary);
     }
+
+    // --- wave 79 trait coverage ---
+
+    #[test]
+    fn hedge_config_debug_clone_copy_eq() {
+        let c = HedgeConfig::from_millis(100);
+        let c2 = c; // Copy
+        let c3 = c.clone();
+        assert_eq!(c, c2);
+        assert_eq!(c, c3);
+        assert_ne!(c, HedgeConfig::from_secs(5));
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("HedgeConfig"));
+    }
+
+    #[test]
+    fn hedge_winner_debug_clone_copy_eq() {
+        let w = HedgeWinner::Primary;
+        let w2 = w; // Copy
+        let w3 = w.clone();
+        assert_eq!(w, w2);
+        assert_eq!(w, w3);
+        assert_ne!(w, HedgeWinner::Backup);
+        let dbg = format!("{w:?}");
+        assert!(dbg.contains("Primary"));
+    }
+
+    #[test]
+    fn hedge_result_debug_clone() {
+        let r: HedgeResult<i32, &str> = HedgeResult::primary_fast(Outcome::Ok(42));
+        let r2 = r.clone();
+        assert_eq!(r.winner(), r2.winner());
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("HedgeResult") || dbg.contains("PrimaryFast"));
+    }
 }

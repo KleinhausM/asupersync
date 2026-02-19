@@ -711,4 +711,29 @@ mod tests {
         // In race, the first to complete (Err) would win
         // This test documents the semantic difference
     }
+
+    // --- wave 79 trait coverage ---
+
+    #[test]
+    fn first_ok_error_debug_clone() {
+        let e: FirstOkError<&str> = FirstOkError::AllFailed {
+            errors: vec!["e1", "e2"],
+            attempted: 2,
+        };
+        let e2 = e.clone();
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("AllFailed"));
+        let dbg2 = format!("{e2:?}");
+        assert!(dbg2.contains("AllFailed"));
+    }
+
+    #[test]
+    fn first_ok_failure_debug_clone() {
+        let f: FirstOkFailure<&str> = FirstOkFailure::Error("msg");
+        let f2 = f.clone();
+        let dbg = format!("{f:?}");
+        assert!(dbg.contains("Error"));
+        let dbg2 = format!("{f2:?}");
+        assert!(dbg2.contains("Error"));
+    }
 }

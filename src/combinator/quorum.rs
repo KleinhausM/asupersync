@@ -755,4 +755,31 @@ mod tests {
         let result = quorum_outcomes(1, outcomes);
         assert!(!result.quorum_met);
     }
+
+    // --- wave 79 trait coverage ---
+
+    #[test]
+    fn quorum_error_debug_clone() {
+        let e: QuorumError<&str> = QuorumError::InsufficientSuccesses {
+            required: 3,
+            total: 5,
+            achieved: 1,
+            errors: vec!["e1"],
+        };
+        let e2 = e.clone();
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("InsufficientSuccesses"));
+        let dbg2 = format!("{e2:?}");
+        assert!(dbg2.contains("InsufficientSuccesses"));
+    }
+
+    #[test]
+    fn quorum_failure_debug_clone() {
+        let f: QuorumFailure<&str> = QuorumFailure::Error("bad");
+        let f2 = f.clone();
+        let dbg = format!("{f:?}");
+        assert!(dbg.contains("Error"));
+        let dbg2 = format!("{f2:?}");
+        assert!(dbg2.contains("Error"));
+    }
 }
