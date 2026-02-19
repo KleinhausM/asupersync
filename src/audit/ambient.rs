@@ -590,4 +590,41 @@ let x = Instant::now();
             "Should have exactly one non-comment Instant::now() line"
         );
     }
+
+    // =========================================================================
+    // Wave 50 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn ambient_finding_debug_clone() {
+        let f = &KNOWN_FINDINGS[0];
+        let dbg = format!("{f:?}");
+        assert!(dbg.contains("AmbientFinding"), "{dbg}");
+        let cloned = f.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
+
+    #[test]
+    fn ambient_category_debug_clone_copy_hash() {
+        use std::collections::HashSet;
+        let c = AmbientCategory::Time;
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("Time"), "{dbg}");
+        let copied = c;
+        let cloned = c.clone();
+        assert_eq!(copied, cloned);
+        let mut set = HashSet::new();
+        set.insert(c);
+        assert!(set.contains(&AmbientCategory::Time));
+    }
+
+    #[test]
+    fn severity_debug_clone_copy() {
+        let s = Severity::Warning;
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Warning"), "{dbg}");
+        let copied = s;
+        let cloned = s.clone();
+        assert_eq!(copied, cloned);
+    }
 }

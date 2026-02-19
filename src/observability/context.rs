@@ -269,4 +269,35 @@ mod tests {
         assert_eq!(merged.custom("b"), Some("2")); // Added
         assert_eq!(merged.custom("a"), Some("override")); // Overridden
     }
+
+    // =========================================================================
+    // Wave 50 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn span_id_debug_clone_copy_hash_display_default() {
+        use std::collections::HashSet;
+        let s = SpanId(99);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("SpanId"), "{dbg}");
+        let copied = s;
+        let cloned = s.clone();
+        assert_eq!(copied, cloned);
+        let display = format!("{s}");
+        assert_eq!(display, "S99");
+        let mut set = HashSet::new();
+        set.insert(s);
+        assert!(set.contains(&SpanId(99)));
+        let _def = SpanId::default();
+    }
+
+    #[test]
+    fn diagnostic_context_debug_clone_default() {
+        let def = DiagnosticContext::default();
+        let dbg = format!("{def:?}");
+        assert!(dbg.contains("DiagnosticContext"), "{dbg}");
+        let ctx = DiagnosticContext::new().with_custom("k", "v");
+        let cloned = ctx.clone();
+        assert_eq!(cloned.custom("k"), Some("v"));
+    }
 }

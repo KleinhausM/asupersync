@@ -410,4 +410,59 @@ mod tests {
         assert!(StatusCode::NOT_FOUND.is_client_error());
         assert!(StatusCode::INTERNAL_SERVER_ERROR.is_server_error());
     }
+
+    // =========================================================================
+    // Wave 50 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn status_code_debug_clone_copy_hash_display() {
+        use std::collections::HashSet;
+        let sc = StatusCode::OK;
+        let dbg = format!("{sc:?}");
+        assert!(dbg.contains("StatusCode"), "{dbg}");
+        assert!(dbg.contains("200"), "{dbg}");
+        let copied = sc;
+        let cloned = sc.clone();
+        assert_eq!(copied, cloned);
+        let display = format!("{sc}");
+        assert_eq!(display, "200");
+        let mut set = HashSet::new();
+        set.insert(sc);
+        assert!(set.contains(&StatusCode::OK));
+    }
+
+    #[test]
+    fn response_debug_clone() {
+        let resp = Response::new(StatusCode::OK, Bytes::from_static(b"hi"));
+        let dbg = format!("{resp:?}");
+        assert!(dbg.contains("Response"), "{dbg}");
+        let cloned = resp.clone();
+        assert_eq!(cloned.status, StatusCode::OK);
+    }
+
+    #[test]
+    fn redirect_debug_clone() {
+        let r = Redirect::to("/home");
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("Redirect"), "{dbg}");
+        let cloned = r.clone();
+        let dbg2 = format!("{cloned:?}");
+        assert_eq!(dbg, dbg2);
+    }
+
+    #[test]
+    fn json_html_debug_clone() {
+        let j = Json(42);
+        let dbg = format!("{j:?}");
+        assert!(dbg.contains("Json"), "{dbg}");
+        let jc = j.clone();
+        assert_eq!(format!("{jc:?}"), dbg);
+
+        let h = Html("hello");
+        let dbg2 = format!("{h:?}");
+        assert!(dbg2.contains("Html"), "{dbg2}");
+        let hc = h.clone();
+        assert_eq!(format!("{hc:?}"), dbg2);
+    }
 }

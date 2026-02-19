@@ -416,4 +416,69 @@ mod tests {
         };
         assert_eq!(infinite.persistence(), None);
     }
+
+    // =========================================================================
+    // Wave 50 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn topological_score_debug_clone_copy_eq() {
+        let s = TopologicalScore {
+            novelty: 3,
+            persistence_sum: 42,
+            fingerprint: 0xBEEF,
+        };
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("TopologicalScore"), "{dbg}");
+        assert!(dbg.contains("42"), "{dbg}");
+        let copied = s;
+        let cloned = s.clone();
+        assert_eq!(copied, cloned);
+        assert_eq!(s, s);
+    }
+
+    #[test]
+    fn class_id_debug_clone_copy_hash() {
+        use std::collections::HashSet;
+        let c = ClassId {
+            birth: 1,
+            death: 10,
+        };
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("ClassId"), "{dbg}");
+        let copied = c;
+        let cloned = c.clone();
+        assert_eq!(copied, cloned);
+        let mut set = HashSet::new();
+        set.insert(c);
+        assert!(set.contains(&c));
+    }
+
+    #[test]
+    fn evidence_entry_debug_clone() {
+        let e = EvidenceEntry {
+            class: ClassId {
+                birth: 0,
+                death: 5,
+            },
+            is_novel: true,
+            persistence: Some(5),
+        };
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("EvidenceEntry"), "{dbg}");
+        let cloned = e.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
+
+    #[test]
+    fn evidence_ledger_debug_clone() {
+        let ledger = EvidenceLedger {
+            entries: vec![],
+            score: TopologicalScore::zero(0),
+        };
+        let dbg = format!("{ledger:?}");
+        assert!(dbg.contains("EvidenceLedger"), "{dbg}");
+        let cloned = ledger.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
 }
