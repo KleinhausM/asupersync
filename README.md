@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Dicklesworthstone/asupersync/actions/workflows/ci.yml/badge.svg)](https://github.com/Dicklesworthstone/asupersync/actions/workflows/ci.yml)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-nightly-orange.svg)](https://www.rust-lang.org/)
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-brightgreen)](https://github.com/Dicklesworthstone/asupersync)
 
 **Spec-first, cancel-correct, capability-secure async for Rust**
@@ -278,7 +278,7 @@ cargo build --release
 
 ### Minimum Supported Rust Version
 
-Asupersync requires **Rust 1.75+** and uses Edition 2021.
+Asupersync uses **Rust Edition 2024** and tracks the pinned **nightly** toolchain in `rust-toolchain.toml`.
 
 ---
 
@@ -409,11 +409,41 @@ impl Cx {
 | **Timed Lane** | Deadline-driven tasks (EDF) | Based on deadline |
 | **Ready Lane** | Normal runnable tasks | Default priority |
 
+Scheduler behavior is intentionally explicit:
+
+- Cancel preemption is bounded, not unbounded. With the default `cancel_streak_limit=16`, ready or timed work gets a dispatch slot within `limit + 1` steps per worker (`src/runtime/scheduler/three_lane.rs`).
+- During `DrainObligations` and `DrainRegions`, the effective bound is temporarily widened to `2 * cancel_streak_limit` to finish cleanup without starving everything else (`src/runtime/scheduler/three_lane.rs`).
+- Workers track fairness telemetry (`fairness_yields`, `max_cancel_streak`) so starvation claims can be checked against runtime counters, not guesses (`src/runtime/scheduler/three_lane.rs`).
+- Local dispatch uses single-lock multi-lane pops (`try_local_any_lane` and `pop_any_lane_with_hint`) to reduce lock traffic on the hot path while keeping lane ordering rules intact (`src/runtime/scheduler/three_lane.rs`).
+- An optional Lyapunov governor can steer lane ordering from periodic runtime snapshots. It is off by default, and when enabled it runs at a configurable interval (`governor_interval`, default `32`) (`src/runtime/config.rs`, `src/runtime/builder.rs`, `src/runtime/scheduler/three_lane.rs`).
+- Local `!Send` tasks are pinned to owner workers and routed through non-stealable queues; steal paths explicitly reject moving them across workers (`src/runtime/scheduler/three_lane.rs`, `src/runtime/scheduler/local_queue.rs`).
+- Local queue discipline is asymmetric on purpose: owner operations are LIFO for cache locality, while thief operations are FIFO to keep stolen work older and reduce starvation pressure (`src/runtime/scheduler/local_queue.rs`).
+
+### Sharded Runtime State and Lock Discipline
+
+Runtime state is split into independently locked shards so hot-path polling can proceed without serializing every region or obligation mutation.
+
+- Shard A (`tasks`): task table, stored futures, intrusive queue links.
+- Shard B (`regions`): region ownership tree and state transitions.
+- Shard C (`obligations`): permit/ack/lease lifecycle and leak tracking.
+- Shard D (`instrumentation`): trace and metrics surfaces.
+- Shard E (`config`): immutable runtime config.
+
+Multi-shard operations use `ShardGuard` with canonical acquisition order `E -> D -> B -> A -> C`, and debug checks enforce that order to prevent deadlocks (`src/runtime/sharded_state.rs`). Shard locks are `ContendedMutex` instances, and optional `lock-metrics` instrumentation can measure wait/hold behavior (`src/sync/contended_mutex.rs`).
+
 ---
 
 ## Networking & Protocol Stack
 
 Asupersync ships a cancel-safe networking stack from raw sockets through application protocols. Every layer participates in structured concurrency: reads and writes respect region budgets, cancellation drains connections cleanly, and the lab runtime can substitute virtual TCP for deterministic network testing.
+
+Reactor and I/O paths are also hardened for long-lived production behavior:
+
+- Registrations are RAII-backed and deregistration treats `NotFound` as already-cleaned state, so cancellation/drop races do not leak bookkeeping (`src/runtime/io_driver.rs`, `src/runtime/reactor/registration.rs`).
+- Token slabs are generation-tagged, which blocks stale-token wakeups after slot reuse (`src/runtime/reactor/token.rs`).
+- The I/O driver records `unknown_tokens` instead of panicking when stale/backend events appear, so diagnostics stay available under fault conditions (`src/runtime/io_driver.rs`).
+- `epoll` paths explicitly clean stale fd/token mappings on `ENOENT`/closed-fd conditions, including fd-reuse edge cases (`src/runtime/reactor/epoll.rs`).
+- `io_uring` poll handles timeout expiry (`ETIME`) as a timeout condition, not an operational failure, and ignores stale completions for deregistered tokens (`src/runtime/reactor/io_uring.rs`).
 
 ### TCP
 
@@ -445,6 +475,14 @@ Both layers integrate with connection pooling (`src/http/pool.rs`) and optional 
 
 `src/net/dns/` provides async DNS resolution with address-family selection. `src/net/udp.rs` provides async UDP sockets with send/receive and cancellation safety.
 
+### Transport Routing and Multipath Delivery
+
+`src/transport/` covers runtime-level delivery behavior above raw sockets and below protocol clients:
+
+- `router.rs` tracks endpoint health and routing state with atomics (`EndpointState`, connection counters, failure counters) and uses RAII guards for active connection/dispatch accounting, including cancel/panic paths.
+- `aggregator.rs` handles multipath symbol intake with dedup windows, reorder handling, and per-path statistics for loss/duplicate tracking.
+- `sink.rs` and `stream.rs` use queued waiters with atomic flags and explicit wakeup bookkeeping to avoid lost-wakeup edge cases in bounded channel transport.
+
 ---
 
 ## Database Integration
@@ -458,6 +496,32 @@ Asupersync includes async clients for three databases, each respecting structure
 | **MySQL** | `src/database/mysql.rs` | MySQL wire protocol | Native + caching_sha2 |
 
 All three support prepared statements, transactions, and connection reuse. SQLite operations run on the blocking thread pool (since `rusqlite` is synchronous) with cancel-safe wrappers that respect region deadlines. PostgreSQL and MySQL implement their wire protocols directly over `TcpStream`, avoiding external driver dependencies.
+
+### Blocking Pool Safety Semantics
+
+`src/runtime/blocking_pool.rs` enforces several invariants that matter under cancellation and panic-heavy workloads:
+
+- Thread expansion only happens when pending work exists and all active workers are busy.
+- Idle retirement uses an atomic claim step that cannot retire below `min_threads`.
+- Panicking blocking tasks are wrapped so completion signaling and busy-thread counters are still balanced.
+- Failed thread spawns roll back active-thread accounting immediately.
+
+---
+
+## Remote Runtime and Distributed Coordination
+
+Asupersync's distributed runtime primitives are designed around the same invariants as local execution: explicit ownership, explicit cancellation, and deterministic state transitions.
+
+| Primitive | Location | Runtime Behavior |
+|-----------|----------|------------------|
+| Named remote spawn | `src/remote.rs` | `spawn_remote` executes named computations (no closure shipping) under `RemoteCap` |
+| Lease obligations | `src/remote.rs` | Leases are obligation-backed and participate in region close/quiescence |
+| Idempotency store | `src/remote.rs` | Deduplicates spawn retries with TTL-bounded records and conflict detection |
+| Session-typed protocol | `src/remote.rs` | Origin/remote state machines validate legal spawn/ack/cancel/result/renewal transitions |
+| Logical-time envelopes | `src/remote.rs` | Protocol messages carry logical clock metadata for causal correlation |
+| Saga compensations | `src/remote.rs` | Forward steps and compensations are tracked as a structured rollback flow |
+
+The transport surface is deliberately separated from protocol state machines, so message semantics can be tested independently of network backend details.
 
 ---
 
@@ -528,6 +592,13 @@ Every combinator is cancel-safe. Losers drain after races. Outcomes aggregate vi
 
 The implementation is deterministic (no randomness in lab mode) and integrates with the security layer (`src/security/`) for per-symbol authentication tags, preventing Byzantine symbol injection.
 
+On the decode side, the runtime uses a policy-driven deterministic planner instead of a single fixed elimination strategy:
+
+- Runtime policy selection can choose conservative baseline, high-support-first, or block-Schur low-rank hard-regime plans based on extracted matrix features (`src/raptorq/decoder.rs`).
+- Hard-regime transitions and conservative fallbacks are recorded with explicit reason labels for replay/debug analysis (`src/raptorq/decoder.rs`, `src/raptorq/proof.rs`, `src/raptorq/test_log_schema.rs`).
+- Dense-factor artifacts are cached with bounded capacity and explicit hit/miss/eviction telemetry in decode stats (`src/raptorq/decoder.rs`).
+- GF(256) kernels are selected deterministically per process, with policy snapshots for dual-lane fused operations and optional SIMD acceleration behind `simd-intrinsics` (`src/raptorq/gf256.rs`).
+
 ---
 
 ## Stream Combinators
@@ -572,7 +643,7 @@ The macros expand to standard Scope/Cx calls with proper region ownership. Compi
 
 ## Conformance Suite
 
-`conformance/` is a standalone crate containing runtime-agnostic correctness tests. It verifies:
+`conformance/` is a standalone crate containing runtime-agnostic correctness tests and artifact contracts. It verifies:
 
 - **Budget enforcement**: deadlines and poll quotas are respected
 - **Channel invariants**: two-phase sends, bounded capacity, waiter cleanup
@@ -580,8 +651,17 @@ The macros expand to standard Scope/Cx calls with proper region ownership. Compi
 - **Outcome aggregation**: severity lattice composition
 - **Runtime invariants**: no orphans, region quiescence
 - **Negative tests**: fault injection scenarios (obligation leaks, region hangs)
+- **E2E schema contracts**: deterministic suite summaries, replay pointers, failure taxonomy
 
-Tests emit deterministic artifact bundles (`event_log.txt`, `failed_assertions.json`, `repro_manifest.json`) when `ASUPERSYNC_TEST_ARTIFACTS_DIR` is set, making CI failures reproducible with a single manifest file.
+Test and CI entrypoints include:
+
+- `scripts/run_all_e2e.sh` (orchestrated suite execution and summary checks)
+- `scripts/run_raptorq_e2e.sh` (RaptorQ deterministic scenarios)
+- `scripts/run_phase6_e2e.sh` (phase-6 integration surface)
+- `scripts/check_no_mock_policy.py` (no-mock/fake/stub policy gate)
+- `scripts/check_coverage_ratchet.py` (coverage regression ratchet)
+
+Tests emit deterministic artifact bundles (`event_log.txt`, `failed_assertions.json`, `repro_manifest.json`) when `ASUPERSYNC_TEST_ARTIFACTS_DIR` is set, and E2E suites emit JSON summaries suitable for replay automation.
 
 ---
 
@@ -602,7 +682,7 @@ deterministic lab runtime.
 | Registry | Names as lease obligations: reserve/commit or abort (no stale names) |
 | call/cast | Request/response and mailbox protocols with bounded drain on cancel |
 
-### Why Spork Is Strictly Stronger (When We Finish It)
+### Why Spork Is Strictly Stronger
 
 - Determinism: the lab runtime makes OTP-style debugging reproducible (seeded schedules, trace capture/replay, schedule exploration).
 - Cancel-correctness: cancellation is a protocol (request -> drain -> finalize), so OTP-style shutdown has explicit budgets and bounded cleanup.
@@ -704,8 +784,11 @@ Payoff: bridge from deterministic runtime traces to model-checking workflows whe
 
 ```toml
 [dependencies]
-# Git dependency until crates.io publish
-asupersync = { git = "https://github.com/Dicklesworthstone/asupersync", version = "0.1" }
+# crates.io
+asupersync = "0.2.5"
+
+# or git
+# asupersync = { git = "https://github.com/Dicklesworthstone/asupersync", version = "0.2.5" }
 ```
 
 ### Feature Flags
@@ -714,7 +797,7 @@ Asupersync is feature-light by default; the lab runtime is available without fla
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `test-internals` | Expose test-only helpers (not for production) | No |
+| `test-internals` | Expose test-only helpers (not for production) | Yes |
 | `metrics` | OpenTelemetry metrics provider | No |
 | `tracing-integration` | Tracing spans/logging integration | No |
 | `proc-macros` | `scope!`, `spawn!`, `join!`, `race!` proc macros | No |
@@ -722,15 +805,22 @@ Asupersync is feature-light by default; the lab runtime is available without fla
 | `trace-compression` | LZ4 compression for trace files | No |
 | `debug-server` | Debug HTTP server for runtime inspection | No |
 | `config-file` | TOML config file loading for `RuntimeBuilder` | No |
+| `lock-metrics` | Contended mutex wait/hold metrics | No |
 | `io-uring` | Linux io_uring reactor (kernel 5.1+) | No |
 | `tls` | TLS support via rustls | No |
 | `tls-native-roots` | TLS with native root certs | No |
 | `tls-webpki-roots` | TLS with webpki root certs | No |
+| `sqlite` | SQLite async wrapper with blocking pool bridge | No |
+| `postgres` | PostgreSQL async wire-protocol client | No |
+| `mysql` | MySQL async wire-protocol client | No |
+| `kafka` | Kafka integration via `rdkafka` | No |
+| `simd-intrinsics` | AVX2/NEON GF(256) kernels for RaptorQ | No |
+| `loom-tests` | Loom scheduler/concurrency verification surface | No |
 | `cli` | CLI tools (trace inspection) | No |
 
 ### Minimum Supported Rust Version
 
-Rust **1.75+** (Edition 2021).
+Rust **nightly** (Edition 2024, pinned by `rust-toolchain.toml`).
 
 ### Semver Policy
 
@@ -827,6 +917,12 @@ let config = LabConfig::default()
 
 let lab = LabRuntime::new(config);
 ```
+
+Futurelock detection is tied to held obligations and poll progress, not just elapsed time. The detector compares current step against each task's `last_polled_step`, and can either emit violations or panic based on `panic_on_futurelock` (`src/lab/runtime.rs`, `src/lab/config.rs`).
+
+Lab snapshots also support structural validation and integrity checks. `RestorableSnapshot` computes a deterministic content hash over the full serialized snapshot, so semantic tampering is detectable before replay analysis (`src/lab/snapshot_restore.rs`).
+
+Runtime leak handling is configurable via `ObligationLeakResponse` (`Panic`, `Log`, `Silent`, `Recover`) with optional threshold-based escalation (`LeakEscalation`), and zero thresholds are normalized to one to avoid invalid policy states (`src/runtime/config.rs`).
 
 ### Budget Configuration
 
@@ -926,15 +1022,15 @@ disallows `std::collections::HashMap/HashSet` in favor of `util::DetHashMap/DetH
 | Database clients (SQLite, PostgreSQL, MySQL) | ✅ Implemented |
 | Actor supervision (GenServer, links, monitors) | ✅ Implemented |
 | DPOR schedule exploration | ✅ Implemented |
-| Distributed runtime (remote tasks, sagas, leases) | ⚠️ Core implemented, integration in progress |
+| Distributed runtime (remote tasks, sagas, leases, recovery) | ✅ Implemented |
 | RaptorQ fountain coding for snapshot distribution | ✅ Implemented |
-| Formal verification (Lean skeleton, TLA+ export) | ⚠️ Scaffolding in place |
+| Formal methods (Lean coverage artifacts + TLA+ export) | ✅ Implemented |
 
 ### What Asupersync Doesn't Do
 
 - **Cooperative cancellation only**: Non-cooperative code requires explicit escalation boundaries
 - **Not a drop-in replacement for other runtimes**: Different API, different guarantees
-- **No ecosystem compatibility**: Can't directly use runtime-specific libraries (adapters planned)
+- **No Tokio dependency compatibility by default**: runtime-specific crates that assume Tokio need explicit boundary adapters
 
 ### Design Trade-offs
 
@@ -955,9 +1051,9 @@ disallows `std::collections::HashMap/HashSet` in favor of `util::DetHashMap/DetH
 | **Phase 1** | Parallel scheduler + region heap | ✅ Complete |
 | **Phase 2** | I/O integration (epoll, io_uring, TCP, HTTP, TLS) | ✅ Complete |
 | **Phase 3** | Actors + supervision (GenServer, links, monitors) | ✅ Complete |
-| **Phase 4** | Distributed structured concurrency | 🔜 In Progress |
-| **Phase 5** | DPOR + TLA+ tooling | ✅ Core complete, integration ongoing |
-| **Phase 6** | Production hardening, ecosystem adapters | Planned |
+| **Phase 4** | Distributed structured concurrency | ✅ Complete |
+| **Phase 5** | DPOR + TLA+ tooling | ✅ Complete |
+| **Phase 6** | Hardening, policy gates, and adapter surface expansion | ✅ Continuous |
 
 ---
 
@@ -985,7 +1081,7 @@ Asupersync has its own runtime with explicit capabilities. For code that needs t
 
 ### Is this production-ready?
 
-Phases 0 through 3 are complete: deterministic kernel, parallel scheduler, full I/O stack (TCP/HTTP/TLS/WebSocket), database clients, and OTP-style actors with supervision. Phase 4 (distributed structured concurrency) is in progress. Use for internal applications where correctness matters more than ecosystem breadth.
+Asupersync is active development software with a fully implemented runtime surface (deterministic kernel, parallel scheduler, TCP/HTTP/TLS/WebSocket, database clients, distributed runtime primitives, actor/supervision model, and deterministic verification harnesses). It is a strong fit for internal systems where correctness guarantees and deterministic debugging are primary requirements.
 
 ### How do I report bugs?
 
@@ -1007,6 +1103,8 @@ Open an issue at https://github.com/Dicklesworthstone/asupersync/issues
 | [`docs/cancellation-testing.md`](./docs/cancellation-testing.md) | **Cancellation Testing**: deterministic injection + oracles |
 | [`docs/replay-debugging.md`](./docs/replay-debugging.md) | **Replay Debugging**: Record/replay for debugging async bugs |
 | [`docs/security_threat_model.md`](./docs/security_threat_model.md) | **Security Review**: Threat model and security invariants |
+| [`formal/lean/coverage/README.md`](./formal/lean/coverage/README.md) | **Lean Coverage Program**: ontology, artifacts, CI profiles, and proof-health contracts |
+| [`formal/lean/coverage/proof_impact_closed_loop_report_v1.json`](./formal/lean/coverage/proof_impact_closed_loop_report_v1.json) | **Proof Impact Ledger**: reproducible correctness/reliability/performance closure evidence |
 | [`TESTING.md`](./TESTING.md) | **Testing Guide**: unit, conformance, E2E, fuzzing, CI |
 | [`AGENTS.md`](./AGENTS.md) | **AI Guidelines**: Rules for AI coding agents |
 
