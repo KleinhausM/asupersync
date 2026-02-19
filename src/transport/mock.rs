@@ -1130,7 +1130,7 @@ mod tests {
         let dbg = format!("{cfg:?}");
         assert!(dbg.contains("SimTransportConfig"));
 
-        let cloned = cfg.clone();
+        let cloned = cfg;
         assert_eq!(cloned.capacity, 1024);
     }
 
@@ -1171,7 +1171,7 @@ mod tests {
         let dbg = format!("{link:?}");
         assert!(dbg.contains("SimLink"));
 
-        let cloned = link.clone();
+        let cloned = link;
         assert_eq!(cloned.config.capacity, 1024);
     }
 

@@ -529,7 +529,7 @@ mod tests {
         let dbg = format!("{cfg:?}");
         assert!(dbg.contains("ChannelConfig"));
 
-        let cloned = cfg.clone();
+        let cloned = cfg;
         assert_eq!(cloned.connect_timeout, Duration::from_secs(5));
     }
 
@@ -559,7 +559,7 @@ mod tests {
     fn channel_builder_all_setters() {
         let builder = Channel::builder("http://host:443")
             .connect_timeout(Duration::from_secs(30))
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_mins(1))
             .max_recv_message_size(1024)
             .max_send_message_size(2048)
             .initial_connection_window_size(512)
@@ -569,7 +569,7 @@ mod tests {
             .tls();
 
         assert_eq!(builder.config.connect_timeout, Duration::from_secs(30));
-        assert_eq!(builder.config.timeout, Some(Duration::from_secs(60)));
+        assert_eq!(builder.config.timeout, Some(Duration::from_mins(1)));
         assert_eq!(builder.config.max_recv_message_size, 1024);
         assert_eq!(builder.config.max_send_message_size, 2048);
         assert_eq!(builder.config.initial_connection_window_size, 512);
@@ -595,7 +595,7 @@ mod tests {
         let dbg = format!("{channel:?}");
         assert!(dbg.contains("Channel"));
 
-        let cloned = channel.clone();
+        let cloned = channel;
         assert_eq!(cloned.uri(), "http://test:8080");
     }
 
