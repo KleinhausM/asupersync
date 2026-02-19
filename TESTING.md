@@ -64,34 +64,40 @@ Example structured log entry (start/end markers include the same context):
 INFO test_start test_id="cancellation_conformance" seed=0xDEADBEEF subsystem="cancellation" invariant="losers_drained"
 ```
 
-Repro manifest schema (current fields):
-- `schema_version` (u32)
-- `seed` (u64, root seed)
-- `scenario_id` (string)
-- `entropy_seed` (optional u64)
-- `config_hash` (optional string)
-- `trace_fingerprint` (optional string)
-- `input_digest` (optional string)
-- `oracle_violations` (string array)
+Repro manifest schema (canonical v1 contract):
+- `schema_version` (u32, currently `1`)
+- `scenario_id` (string, required)
+- `invariant_ids` (string array, required, sorted + deduplicated)
+- `seed` (u64 root seed, required)
+- `trace_fingerprint` (string, required)
+- `replay_command` (string, required)
+- `failure_class` (string, required)
+- `artifact_paths` (string array, required, sorted + deduplicated)
 - `passed` (bool)
-- `subsystem` (optional string)
-- `invariant` (optional string)
-- `trace_file` (optional string)
-- `input_file` (optional string)
-- `env_snapshot` (array of key/value tuples)
-- `phases_executed` (string array)
-- `failure_reason` (optional string)
+- Optional extended fields: `entropy_seed`, `config_hash`, `input_digest`, `oracle_violations`, `subsystem`, `invariant`, `trace_file`, `input_file`, `env_snapshot`, `phases_executed`, `failure_reason`
+
+CI/C5 contract note:
+- Canonical contract id: `repro-manifest.v1`
+- Required-field list is exported in Rust as `REPRO_MANIFEST_REQUIRED_FIELDS`
+- Validation entrypoint: `ReproManifest::validate_contract_v1()`
 
 Sample `repro_manifest.json`:
 
 ```json
 {
   "schema_version": 1,
-  "seed": 57005,
   "scenario_id": "cancellation_conformance",
+  "invariant_ids": ["losers_drained", "no_obligation_leaks"],
+  "seed": 57005,
+  "trace_fingerprint": "trace_fp_v1",
+  "replay_command": "ASUPERSYNC_SEED=0xDEAD cargo test cancellation_conformance -- --nocapture",
+  "failure_class": "assertion_failure",
+  "artifact_paths": [
+    "target/test-artifacts/cancellation_conformance/event_log.txt",
+    "target/test-artifacts/cancellation_conformance/repro_manifest.json"
+  ],
   "entropy_seed": 48879,
   "config_hash": "cfg_hash_v1",
-  "trace_fingerprint": "trace_fp_v1",
   "input_digest": "input_digest_v1",
   "oracle_violations": ["losers_drained", "no_obligation_leaks"],
   "passed": false,

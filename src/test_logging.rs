@@ -1257,6 +1257,40 @@ fn fnv1a_mix(root: u64, tag: &[u8]) -> u64 {
 
 /// Current artifact schema version.
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
+/// Stable identifier for the canonical repro-manifest schema.
+pub const REPRO_MANIFEST_SCHEMA_ID: &str = "repro-manifest.v1";
+/// Required contract fields for deterministic CI/C5 consumption.
+pub const REPRO_MANIFEST_REQUIRED_FIELDS: [&str; 7] = [
+    "scenario_id",
+    "invariant_ids",
+    "seed",
+    "trace_fingerprint",
+    "replay_command",
+    "failure_class",
+    "artifact_paths",
+];
+
+const FAILURE_CLASS_PASSED: &str = "passed";
+const FAILURE_CLASS_ASSERTION_FAILURE: &str = "assertion_failure";
+
+fn default_trace_fingerprint(seed: u64, scenario_id: &str) -> String {
+    format!("pending:{scenario_id}:{seed:016x}")
+}
+
+fn default_replay_command(seed: u64, scenario_id: &str) -> String {
+    format!("ASUPERSYNC_SEED=0x{seed:X} cargo test {scenario_id} -- --nocapture")
+}
+
+fn normalize_string_ids(ids: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut normalized = ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort_unstable();
+    normalized.dedup();
+    normalized
+}
 
 /// A reproducibility manifest for a test failure or notable execution.
 ///
@@ -1274,6 +1308,9 @@ pub struct ReproManifest {
     pub seed: u64,
     /// Scenario identifier (test name or scenario tag).
     pub scenario_id: String,
+    /// Canonical invariant identifiers validated by this execution.
+    #[serde(default)]
+    pub invariant_ids: Vec<String>,
     /// Entropy seed derived from root.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entropy_seed: Option<u64>,
@@ -1281,8 +1318,14 @@ pub struct ReproManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_hash: Option<String>,
     /// Fingerprint of the execution trace.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trace_fingerprint: Option<String>,
+    pub trace_fingerprint: String,
+    /// Deterministic replay command for direct repro.
+    pub replay_command: String,
+    /// Failure class for routing/triage.
+    pub failure_class: String,
+    /// Artifact paths produced by this run.
+    #[serde(default)]
+    pub artifact_paths: Vec<String>,
     /// Digest of the test input data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_digest: Option<String>,
@@ -1322,9 +1365,17 @@ impl ReproManifest {
             schema_version: ARTIFACT_SCHEMA_VERSION,
             seed,
             scenario_id: scenario_id.to_string(),
+            invariant_ids: Vec::new(),
             entropy_seed: None,
             config_hash: None,
-            trace_fingerprint: None,
+            trace_fingerprint: default_trace_fingerprint(seed, scenario_id),
+            replay_command: default_replay_command(seed, scenario_id),
+            failure_class: if passed {
+                FAILURE_CLASS_PASSED.to_string()
+            } else {
+                FAILURE_CLASS_ASSERTION_FAILURE.to_string()
+            },
+            artifact_paths: Vec::new(),
             input_digest: None,
             oracle_violations: Vec::new(),
             passed,
@@ -1345,9 +1396,20 @@ impl ReproManifest {
             schema_version: ARTIFACT_SCHEMA_VERSION,
             seed: ctx.seed,
             scenario_id: ctx.test_id.clone(),
+            invariant_ids: ctx
+                .invariant
+                .as_ref()
+                .map_or_else(Vec::new, |invariant| vec![invariant.clone()]),
             entropy_seed: None,
             config_hash: None,
-            trace_fingerprint: None,
+            trace_fingerprint: default_trace_fingerprint(ctx.seed, &ctx.test_id),
+            replay_command: default_replay_command(ctx.seed, &ctx.test_id),
+            failure_class: if passed {
+                FAILURE_CLASS_PASSED.to_string()
+            } else {
+                FAILURE_CLASS_ASSERTION_FAILURE.to_string()
+            },
+            artifact_paths: Vec::new(),
             input_digest: None,
             oracle_violations: Vec::new(),
             passed,
@@ -1379,6 +1441,9 @@ impl ReproManifest {
     #[must_use]
     pub fn with_failure_reason(mut self, reason: &str) -> Self {
         self.failure_reason = Some(reason.to_string());
+        if self.failure_class == FAILURE_CLASS_PASSED {
+            self.failure_class = FAILURE_CLASS_ASSERTION_FAILURE.to_string();
+        }
         self
     }
 
@@ -1399,7 +1464,21 @@ impl ReproManifest {
     /// Set the trace fingerprint for this run.
     #[must_use]
     pub fn with_trace_fingerprint(mut self, trace_fingerprint: &str) -> Self {
-        self.trace_fingerprint = Some(trace_fingerprint.to_string());
+        self.trace_fingerprint = trace_fingerprint.to_string();
+        self
+    }
+
+    /// Set the deterministic replay command.
+    #[must_use]
+    pub fn with_replay_command(mut self, replay_command: &str) -> Self {
+        self.replay_command = replay_command.to_string();
+        self
+    }
+
+    /// Set the failure class.
+    #[must_use]
+    pub fn with_failure_class(mut self, failure_class: &str) -> Self {
+        self.failure_class = failure_class.to_string();
         self
     }
 
@@ -1432,6 +1511,18 @@ impl ReproManifest {
     #[must_use]
     pub fn with_invariant(mut self, invariant: &str) -> Self {
         self.invariant = Some(invariant.to_string());
+        self.invariant_ids = normalize_string_ids(vec![invariant.to_string()]);
+        self
+    }
+
+    /// Set canonical invariant IDs; values are normalized (trimmed/sorted/deduped).
+    #[must_use]
+    pub fn with_invariant_ids<I, S>(mut self, invariant_ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.invariant_ids = normalize_string_ids(invariant_ids.into_iter().map(Into::into));
         self
     }
 
@@ -1447,6 +1538,68 @@ impl ReproManifest {
     pub fn with_input_file(mut self, input_file: &str) -> Self {
         self.input_file = Some(input_file.to_string());
         self
+    }
+
+    /// Set artifact paths; values are normalized (trimmed/sorted/deduped).
+    #[must_use]
+    pub fn with_artifact_paths<I, S>(mut self, artifact_paths: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.artifact_paths = normalize_string_ids(artifact_paths.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add a single artifact path.
+    #[must_use]
+    pub fn with_artifact_path(mut self, artifact_path: &str) -> Self {
+        self.artifact_paths.push(artifact_path.to_string());
+        self.artifact_paths = normalize_string_ids(self.artifact_paths);
+        self
+    }
+
+    /// Validate the canonical v1 contract used by CI and C5 gates.
+    pub fn validate_contract_v1(&self) -> Result<(), String> {
+        if self.schema_version != ARTIFACT_SCHEMA_VERSION {
+            return Err(format!(
+                "schema_version must be {}, got {}",
+                ARTIFACT_SCHEMA_VERSION, self.schema_version
+            ));
+        }
+        if self.scenario_id.trim().is_empty() {
+            return Err("scenario_id must be non-empty".to_string());
+        }
+        if self.replay_command.trim().is_empty() {
+            return Err("replay_command must be non-empty".to_string());
+        }
+        if self.failure_class.trim().is_empty() {
+            return Err("failure_class must be non-empty".to_string());
+        }
+        if self.trace_fingerprint.trim().is_empty() {
+            return Err("trace_fingerprint must be non-empty".to_string());
+        }
+        if self.invariant_ids.iter().any(|id| id.trim().is_empty()) {
+            return Err("invariant_ids cannot contain empty values".to_string());
+        }
+        if self
+            .artifact_paths
+            .iter()
+            .any(|path| path.trim().is_empty())
+        {
+            return Err("artifact_paths cannot contain empty values".to_string());
+        }
+
+        let normalized_invariants = normalize_string_ids(self.invariant_ids.clone());
+        if normalized_invariants != self.invariant_ids {
+            return Err("invariant_ids must be sorted and deduplicated".to_string());
+        }
+        let normalized_artifacts = normalize_string_ids(self.artifact_paths.clone());
+        if normalized_artifacts != self.artifact_paths {
+            return Err("artifact_paths must be sorted and deduplicated".to_string());
+        }
+
+        Ok(())
     }
 
     /// Serialize to pretty-printed JSON.
@@ -1507,6 +1660,8 @@ pub fn replay_context_from_manifest(manifest: &ReproManifest) -> TestContext {
     }
     if let Some(ref invariant) = manifest.invariant {
         ctx = ctx.with_invariant(invariant);
+    } else if let Some(first_invariant_id) = manifest.invariant_ids.first() {
+        ctx = ctx.with_invariant(first_invariant_id);
     }
     ctx
 }
@@ -2597,7 +2752,8 @@ impl TestHarness {
 
         manifest = manifest
             .with_env_snapshot()
-            .with_phases(self.phases_executed());
+            .with_phases(self.phases_executed())
+            .with_artifact_paths(self.artifacts.clone());
 
         if !passed {
             if let Some(first_failure) = self.assertions.iter().find(|a| !a.passed) {
@@ -2606,6 +2762,9 @@ impl TestHarness {
                     first_failure.description, first_failure.expected, first_failure.actual,
                 ));
             }
+            manifest = manifest.with_failure_class(FAILURE_CLASS_ASSERTION_FAILURE);
+        } else {
+            manifest = manifest.with_failure_class(FAILURE_CLASS_PASSED);
         }
 
         manifest
@@ -3612,7 +3771,19 @@ mod tests {
         let manifest = ReproManifest::from_context(&ctx, false);
         assert_eq!(manifest.seed, 42);
         assert_eq!(manifest.scenario_id, "obligation_leak");
+        assert_eq!(
+            manifest.invariant_ids,
+            vec!["committed_or_aborted".to_string()]
+        );
         assert_eq!(manifest.subsystem.as_deref(), Some("obligation"));
+        assert_eq!(manifest.failure_class, FAILURE_CLASS_ASSERTION_FAILURE);
+        assert!(
+            manifest
+                .replay_command
+                .contains("cargo test obligation_leak -- --nocapture"),
+            "default replay command should be deterministic"
+        );
+        assert!(!manifest.trace_fingerprint.is_empty());
         assert!(!manifest.passed);
         crate::test_complete!("test_repro_manifest_from_context");
     }
@@ -3628,16 +3799,34 @@ mod tests {
             .with_oracle_violations(["oracle_a", "oracle_b"])
             .with_subsystem("scheduler")
             .with_invariant("no_leaks")
+            .with_invariant_ids(["quiescence", "no_leaks", "quiescence"])
+            .with_replay_command("ASUPERSYNC_SEED=0xBEEF cargo test helper_test -- --nocapture")
+            .with_failure_class("assertion_failure")
+            .with_artifact_paths(["b.json", "a.json", "b.json"])
             .with_trace_file("traces/run.jsonl")
             .with_input_file("inputs/failing.json");
 
         assert_eq!(manifest.entropy_seed, Some(0xCAFE));
         assert_eq!(manifest.config_hash.as_deref(), Some("cfg_hash"));
-        assert_eq!(manifest.trace_fingerprint.as_deref(), Some("trace_fp"));
+        assert_eq!(manifest.trace_fingerprint, "trace_fp");
         assert_eq!(manifest.input_digest.as_deref(), Some("input_digest"));
         assert_eq!(manifest.oracle_violations.len(), 2);
         assert_eq!(manifest.subsystem.as_deref(), Some("scheduler"));
         assert_eq!(manifest.invariant.as_deref(), Some("no_leaks"));
+        assert_eq!(
+            manifest.invariant_ids,
+            vec!["no_leaks".to_string(), "quiescence".to_string()]
+        );
+        assert_eq!(manifest.failure_class, "assertion_failure");
+        assert!(
+            manifest
+                .replay_command
+                .contains("cargo test helper_test -- --nocapture")
+        );
+        assert_eq!(
+            manifest.artifact_paths,
+            vec!["a.json".to_string(), "b.json".to_string()]
+        );
         assert_eq!(manifest.trace_file.as_deref(), Some("traces/run.jsonl"));
         assert_eq!(manifest.input_file.as_deref(), Some("inputs/failing.json"));
         crate::test_complete!("test_repro_manifest_helper_setters");
@@ -3666,6 +3855,11 @@ mod tests {
         assert!(!json.contains("entropy_seed"));
         assert!(!json.contains("config_hash"));
         assert!(!json.contains("oracle_violations"));
+        assert!(json.contains("\"invariant_ids\": []"));
+        assert!(json.contains("\"artifact_paths\": []"));
+        assert!(json.contains("\"failure_class\": \"passed\""));
+        assert!(json.contains("\"replay_command\":"));
+        assert!(json.contains("\"trace_fingerprint\":"));
         crate::test_complete!("test_repro_manifest_optional_fields_omitted");
     }
 
@@ -3729,6 +3923,12 @@ mod tests {
             true,
             manifest.failure_reason.is_some()
         );
+        crate::assert_with_log!(
+            manifest.failure_class == FAILURE_CLASS_ASSERTION_FAILURE,
+            "failure class set on failure reason",
+            FAILURE_CLASS_ASSERTION_FAILURE,
+            manifest.failure_class
+        );
 
         let json = manifest.to_json().expect("serialize");
         let parsed: ReproManifest = serde_json::from_str(&json).expect("deserialize");
@@ -3745,6 +3945,53 @@ mod tests {
             parsed.failure_reason
         );
         crate::test_complete!("test_repro_manifest_with_phases_and_failure_reason");
+    }
+
+    #[test]
+    fn test_repro_manifest_contract_validation_v1() {
+        init_test("test_repro_manifest_contract_validation_v1");
+        let manifest = ReproManifest::new(0x1234, "contract_ok", false)
+            .with_trace_fingerprint("fp_1234")
+            .with_invariant_ids(["cancel_protocol", "no_obligation_leaks"])
+            .with_replay_command("ASUPERSYNC_SEED=0x1234 cargo test contract_ok -- --nocapture")
+            .with_failure_class(FAILURE_CLASS_ASSERTION_FAILURE)
+            .with_artifact_paths([
+                "target/test-artifacts/contract_ok/event_log.txt",
+                "target/test-artifacts/contract_ok/repro_manifest.json",
+            ]);
+
+        crate::assert_with_log!(
+            manifest.validate_contract_v1().is_ok(),
+            "manifest satisfies v1 contract",
+            true,
+            manifest.validate_contract_v1().is_ok()
+        );
+        crate::test_complete!("test_repro_manifest_contract_validation_v1");
+    }
+
+    #[test]
+    fn test_repro_manifest_contract_validation_rejects_unsorted_ids() {
+        init_test("test_repro_manifest_contract_validation_rejects_unsorted_ids");
+        let mut manifest = ReproManifest::new(0x9999, "contract_bad", false)
+            .with_trace_fingerprint("fp_9999")
+            .with_replay_command("ASUPERSYNC_SEED=0x9999 cargo test contract_bad -- --nocapture")
+            .with_failure_class(FAILURE_CLASS_ASSERTION_FAILURE)
+            .with_artifact_paths([
+                "target/test-artifacts/contract_bad/repro_manifest.json",
+                "target/test-artifacts/contract_bad/event_log.txt",
+            ]);
+        manifest.invariant_ids = vec!["z_last".to_string(), "a_first".to_string()];
+
+        let err = manifest
+            .validate_contract_v1()
+            .expect_err("unsorted invariant_ids should fail");
+        crate::assert_with_log!(
+            err.contains("invariant_ids must be sorted"),
+            "contract rejects unsorted invariant_ids",
+            true,
+            err
+        );
+        crate::test_complete!("test_repro_manifest_contract_validation_rejects_unsorted_ids");
     }
 
     #[test]
@@ -3814,6 +4061,22 @@ mod tests {
             true,
             manifest.failure_reason.is_some()
         );
+        crate::assert_with_log!(
+            manifest.failure_class == FAILURE_CLASS_ASSERTION_FAILURE,
+            "failure class populated",
+            FAILURE_CLASS_ASSERTION_FAILURE,
+            manifest.failure_class
+        );
+        crate::assert_with_log!(
+            manifest
+                .replay_command
+                .contains("cargo test harness_failure_test -- --nocapture"),
+            "replay command populated",
+            true,
+            manifest
+                .replay_command
+                .contains("cargo test harness_failure_test -- --nocapture")
+        );
         crate::test_complete!("test_harness_repro_manifest_on_failure");
     }
 
@@ -3872,6 +4135,12 @@ mod tests {
                 2,
                 loaded.phases_executed.len()
             );
+            crate::assert_with_log!(
+                loaded.failure_class == FAILURE_CLASS_ASSERTION_FAILURE,
+                "failure class captured in manifest",
+                FAILURE_CLASS_ASSERTION_FAILURE,
+                loaded.failure_class
+            );
         }
 
         // SAFETY: tests serialize env access with test_utils::env_lock.
@@ -3926,6 +4195,12 @@ mod tests {
             "failure reason preserved on disk",
             true,
             loaded.failure_reason.is_some()
+        );
+        crate::assert_with_log!(
+            loaded.validate_contract_v1().is_ok(),
+            "manifest remains v1 contract-valid after disk roundtrip",
+            true,
+            loaded.validate_contract_v1().is_ok()
         );
 
         let _ = std::fs::remove_dir_all(tmp.join("cancel_drain"));

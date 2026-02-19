@@ -419,7 +419,7 @@ fn failure_triage_capture_manifest_replay_roundtrip() {
         .with_subsystem("scheduler")
         .with_invariant("quiescence");
     let mut manifest = ReproManifest::from_context(&ctx, false);
-    manifest.trace_fingerprint = Some(format!("{event_count}_events"));
+    manifest.trace_fingerprint = format!("{event_count}_events");
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let manifest_path = manifest.write_to_dir(tmp.path()).expect("write manifest");
@@ -507,7 +507,7 @@ fn manifest_write_load_preserves_all_fields() {
     let mut manifest = ReproManifest::new(0xCAFE_BABE, "full_field_test", false);
     manifest.entropy_seed = Some(0x1234);
     manifest.config_hash = Some("cfg_abc".to_string());
-    manifest.trace_fingerprint = Some("fp_42".to_string());
+    manifest.trace_fingerprint = "fp_42".to_string();
     manifest.input_digest = Some("sha256:deadbeef".to_string());
     manifest.oracle_violations = vec!["leak_detected".to_string(), "timeout".to_string()];
     manifest.subsystem = Some("obligation".to_string());
