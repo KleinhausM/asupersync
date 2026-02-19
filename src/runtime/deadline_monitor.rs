@@ -1309,7 +1309,10 @@ mod tests {
         let r2 = r;
         let r3 = r;
         assert_eq!(r2, r3);
-        assert_ne!(WarningReason::NoProgress, WarningReason::ApproachingDeadline);
+        assert_ne!(
+            WarningReason::NoProgress,
+            WarningReason::ApproachingDeadline
+        );
         crate::test_complete!("warning_reason_clone_copy_eq");
     }
 

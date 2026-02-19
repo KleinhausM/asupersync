@@ -1204,8 +1204,13 @@ mod tests {
     #[test]
     fn color_debug_copy() {
         let colors = [
-            Color::Black, Color::Red, Color::Green, Color::Blue,
-            Color::BrightCyan, Color::Index(42), Color::Rgb(10, 20, 30),
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Blue,
+            Color::BrightCyan,
+            Color::Index(42),
+            Color::Rgb(10, 20, 30),
         ];
         for color in &colors {
             let dbg = format!("{color:?}");
@@ -1229,7 +1234,12 @@ mod tests {
         assert!(dbg.contains("Style"));
 
         // Builder
-        let styled = Style::new().fg(Color::Red).bold().italic().underline().dim();
+        let styled = Style::new()
+            .fg(Color::Red)
+            .bold()
+            .italic()
+            .underline()
+            .dim();
         assert_eq!(styled.fg, Some(Color::Red));
         assert!(styled.bold);
         assert!(styled.italic);

@@ -1141,8 +1141,7 @@ mod tests {
         let err: LimitedError<std::io::Error> = LimitedError::LengthLimit;
         assert_eq!(format!("{err}"), "body length limit exceeded");
 
-        let inner_err =
-            LimitedError::Inner(std::io::Error::other("inner"));
+        let inner_err = LimitedError::Inner(std::io::Error::other("inner"));
         let disp = format!("{inner_err}");
         assert!(disp.contains("inner"), "{disp}");
     }

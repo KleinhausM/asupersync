@@ -7,11 +7,11 @@
 //! draining.  All deterministic, no async runtime.
 
 use asupersync::cx::Cx;
+use asupersync::net::quic_native::streams::{QuicStreamError, StreamId};
 use asupersync::net::quic_native::{
     NativeQuicConnection, NativeQuicConnectionConfig, NativeQuicConnectionError,
     QuicConnectionState, StreamDirection, StreamRole,
 };
-use asupersync::net::quic_native::streams::{QuicStreamError, StreamId};
 use asupersync::types::Time;
 use asupersync::util::DetRng;
 
@@ -97,8 +97,12 @@ impl ConnectionPair {
     fn establish(&mut self) {
         let cx = &self.cx;
 
-        self.client.begin_handshake(cx).expect("client begin_handshake");
-        self.server.begin_handshake(cx).expect("server begin_handshake");
+        self.client
+            .begin_handshake(cx)
+            .expect("client begin_handshake");
+        self.server
+            .begin_handshake(cx)
+            .expect("server begin_handshake");
 
         assert_eq!(self.client.state(), QuicConnectionState::Handshaking);
         assert_eq!(self.server.state(), QuicConnectionState::Handshaking);
@@ -160,16 +164,28 @@ fn cancel_via_cx_blocks_all_connection_operations() {
     cx.set_cancel_requested(true);
 
     // Every connection operation should return Cancelled.
-    let err = pair.client.open_local_bidi(cx).expect_err("open after cancel");
+    let err = pair
+        .client
+        .open_local_bidi(cx)
+        .expect_err("open after cancel");
     assert_eq!(err, NativeQuicConnectionError::Cancelled);
 
-    let err = pair.client.write_stream(cx, s0, 1).expect_err("write after cancel");
+    let err = pair
+        .client
+        .write_stream(cx, s0, 1)
+        .expect_err("write after cancel");
     assert_eq!(err, NativeQuicConnectionError::Cancelled);
 
-    let err = pair.client.receive_stream(cx, s0, 1).expect_err("receive after cancel");
+    let err = pair
+        .client
+        .receive_stream(cx, s0, 1)
+        .expect_err("receive after cancel");
     assert_eq!(err, NativeQuicConnectionError::Cancelled);
 
-    let err = pair.client.poll(cx, pair.clock.now()).expect_err("poll after cancel");
+    let err = pair
+        .client
+        .poll(cx, pair.clock.now())
+        .expect_err("poll after cancel");
     assert_eq!(err, NativeQuicConnectionError::Cancelled);
 
     let err = pair
@@ -221,13 +237,19 @@ fn close_immediately_skips_drain_phase() {
 
     // No drain phase — it should NOT have been Draining at any point.
     // Verify that subsequent operations fail with InvalidState, not Draining.
-    let err = pair.client.open_local_bidi(cx).expect_err("open after close");
+    let err = pair
+        .client
+        .open_local_bidi(cx)
+        .expect_err("open after close");
     assert_eq!(
         err,
         NativeQuicConnectionError::InvalidState("1-RTT traffic not yet enabled")
     );
 
-    let err = pair.client.write_stream(cx, stream, 1).expect_err("write after close");
+    let err = pair
+        .client
+        .write_stream(cx, stream, 1)
+        .expect_err("write after close");
     assert_eq!(
         err,
         NativeQuicConnectionError::InvalidState("1-RTT traffic not yet enabled")
@@ -266,18 +288,30 @@ fn drain_with_in_flight_streams() {
     assert_eq!(pair.client.state(), QuicConnectionState::Draining);
 
     // Existing receives should still work on all streams.
-    pair.client.receive_stream(cx, s0, 50).expect("receive s0 while draining");
-    pair.client.receive_stream(cx, s1, 75).expect("receive s1 while draining");
-    pair.client.receive_stream(cx, s2, 100).expect("receive s2 while draining");
+    pair.client
+        .receive_stream(cx, s0, 50)
+        .expect("receive s0 while draining");
+    pair.client
+        .receive_stream(cx, s1, 75)
+        .expect("receive s1 while draining");
+    pair.client
+        .receive_stream(cx, s2, 100)
+        .expect("receive s2 while draining");
 
     // But new stream opens are blocked (InvalidState, not 1-RTT check).
-    let err = pair.client.open_local_bidi(cx).expect_err("open bidi while draining");
+    let err = pair
+        .client
+        .open_local_bidi(cx)
+        .expect_err("open bidi while draining");
     assert_eq!(
         err,
         NativeQuicConnectionError::InvalidState("1-RTT traffic not yet enabled")
     );
 
-    let err = pair.client.open_local_uni(cx).expect_err("open uni while draining");
+    let err = pair
+        .client
+        .open_local_uni(cx)
+        .expect_err("open uni while draining");
     assert_eq!(
         err,
         NativeQuicConnectionError::InvalidState("1-RTT traffic not yet enabled")
@@ -317,7 +351,9 @@ fn reset_stream_send_during_active_transfer() {
 
     // Open a bidi stream and write some data.
     let stream = pair.client.open_local_bidi(cx).expect("open stream");
-    pair.client.write_stream(cx, stream, 500).expect("write 500 bytes");
+    pair.client
+        .write_stream(cx, stream, 500)
+        .expect("write 500 bytes");
 
     // Verify current state.
     let view = pair.client.streams().stream(stream).expect("stream view");
@@ -330,7 +366,11 @@ fn reset_stream_send_during_active_transfer() {
         .expect("reset_stream_send");
 
     // Verify reset is recorded.
-    let view = pair.client.streams().stream(stream).expect("stream view after reset");
+    let view = pair
+        .client
+        .streams()
+        .stream(stream)
+        .expect("stream view after reset");
     assert_eq!(view.send_reset, Some((0x77, 500)));
 
     // Attempting to reset with a different final_size should fail (inconsistent).
@@ -349,7 +389,9 @@ fn reset_stream_send_during_active_transfer() {
 
     // Attempting to reset with final_size below sent bytes should fail.
     let stream2 = pair.client.open_local_bidi(cx).expect("open stream2");
-    pair.client.write_stream(cx, stream2, 200).expect("write stream2");
+    pair.client
+        .write_stream(cx, stream2, 200)
+        .expect("write stream2");
     let err = pair
         .client
         .reset_stream_send(cx, stream2, 0x88, 100)
@@ -380,11 +422,17 @@ fn stop_receiving_blocks_future_receives() {
     let stream = pair.client.open_local_bidi(cx).expect("open stream");
 
     // Server accepts and sends data (simulated via write on server side).
-    pair.server.accept_remote_stream(cx, stream).expect("server accept");
-    pair.server.write_stream(cx, stream, 256).expect("server write");
+    pair.server
+        .accept_remote_stream(cx, stream)
+        .expect("server accept");
+    pair.server
+        .write_stream(cx, stream, 256)
+        .expect("server write");
 
     // Client receives some data before stopping.
-    pair.client.receive_stream(cx, stream, 64).expect("client receive initial");
+    pair.client
+        .receive_stream(cx, stream, 64)
+        .expect("client receive initial");
 
     // Verify receive offset advanced.
     let view = pair.client.streams().stream(stream).expect("stream view");
@@ -396,7 +444,11 @@ fn stop_receiving_blocks_future_receives() {
         .expect("stop_receiving");
 
     // Verify error code is recorded.
-    let view = pair.client.streams().stream(stream).expect("stream view after stop");
+    let view = pair
+        .client
+        .streams()
+        .stream(stream)
+        .expect("stream view after stop");
     assert_eq!(view.receive_stopped_error_code, Some(0x42));
 
     // Subsequent receives should fail with ReceiveStopped.
@@ -420,8 +472,14 @@ fn stop_receiving_blocks_future_receives() {
     );
 
     // But writing on the same stream should still work (stop_receiving is recv-side only).
-    pair.client.write_stream(cx, stream, 128).expect("write after stop_receiving");
-    let view = pair.client.streams().stream(stream).expect("stream view final");
+    pair.client
+        .write_stream(cx, stream, 128)
+        .expect("write after stop_receiving");
+    let view = pair
+        .client
+        .streams()
+        .stream(stream)
+        .expect("stream view final");
     assert_eq!(view.send_offset, 128);
 }
 
@@ -439,14 +497,18 @@ fn double_begin_close_is_idempotent() {
 
     // First close — transition to Draining.
     let now = pair.clock.now();
-    pair.client.begin_close(cx, now, 0xAA).expect("first begin_close");
+    pair.client
+        .begin_close(cx, now, 0xAA)
+        .expect("first begin_close");
     assert_eq!(pair.client.state(), QuicConnectionState::Draining);
     assert_eq!(pair.client.transport().close_code(), Some(0xAA));
 
     // Second close — should be idempotent (Draining -> Draining is OK).
     pair.clock.advance(1_000);
     let now2 = pair.clock.now();
-    pair.client.begin_close(cx, now2, 0xBB).expect("second begin_close");
+    pair.client
+        .begin_close(cx, now2, 0xBB)
+        .expect("second begin_close");
     assert_eq!(pair.client.state(), QuicConnectionState::Draining);
 
     // The close_code should still be 0xAA from the first call because
@@ -465,12 +527,16 @@ fn double_begin_close_is_idempotent() {
     // the new deadline is now+1000+2_000_000.
     // We are currently at now+1000. Advance to now+1000+2_000_000-1 => still Draining.
     pair.clock.advance(2_000_000 - 1);
-    pair.client.poll(cx, pair.clock.now()).expect("poll before deadline");
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("poll before deadline");
     assert_eq!(pair.client.state(), QuicConnectionState::Draining);
 
     // Advance 1 more microsecond => Closed.
     pair.clock.advance(1);
-    pair.client.poll(cx, pair.clock.now()).expect("poll at deadline");
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("poll at deadline");
     assert_eq!(pair.client.state(), QuicConnectionState::Closed);
 }
 
@@ -506,7 +572,9 @@ fn drain_timeout_boundary_exact_microsecond() {
 
     // Advance exactly 1 more microsecond to hit the deadline.
     pair.clock.advance(1);
-    pair.client.poll(cx, pair.clock.now()).expect("poll at deadline");
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("poll at deadline");
     assert_eq!(
         pair.client.state(),
         QuicConnectionState::Closed,
@@ -515,7 +583,9 @@ fn drain_timeout_boundary_exact_microsecond() {
 
     // Subsequent polls after Closed are safe.
     pair.clock.advance(1_000_000);
-    pair.client.poll(cx, pair.clock.now()).expect("poll after closed");
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("poll after closed");
     assert_eq!(pair.client.state(), QuicConnectionState::Closed);
 }
 
@@ -571,7 +641,10 @@ fn finalize_after_begin_close_via_poll() {
     assert_eq!(pair.client.transport().close_code(), Some(0x1234));
 
     // Operations after close should fail.
-    let err = pair.client.open_local_bidi(cx).expect_err("open after close");
+    let err = pair
+        .client
+        .open_local_bidi(cx)
+        .expect_err("open after close");
     assert_eq!(
         err,
         NativeQuicConnectionError::InvalidState("1-RTT traffic not yet enabled")
@@ -624,7 +697,9 @@ fn accept_remote_stream_while_draining_returns_error() {
 
     // And also verify accept_remote_stream is blocked after Closed.
     pair.clock.advance(2_000_001);
-    pair.client.poll(cx, pair.clock.now()).expect("poll to closed");
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("poll to closed");
     assert_eq!(pair.client.state(), QuicConnectionState::Closed);
 
     let remote_bidi2 = StreamId::local(StreamRole::Server, StreamDirection::Bidirectional, 1);
@@ -654,17 +729,25 @@ fn server_close_immediately_while_client_drains() {
 
     // Open shared streams.
     let stream = pair.client.open_local_bidi(cx).expect("open stream");
-    pair.server.accept_remote_stream(cx, stream).expect("server accept");
+    pair.server
+        .accept_remote_stream(cx, stream)
+        .expect("server accept");
 
     // Client writes data.
-    pair.client.write_stream(cx, stream, 1024).expect("client write");
+    pair.client
+        .write_stream(cx, stream, 1024)
+        .expect("client write");
 
     // Server receives data.
-    pair.server.receive_stream(cx, stream, 512).expect("server receive");
+    pair.server
+        .receive_stream(cx, stream, 512)
+        .expect("server receive");
 
     // Client begins draining.
     let now = pair.clock.now();
-    pair.client.begin_close(cx, now, 0x10).expect("client drain");
+    pair.client
+        .begin_close(cx, now, 0x10)
+        .expect("client drain");
     assert_eq!(pair.client.state(), QuicConnectionState::Draining);
 
     // Server closes immediately (e.g., upon receiving client's CONNECTION_CLOSE).
@@ -679,7 +762,9 @@ fn server_close_immediately_while_client_drains() {
 
     // Advance the client past its drain timeout.
     pair.clock.advance(2_000_000);
-    pair.client.poll(cx, pair.clock.now()).expect("client poll to closed");
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("client poll to closed");
     assert_eq!(pair.client.state(), QuicConnectionState::Closed);
 
     // Both sides are now closed.

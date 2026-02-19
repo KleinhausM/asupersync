@@ -1050,7 +1050,10 @@ mod tests {
     fn quic_core_error_display_all_variants() {
         let cases: Vec<(QuicCoreError, &str)> = vec![
             (QuicCoreError::UnexpectedEof, "unexpected EOF"),
-            (QuicCoreError::VarIntOutOfRange(99), "varint out of range: 99"),
+            (
+                QuicCoreError::VarIntOutOfRange(99),
+                "varint out of range: 99",
+            ),
             (
                 QuicCoreError::InvalidHeader("test msg"),
                 "invalid header: test msg",

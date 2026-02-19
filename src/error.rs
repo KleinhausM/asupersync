@@ -1107,9 +1107,7 @@ mod tests {
     #[test]
     fn cancelled_struct_into_error() {
         let reason = CancelReason::user("test cancel");
-        let cancelled = Cancelled {
-            reason: reason,
-        };
+        let cancelled = Cancelled { reason: reason };
         let err: Error = cancelled.into();
         assert_eq!(err.kind(), ErrorKind::Cancelled);
         assert!(err.to_string().contains("Cancelled"));

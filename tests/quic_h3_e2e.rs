@@ -14,8 +14,8 @@ use asupersync::net::quic_core::{
     ConnectionId, LongHeader, LongPacketType, PacketHeader, ShortHeader, TransportParameters,
 };
 use asupersync::net::quic_native::{
-    NativeQuicConnection, NativeQuicConnectionConfig, NativeQuicConnectionError,
-    PacketNumberSpace, QuicConnectionState, StreamDirection, StreamId, StreamRole,
+    NativeQuicConnection, NativeQuicConnectionConfig, NativeQuicConnectionError, PacketNumberSpace,
+    QuicConnectionState, StreamDirection, StreamId, StreamRole,
 };
 use asupersync::types::Time;
 use asupersync::util::DetRng;
@@ -105,8 +105,12 @@ impl ConnectionPair {
         let cx = &self.cx;
 
         // Both sides begin handshake.
-        self.client.begin_handshake(cx).expect("client begin_handshake");
-        self.server.begin_handshake(cx).expect("server begin_handshake");
+        self.client
+            .begin_handshake(cx)
+            .expect("client begin_handshake");
+        self.server
+            .begin_handshake(cx)
+            .expect("server begin_handshake");
 
         assert_eq!(self.client.state(), QuicConnectionState::Handshaking);
         assert_eq!(self.server.state(), QuicConnectionState::Handshaking);
@@ -160,14 +164,7 @@ fn handshake_lifecycle_with_packet_exchange() {
     let t_send = pair.clock.now();
     let client_pn0 = pair
         .client
-        .on_packet_sent(
-            cx,
-            PacketNumberSpace::Initial,
-            1200,
-            true,
-            true,
-            t_send,
-        )
+        .on_packet_sent(cx, PacketNumberSpace::Initial, 1200, true, true, t_send)
         .expect("client send initial");
     assert_eq!(client_pn0, 0, "first packet number should be 0");
 
@@ -193,13 +190,7 @@ fn handshake_lifecycle_with_packet_exchange() {
     // Client receives server's ack of its Initial.
     let ack = pair
         .client
-        .on_ack_received(
-            cx,
-            PacketNumberSpace::Initial,
-            &[0],
-            0,
-            pair.clock.now(),
-        )
+        .on_ack_received(cx, PacketNumberSpace::Initial, &[0], 0, pair.clock.now())
         .expect("client ack");
     assert_eq!(ack.acked_packets, 1);
     assert_eq!(ack.acked_bytes, 1200);
@@ -217,12 +208,8 @@ fn handshake_lifecycle_with_packet_exchange() {
     pair.server
         .on_handshake_keys_available(cx)
         .expect("server hs keys");
-    pair.client
-        .on_1rtt_keys_available(cx)
-        .expect("client 1rtt");
-    pair.server
-        .on_1rtt_keys_available(cx)
-        .expect("server 1rtt");
+    pair.client.on_1rtt_keys_available(cx).expect("client 1rtt");
+    pair.server.on_1rtt_keys_available(cx).expect("server 1rtt");
     pair.client
         .on_handshake_confirmed(cx)
         .expect("client confirmed");
@@ -277,11 +264,19 @@ fn bidirectional_stream_data_exchange() {
         .expect("client receive");
 
     // Verify stream offsets.
-    let client_view = pair.client.streams().stream(client_stream).expect("client stream");
+    let client_view = pair
+        .client
+        .streams()
+        .stream(client_stream)
+        .expect("client stream");
     assert_eq!(client_view.send_offset, 1024);
     assert_eq!(client_view.recv_offset, 512);
 
-    let server_view = pair.server.streams().stream(client_stream).expect("server stream");
+    let server_view = pair
+        .server
+        .streams()
+        .stream(client_stream)
+        .expect("server stream");
     assert_eq!(server_view.recv_offset, 1024);
     assert_eq!(server_view.send_offset, 512);
 }
@@ -328,9 +323,7 @@ fn multiple_streams_round_robin_scheduling() {
     );
 
     // Stop-send on s1 should skip it in the round-robin.
-    pair.client
-        .on_stop_sending(cx, s1, 0x77)
-        .expect("stop s1");
+    pair.client.on_stop_sending(cx, s1, 0x77).expect("stop s1");
 
     // Current cursor was at s0. Next should be s2 (skipping s1).
     assert_eq!(
@@ -412,8 +405,7 @@ fn h3_frame_encode_decode_over_stream() {
     pos += consumed;
     assert_eq!(decoded_settings, settings_frame);
 
-    let (decoded_headers, consumed) =
-        H3Frame::decode(&wire[pos..]).expect("decode headers frame");
+    let (decoded_headers, consumed) = H3Frame::decode(&wire[pos..]).expect("decode headers frame");
     pos += consumed;
     assert_eq!(decoded_headers, headers_frame);
 
@@ -502,18 +494,14 @@ fn h3_request_response_lifecycle() {
     // Client sends DATA.
     let data_bytes: Vec<u8> = (0..64).map(|_| (rng.next_u64() & 0xFF) as u8).collect();
     let data_frame = H3Frame::Data(data_bytes.clone());
-    request_stream_state
-        .on_frame(&data_frame)
-        .expect("data ok");
+    request_stream_state.on_frame(&data_frame).expect("data ok");
 
     server_h3
         .on_request_stream_frame(request_stream_id, &data_frame)
         .expect("server process request data");
 
     // Client marks end of stream.
-    request_stream_state
-        .mark_end_stream()
-        .expect("end stream");
+    request_stream_state.mark_end_stream().expect("end stream");
 
     // Server finishes the request stream.
     server_h3
@@ -522,9 +510,11 @@ fn h3_request_response_lifecycle() {
 
     // -- Server response --
 
-    let response_head =
-        H3ResponseHead::new(200, vec![("content-type".to_string(), "text/plain".to_string())])
-            .expect("valid response");
+    let response_head = H3ResponseHead::new(
+        200,
+        vec![("content-type".to_string(), "text/plain".to_string())],
+    )
+    .expect("valid response");
 
     let resp_plan = qpack_static_plan_for_response(&response_head);
     assert!(!resp_plan.is_empty());
@@ -565,15 +555,11 @@ fn graceful_close_drain_transition() {
 
     // Open a stream and write some data.
     let stream = pair.client.open_local_bidi(cx).expect("open stream");
-    pair.client
-        .write_stream(cx, stream, 100)
-        .expect("write");
+    pair.client.write_stream(cx, stream, 100).expect("write");
 
     // Client initiates graceful close.
     let now = pair.clock.now();
-    pair.client
-        .begin_close(cx, now, 0x0)
-        .expect("begin close");
+    pair.client.begin_close(cx, now, 0x0).expect("begin close");
 
     assert_eq!(pair.client.state(), QuicConnectionState::Draining);
     assert_eq!(pair.client.transport().close_code(), Some(0x0));
@@ -774,8 +760,7 @@ fn transport_parameter_and_packet_header_roundtrips() {
 
     let mut hdr_buf = Vec::new();
     long_hdr.encode(&mut hdr_buf).expect("encode long header");
-    let (decoded_hdr, consumed) =
-        PacketHeader::decode(&hdr_buf, 0).expect("decode long header");
+    let (decoded_hdr, consumed) = PacketHeader::decode(&hdr_buf, 0).expect("decode long header");
     assert_eq!(decoded_hdr, long_hdr);
     assert_eq!(consumed, hdr_buf.len());
 
@@ -867,12 +852,8 @@ fn h3_goaway_and_connection_drain() {
 
     // Fast-forward past drain timeout.
     pair.clock.advance(2_000_001);
-    pair.client
-        .poll(cx, pair.clock.now())
-        .expect("client poll");
-    pair.server
-        .poll(cx, pair.clock.now())
-        .expect("server poll");
+    pair.client.poll(cx, pair.clock.now()).expect("client poll");
+    pair.server.poll(cx, pair.clock.now()).expect("server poll");
 
     assert_eq!(pair.client.state(), QuicConnectionState::Closed);
     assert_eq!(pair.server.state(), QuicConnectionState::Closed);
@@ -940,18 +921,15 @@ fn deterministic_time_progression() {
 
     let ack = pair
         .client
-        .on_ack_received(
-            cx,
-            PacketNumberSpace::ApplicationData,
-            &[0],
-            0,
-            t_ack_us,
-        )
+        .on_ack_received(cx, PacketNumberSpace::ApplicationData, &[0], 0, t_ack_us)
         .expect("ack");
     assert_eq!(ack.acked_packets, 1);
 
     let rtt = pair.client.transport().rtt().smoothed_rtt_micros().unwrap();
-    assert_eq!(rtt, 50_000, "50ms RTT expected from 100ms send to 150ms ack");
+    assert_eq!(
+        rtt, 50_000,
+        "50ms RTT expected from 100ms send to 150ms ack"
+    );
 }
 
 // ===========================================================================
@@ -1065,7 +1043,10 @@ fn large_data_transfer_multi_segment() {
 
     // Verify client send offset accumulated correctly.
     let client_view = pair.client.streams().stream(stream).expect("client stream");
-    assert_eq!(client_view.send_offset, total, "client should have sent 64KB");
+    assert_eq!(
+        client_view.send_offset, total,
+        "client should have sent 64KB"
+    );
 
     // Server accepts and receives all data in matching segments.
     pair.server
@@ -1292,12 +1273,8 @@ fn graceful_close_with_in_flight_data() {
     let s0 = pair.client.open_local_bidi(cx).expect("open s0");
     let s1 = pair.client.open_local_bidi(cx).expect("open s1");
 
-    pair.client
-        .write_stream(cx, s0, 500)
-        .expect("write s0");
-    pair.client
-        .write_stream(cx, s1, 300)
-        .expect("write s1");
+    pair.client.write_stream(cx, s0, 500).expect("write s0");
+    pair.client.write_stream(cx, s1, 300).expect("write s1");
 
     pair.server
         .accept_remote_stream(cx, s0)
@@ -1308,9 +1285,7 @@ fn graceful_close_with_in_flight_data() {
 
     // Begin graceful close while data is in-flight.
     let now = pair.clock.now();
-    pair.client
-        .begin_close(cx, now, 0x0)
-        .expect("begin close");
+    pair.client.begin_close(cx, now, 0x0).expect("begin close");
 
     assert_eq!(pair.client.state(), QuicConnectionState::Draining);
 
@@ -1328,7 +1303,10 @@ fn graceful_close_with_in_flight_data() {
         .expect("client receive while draining");
 
     // But cannot open new streams.
-    let err = pair.client.open_local_bidi(cx).expect_err("no new streams while draining");
+    let err = pair
+        .client
+        .open_local_bidi(cx)
+        .expect_err("no new streams while draining");
     assert_eq!(
         err,
         NativeQuicConnectionError::InvalidState("1-RTT traffic not yet enabled")
@@ -1468,11 +1446,17 @@ fn interleaved_uni_and_bidi_streams() {
     assert_eq!(uni2.direction(), StreamDirection::Unidirectional);
 
     // Write on all streams in interleaved order.
-    pair.client.write_stream(cx, bidi0, 100).expect("write bidi0");
+    pair.client
+        .write_stream(cx, bidi0, 100)
+        .expect("write bidi0");
     pair.client.write_stream(cx, uni0, 200).expect("write uni0");
-    pair.client.write_stream(cx, bidi1, 300).expect("write bidi1");
+    pair.client
+        .write_stream(cx, bidi1, 300)
+        .expect("write bidi1");
     pair.client.write_stream(cx, uni1, 400).expect("write uni1");
-    pair.client.write_stream(cx, bidi2, 500).expect("write bidi2");
+    pair.client
+        .write_stream(cx, bidi2, 500)
+        .expect("write bidi2");
     pair.client.write_stream(cx, uni2, 600).expect("write uni2");
 
     // Server accepts and receives everything.
@@ -1482,12 +1466,24 @@ fn interleaved_uni_and_bidi_streams() {
             .expect("server accept");
     }
 
-    pair.server.receive_stream(cx, bidi0, 100).expect("recv bidi0");
-    pair.server.receive_stream(cx, uni0, 200).expect("recv uni0");
-    pair.server.receive_stream(cx, bidi1, 300).expect("recv bidi1");
-    pair.server.receive_stream(cx, uni1, 400).expect("recv uni1");
-    pair.server.receive_stream(cx, bidi2, 500).expect("recv bidi2");
-    pair.server.receive_stream(cx, uni2, 600).expect("recv uni2");
+    pair.server
+        .receive_stream(cx, bidi0, 100)
+        .expect("recv bidi0");
+    pair.server
+        .receive_stream(cx, uni0, 200)
+        .expect("recv uni0");
+    pair.server
+        .receive_stream(cx, bidi1, 300)
+        .expect("recv bidi1");
+    pair.server
+        .receive_stream(cx, uni1, 400)
+        .expect("recv uni1");
+    pair.server
+        .receive_stream(cx, bidi2, 500)
+        .expect("recv bidi2");
+    pair.server
+        .receive_stream(cx, uni2, 600)
+        .expect("recv uni2");
 
     // Verify all offsets.
     let expected: [(StreamId, u64); 6] = [
@@ -1508,13 +1504,25 @@ fn interleaved_uni_and_bidi_streams() {
     }
 
     // Server writes back on bidi streams only.
-    pair.server.write_stream(cx, bidi0, 10).expect("srv write bidi0");
-    pair.server.write_stream(cx, bidi1, 30).expect("srv write bidi1");
-    pair.server.write_stream(cx, bidi2, 50).expect("srv write bidi2");
+    pair.server
+        .write_stream(cx, bidi0, 10)
+        .expect("srv write bidi0");
+    pair.server
+        .write_stream(cx, bidi1, 30)
+        .expect("srv write bidi1");
+    pair.server
+        .write_stream(cx, bidi2, 50)
+        .expect("srv write bidi2");
 
-    pair.client.receive_stream(cx, bidi0, 10).expect("cli recv bidi0");
-    pair.client.receive_stream(cx, bidi1, 30).expect("cli recv bidi1");
-    pair.client.receive_stream(cx, bidi2, 50).expect("cli recv bidi2");
+    pair.client
+        .receive_stream(cx, bidi0, 10)
+        .expect("cli recv bidi0");
+    pair.client
+        .receive_stream(cx, bidi1, 30)
+        .expect("cli recv bidi1");
+    pair.client
+        .receive_stream(cx, bidi2, 50)
+        .expect("cli recv bidi2");
 }
 
 // ---------------------------------------------------------------------------
@@ -1618,12 +1626,8 @@ fn both_sides_drain_to_closed() {
 
     // Advance time past drain timeout.
     pair.clock.advance(2_000_000);
-    pair.client
-        .poll(cx, pair.clock.now())
-        .expect("client poll");
-    pair.server
-        .poll(cx, pair.clock.now())
-        .expect("server poll");
+    pair.client.poll(cx, pair.clock.now()).expect("client poll");
+    pair.server.poll(cx, pair.clock.now()).expect("server poll");
 
     assert_eq!(pair.client.state(), QuicConnectionState::Closed);
     assert_eq!(pair.server.state(), QuicConnectionState::Closed);

@@ -402,6 +402,7 @@ impl QuicH3ForensicLogger {
         for r in records.iter() {
             *map.entry(r.category.clone()).or_insert(0) += 1;
         }
+        drop(records);
         map
     }
 
@@ -413,6 +414,7 @@ impl QuicH3ForensicLogger {
         for r in records.iter() {
             *map.entry(r.level.clone()).or_insert(0) += 1;
         }
+        drop(records);
         map
     }
 
@@ -442,11 +444,11 @@ impl QuicH3ForensicLogger {
         let file = std::fs::File::create(path)?;
         let mut writer = std::io::BufWriter::new(file);
 
-        let records = self.records.lock();
+        let records = self.records.lock().clone();
         let seed_hex = format!("0x{:X}", self.seed);
         let thread_id = current_thread_id();
 
-        for r in records.iter() {
+        for r in &records {
             let line = ForensicNdjsonLine {
                 v: FORENSIC_SCHEMA_VERSION,
                 ts_us: r.ts_us,
@@ -467,8 +469,7 @@ impl QuicH3ForensicLogger {
                 data: &r.event,
             };
 
-            serde_json::to_writer(&mut writer, &line)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            serde_json::to_writer(&mut writer, &line).map_err(std::io::Error::other)?;
             writer.write_all(b"\n")?;
         }
 
@@ -583,7 +584,7 @@ impl Default for TransportSummary {
 
 /// H3-level metrics at scenario end.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct H3Summary {
     pub requests_sent: u32,
     pub responses_received: u32,
@@ -593,20 +594,6 @@ pub struct H3Summary {
     pub goaway_id: Option<u64>,
     pub settings_exchanged: bool,
     pub protocol_errors: u32,
-}
-
-impl Default for H3Summary {
-    fn default() -> Self {
-        Self {
-            requests_sent: 0,
-            responses_received: 0,
-            streams_opened: 0,
-            streams_reset: 0,
-            goaway_id: None,
-            settings_exchanged: false,
-            protocol_errors: 0,
-        }
-    }
 }
 
 /// An entry in the connection lifecycle state transition log.
@@ -640,152 +627,18 @@ impl QuicH3ScenarioManifest {
     #[must_use]
     pub fn from_logger(logger: &QuicH3ForensicLogger, passed: bool, duration_us: u64) -> Self {
         let records = logger.snapshot();
-
-        // -- Invariant verdicts & IDs ----------------------------------------
-        let mut invariant_verdicts = Vec::new();
-        let mut invariant_ids = Vec::new();
-        for r in &records {
-            if let QuicH3Event::InvariantCheckpoint {
-                invariant_id,
-                verdict,
-                details,
-            } = &r.event
-            {
-                invariant_ids.push(invariant_id.clone());
-                invariant_verdicts.push(InvariantVerdict {
-                    invariant_id: invariant_id.clone(),
-                    verdict: verdict.clone(),
-                    details: details.clone(),
-                });
-            }
-        }
-        invariant_ids.sort_unstable();
-        invariant_ids.dedup();
-
-        // -- Transport summary from events -----------------------------------
-        let mut transport = TransportSummary::default();
-        for r in &records {
-            match &r.event {
-                QuicH3Event::PacketSent { size_bytes, .. } => {
-                    transport.packets_sent += 1;
-                    transport.bytes_sent += size_bytes;
-                }
-                QuicH3Event::AckReceived {
-                    acked_packets,
-                    acked_bytes,
-                    ..
-                } => {
-                    transport.packets_acked += acked_packets;
-                    transport.bytes_acked += acked_bytes;
-                }
-                QuicH3Event::LossDetected {
-                    lost_packets,
-                    lost_bytes,
-                    ..
-                } => {
-                    transport.packets_lost += lost_packets;
-                    transport.bytes_lost += lost_bytes;
-                }
-                QuicH3Event::RttUpdated {
-                    smoothed_rtt_us,
-                    min_rtt_us,
-                    ..
-                } => {
-                    transport.smoothed_rtt_us = Some(*smoothed_rtt_us);
-                    transport.min_rtt_us = Some(*min_rtt_us);
-                }
-                QuicH3Event::CwndUpdated {
-                    new_cwnd, ssthresh, ..
-                } => {
-                    transport.cwnd = *new_cwnd;
-                    transport.ssthresh = *ssthresh;
-                }
-                QuicH3Event::PtoFired { pto_count, .. } => {
-                    transport.pto_count = *pto_count;
-                }
-                QuicH3Event::StateChanged { to_state, .. } => {
-                    transport.final_state = to_state.clone();
-                }
-                _ => {}
-            }
-        }
-
-        // -- H3 summary from events ------------------------------------------
-        let mut h3 = H3Summary::default();
-        for r in &records {
-            match &r.event {
-                QuicH3Event::RequestStarted { .. } => {
-                    h3.requests_sent += 1;
-                }
-                QuicH3Event::ResponseReceived { .. } => {
-                    h3.responses_received += 1;
-                }
-                QuicH3Event::StreamOpened { .. } => {
-                    h3.streams_opened += 1;
-                }
-                QuicH3Event::StreamReset { .. } => {
-                    h3.streams_reset += 1;
-                }
-                QuicH3Event::GoawayReceived { stream_id, .. } => {
-                    h3.goaway_id = Some(*stream_id);
-                }
-                QuicH3Event::SettingsExchanged { .. } => {
-                    h3.settings_exchanged = true;
-                }
-                QuicH3Event::FrameError { .. } => {
-                    h3.protocol_errors += 1;
-                }
-                _ => {}
-            }
-        }
-
-        // -- Connection lifecycle transitions ---------------------------------
-        let mut lifecycle = Vec::new();
-        for r in &records {
-            if let QuicH3Event::StateChanged {
-                from_state,
-                to_state,
-                trigger,
-            } = &r.event
-            {
-                lifecycle.push(LifecycleTransition {
-                    from_state: from_state.clone(),
-                    to_state: to_state.clone(),
-                    ts_us: r.ts_us,
-                    trigger: trigger.clone(),
-                });
-            }
-        }
-
-        // -- Event timeline --------------------------------------------------
-        let by_category = logger.events_by_category();
-        let by_level = logger.events_by_level();
-        let total_events = records.len() as u64;
-
-        // -- Trace fingerprint (deterministic hash of event names + timestamps)
-        let trace_fingerprint = {
-            const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-            const FNV_PRIME: u64 = 0x0100_0000_01b3;
-            let mut h = FNV_OFFSET;
-            for r in &records {
-                for b in r.ts_us.to_le_bytes() {
-                    h ^= u64::from(b);
-                    h = h.wrapping_mul(FNV_PRIME);
-                }
-                for b in r.event.event_name().as_bytes() {
-                    h ^= u64::from(*b);
-                    h = h.wrapping_mul(FNV_PRIME);
-                }
-            }
-            format!("{h:016x}")
-        };
+        let (invariant_ids, invariant_verdicts) = Self::extract_invariants(&records);
+        let transport = Self::extract_transport(&records);
+        let h3 = Self::extract_h3(&records);
+        let lifecycle = Self::extract_lifecycle(&records);
+        let trace_fingerprint = Self::compute_trace_fingerprint(&records);
 
         let failure_class = if passed {
-            "passed".to_string()
+            "passed"
         } else {
-            "assertion_failure".to_string()
-        };
-
+            "assertion_failure"
+        }
+        .to_string();
         let replay_command = format!(
             "ASUPERSYNC_SEED=0x{:X} cargo test {} -- --nocapture",
             logger.seed(),
@@ -805,9 +658,9 @@ impl QuicH3ScenarioManifest {
             invariant_verdicts,
             artifact_paths: Vec::new(),
             event_timeline: EventTimeline {
-                total_events,
-                by_category,
-                by_level,
+                total_events: records.len() as u64,
+                by_category: logger.events_by_category(),
+                by_level: logger.events_by_level(),
             },
             transport_summary: transport,
             h3_summary: h3,
@@ -830,12 +683,143 @@ impl QuicH3ScenarioManifest {
         }
     }
 
+    fn extract_invariants(records: &[ForensicRecord]) -> (Vec<String>, Vec<InvariantVerdict>) {
+        let mut verdicts = Vec::new();
+        let mut ids = Vec::new();
+        for r in records {
+            if let QuicH3Event::InvariantCheckpoint {
+                invariant_id,
+                verdict,
+                details,
+            } = &r.event
+            {
+                ids.push(invariant_id.clone());
+                verdicts.push(InvariantVerdict {
+                    invariant_id: invariant_id.clone(),
+                    verdict: verdict.clone(),
+                    details: details.clone(),
+                });
+            }
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        (ids, verdicts)
+    }
+
+    fn extract_transport(records: &[ForensicRecord]) -> TransportSummary {
+        let mut t = TransportSummary::default();
+        for r in records {
+            match &r.event {
+                QuicH3Event::PacketSent { size_bytes, .. } => {
+                    t.packets_sent += 1;
+                    t.bytes_sent += size_bytes;
+                }
+                QuicH3Event::AckReceived {
+                    acked_packets,
+                    acked_bytes,
+                    ..
+                } => {
+                    t.packets_acked += acked_packets;
+                    t.bytes_acked += acked_bytes;
+                }
+                QuicH3Event::LossDetected {
+                    lost_packets,
+                    lost_bytes,
+                    ..
+                } => {
+                    t.packets_lost += lost_packets;
+                    t.bytes_lost += lost_bytes;
+                }
+                QuicH3Event::RttUpdated {
+                    smoothed_rtt_us,
+                    min_rtt_us,
+                    ..
+                } => {
+                    t.smoothed_rtt_us = Some(*smoothed_rtt_us);
+                    t.min_rtt_us = Some(*min_rtt_us);
+                }
+                QuicH3Event::CwndUpdated {
+                    new_cwnd, ssthresh, ..
+                } => {
+                    t.cwnd = *new_cwnd;
+                    t.ssthresh = *ssthresh;
+                }
+                QuicH3Event::PtoFired { pto_count, .. } => {
+                    t.pto_count = *pto_count;
+                }
+                QuicH3Event::StateChanged { to_state, .. } => {
+                    t.final_state.clone_from(to_state);
+                }
+                _ => {}
+            }
+        }
+        t
+    }
+
+    fn extract_h3(records: &[ForensicRecord]) -> H3Summary {
+        let mut h3 = H3Summary::default();
+        for r in records {
+            match &r.event {
+                QuicH3Event::RequestStarted { .. } => h3.requests_sent += 1,
+                QuicH3Event::ResponseReceived { .. } => h3.responses_received += 1,
+                QuicH3Event::StreamOpened { .. } => h3.streams_opened += 1,
+                QuicH3Event::StreamReset { .. } => h3.streams_reset += 1,
+                QuicH3Event::GoawayReceived { stream_id, .. } => {
+                    h3.goaway_id = Some(*stream_id);
+                }
+                QuicH3Event::SettingsExchanged { .. } => h3.settings_exchanged = true,
+                QuicH3Event::FrameError { .. } => h3.protocol_errors += 1,
+                _ => {}
+            }
+        }
+        h3
+    }
+
+    fn extract_lifecycle(records: &[ForensicRecord]) -> Vec<LifecycleTransition> {
+        records
+            .iter()
+            .filter_map(|r| {
+                if let QuicH3Event::StateChanged {
+                    from_state,
+                    to_state,
+                    trigger,
+                } = &r.event
+                {
+                    Some(LifecycleTransition {
+                        from_state: from_state.clone(),
+                        to_state: to_state.clone(),
+                        ts_us: r.ts_us,
+                        trigger: trigger.clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn compute_trace_fingerprint(records: &[ForensicRecord]) -> String {
+        const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME: u64 = 0x0100_0000_01b3;
+        let mut h = FNV_OFFSET;
+        for r in records {
+            for b in r.ts_us.to_le_bytes() {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(FNV_PRIME);
+            }
+            for b in r.event.event_name().as_bytes() {
+                h ^= u64::from(*b);
+                h = h.wrapping_mul(FNV_PRIME);
+            }
+        }
+        format!("{h:016x}")
+    }
+
     /// Serialize the manifest as pretty-printed JSON to the given path.
     pub fn write_json(&self, path: &Path) -> std::io::Result<()> {
         let file = std::fs::File::create(path)?;
         let writer = std::io::BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        serde_json::to_writer_pretty(writer, self).map_err(std::io::Error::other)
     }
 }
 

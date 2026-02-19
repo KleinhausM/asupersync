@@ -607,7 +607,13 @@ mod tests {
     #[test]
     fn install_instructions_all_shells() {
         init_test("install_instructions_all_shells");
-        let shells = [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::PowerShell, Shell::Elvish];
+        let shells = [
+            Shell::Bash,
+            Shell::Zsh,
+            Shell::Fish,
+            Shell::PowerShell,
+            Shell::Elvish,
+        ];
         for shell in &shells {
             let instructions = shell.install_instructions("mycli");
             let has_cmd = instructions.contains("mycli");

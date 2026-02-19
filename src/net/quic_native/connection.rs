@@ -846,10 +846,12 @@ mod tests {
         conn.begin_close(&cx, now, 0x1234).expect("drain");
         assert_eq!(conn.state(), QuicConnectionState::Draining);
 
-        conn.poll(&cx, now + drain_timeout - 1).expect("poll before deadline");
+        conn.poll(&cx, now + drain_timeout - 1)
+            .expect("poll before deadline");
         assert_eq!(conn.state(), QuicConnectionState::Draining);
 
-        conn.poll(&cx, now + drain_timeout).expect("poll at deadline");
+        conn.poll(&cx, now + drain_timeout)
+            .expect("poll at deadline");
         assert_eq!(conn.state(), QuicConnectionState::Closed);
     }
 
@@ -897,7 +899,8 @@ mod tests {
         let cx = test_cx();
         let mut conn = established_conn();
         let stream = conn.open_local_bidi(&cx).expect("open");
-        conn.stop_receiving(&cx, stream, 0x42).expect("stop_receiving");
+        conn.stop_receiving(&cx, stream, 0x42)
+            .expect("stop_receiving");
         let err = conn
             .receive_stream(&cx, stream, 1)
             .expect_err("must fail after stop_receiving");

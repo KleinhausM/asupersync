@@ -502,9 +502,7 @@ mod tests {
 
     #[test]
     fn trace_poset_debug_clone() {
-        let trace = vec![
-            TraceEvent::user_trace(1, Time::from_nanos(10), "a"),
-        ];
+        let trace = vec![TraceEvent::user_trace(1, Time::from_nanos(10), "a")];
         let poset = TracePoset::from_trace(&trace);
         let poset2 = poset.clone();
         assert!(format!("{poset2:?}").contains("TracePoset"));

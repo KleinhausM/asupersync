@@ -1936,8 +1936,7 @@ mod tests {
 
     #[test]
     fn endpoint_with_state_setter() {
-        let ep = Endpoint::new(EndpointId::new(1), "h:80")
-            .with_state(EndpointState::Draining);
+        let ep = Endpoint::new(EndpointId::new(1), "h:80").with_state(EndpointState::Draining);
         assert_eq!(ep.state(), EndpointState::Draining);
         ep.set_state(EndpointState::Healthy);
         assert_eq!(ep.state(), EndpointState::Healthy);

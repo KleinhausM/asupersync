@@ -5,9 +5,7 @@
 //! confirms that the stack remains in a valid state after the error.
 
 use asupersync::cx::Cx;
-use asupersync::http::h3_native::{
-    H3ConnectionState, H3ControlState, H3Frame, H3Settings,
-};
+use asupersync::http::h3_native::{H3ConnectionState, H3ControlState, H3Frame, H3Settings};
 use asupersync::net::quic_core::{
     ConnectionId, PacketHeader, QuicCoreError, TransportParameters, encode_varint,
 };
@@ -100,8 +98,12 @@ impl ConnectionPair {
     fn establish(&mut self) {
         let cx = &self.cx;
 
-        self.client.begin_handshake(cx).expect("client begin_handshake");
-        self.server.begin_handshake(cx).expect("server begin_handshake");
+        self.client
+            .begin_handshake(cx)
+            .expect("client begin_handshake");
+        self.server
+            .begin_handshake(cx)
+            .expect("server begin_handshake");
 
         self.client
             .on_handshake_keys_available(cx)
@@ -634,9 +636,7 @@ fn write_and_open_on_draining_connection() {
 
     // Begin graceful close (draining).
     let now = pair.clock.now();
-    pair.client
-        .begin_close(cx, now, 0x00)
-        .expect("begin close");
+    pair.client.begin_close(cx, now, 0x00).expect("begin close");
     assert_eq!(pair.client.state(), QuicConnectionState::Draining);
 
     // Write on existing stream while draining -- should fail because

@@ -2226,7 +2226,11 @@ mod tests {
 
     #[test]
     fn dual_kernel_mode_debug_clone_copy_eq() {
-        for mode in [DualKernelMode::Auto, DualKernelMode::Sequential, DualKernelMode::Fused] {
+        for mode in [
+            DualKernelMode::Auto,
+            DualKernelMode::Sequential,
+            DualKernelMode::Fused,
+        ] {
             let copied = mode;
             let cloned = mode.clone();
             assert_eq!(copied, cloned);

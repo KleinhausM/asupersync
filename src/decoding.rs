@@ -1403,8 +1403,7 @@ mod tests {
             .take(3)
             .collect();
 
-        let mut decoder =
-            decoder_with_params(&config, object_id, data.len(), 1.5, 1);
+        let mut decoder = decoder_with_params(&config, object_id, data.len(), 1.5, 1);
 
         let results = decoder.feed_batch(symbols.into_iter());
         let len = results.len();
@@ -1591,10 +1590,8 @@ mod tests {
             vec![0u8; usize::from(config.symbol_size)],
             SymbolKind::Source,
         );
-        let auth = AuthenticatedSymbol::from_parts(
-            extra,
-            crate::security::tag::AuthenticationTag::zero(),
-        );
+        let auth =
+            AuthenticatedSymbol::from_parts(extra, crate::security::tag::AuthenticationTag::zero());
         let result = decoder.feed(auth).expect("feed");
         let expected = SymbolAcceptResult::Rejected(RejectReason::BlockAlreadyDecoded);
         let ok = result == expected;
@@ -1630,10 +1627,8 @@ mod tests {
             vec![0u8; usize::from(config.symbol_size)],
             SymbolKind::Source,
         );
-        let auth = AuthenticatedSymbol::from_parts(
-            extra,
-            crate::security::tag::AuthenticationTag::zero(),
-        );
+        let auth =
+            AuthenticatedSymbol::from_parts(extra, crate::security::tag::AuthenticationTag::zero());
         let result = decoder.feed(auth).expect("feed");
         let expected = SymbolAcceptResult::Rejected(RejectReason::BlockAlreadyDecoded);
         let ok = result == expected;
@@ -1704,12 +1699,7 @@ mod tests {
         crate::assert_with_log!(is_ok, "preverified symbol accepted", true, is_ok);
         let accept = result.unwrap();
         let is_accepted = matches!(accept, SymbolAcceptResult::Accepted { .. });
-        crate::assert_with_log!(
-            is_accepted,
-            "result is Accepted variant",
-            true,
-            is_accepted
-        );
+        crate::assert_with_log!(is_accepted, "result is Accepted variant", true, is_accepted);
         crate::test_complete!("verify_auth_no_context_preverified_symbol_ok");
     }
 
@@ -1807,7 +1797,12 @@ mod tests {
 
         let decoded_data = decoder.into_data().expect("decoded");
         let ok = decoded_data == data;
-        crate::assert_with_log!(ok, "multi-block roundtrip data", data.len(), decoded_data.len());
+        crate::assert_with_log!(
+            ok,
+            "multi-block roundtrip data",
+            data.len(),
+            decoded_data.len()
+        );
         crate::test_complete!("multi_block_roundtrip");
     }
 

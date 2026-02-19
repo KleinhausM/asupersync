@@ -1800,12 +1800,9 @@ mod tests {
     #[test]
     fn request_stream_on_frame_after_end_stream_error() {
         let mut st = H3RequestStreamState::new();
-        st.on_frame(&H3Frame::Headers(vec![0x80]))
-            .expect("HEADERS");
+        st.on_frame(&H3Frame::Headers(vec![0x80])).expect("HEADERS");
         st.mark_end_stream().expect("end");
-        let err = st
-            .on_frame(&H3Frame::Data(vec![1]))
-            .expect_err("must fail");
+        let err = st.on_frame(&H3Frame::Data(vec![1])).expect_err("must fail");
         assert_eq!(
             err,
             H3NativeError::ControlProtocol("request stream already finished")
@@ -1871,9 +1868,11 @@ mod tests {
         let mut c = H3ConnectionState::new();
         c.on_control_frame(&H3Frame::Settings(H3Settings::default()))
             .expect("settings");
-        c.on_control_frame(&H3Frame::Goaway(100)).expect("first goaway=100");
+        c.on_control_frame(&H3Frame::Goaway(100))
+            .expect("first goaway=100");
         assert_eq!(c.goaway_id(), Some(100));
-        c.on_control_frame(&H3Frame::Goaway(50)).expect("second goaway=50");
+        c.on_control_frame(&H3Frame::Goaway(50))
+            .expect("second goaway=50");
         assert_eq!(c.goaway_id(), Some(50));
     }
 

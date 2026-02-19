@@ -742,10 +742,12 @@ mod tests {
         assert_eq!(set.len(), 4);
 
         // Ord
-        let mut kinds = [ObligationKind::IoOp,
+        let mut kinds = [
+            ObligationKind::IoOp,
             ObligationKind::SendPermit,
             ObligationKind::Lease,
-            ObligationKind::Ack];
+            ObligationKind::Ack,
+        ];
         kinds.sort();
         assert_eq!(kinds[0], ObligationKind::SendPermit);
     }

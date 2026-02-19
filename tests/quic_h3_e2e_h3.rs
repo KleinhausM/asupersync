@@ -10,13 +10,13 @@
 
 use asupersync::cx::Cx;
 use asupersync::http::h3_native::{
-    H3ConnectionConfig, H3ConnectionState, H3ControlState, H3Frame, H3NativeError,
-    H3PseudoHeaders, H3QpackMode, H3RequestHead, H3RequestStreamState, H3ResponseHead,
-    H3Settings, QpackFieldPlan, qpack_static_plan_for_request, qpack_static_plan_for_response,
+    H3ConnectionConfig, H3ConnectionState, H3ControlState, H3Frame, H3NativeError, H3PseudoHeaders,
+    H3QpackMode, H3RequestHead, H3RequestStreamState, H3ResponseHead, H3Settings, QpackFieldPlan,
+    qpack_static_plan_for_request, qpack_static_plan_for_response,
 };
 use asupersync::net::quic_native::{
-    NativeQuicConnection, NativeQuicConnectionConfig, QuicConnectionState,
-    StreamDirection, StreamRole,
+    NativeQuicConnection, NativeQuicConnectionConfig, QuicConnectionState, StreamDirection,
+    StreamRole,
 };
 use asupersync::types::Time;
 use asupersync::util::DetRng;
@@ -103,8 +103,12 @@ impl ConnectionPair {
     fn establish(&mut self) {
         let cx = &self.cx;
 
-        self.client.begin_handshake(cx).expect("client begin_handshake");
-        self.server.begin_handshake(cx).expect("server begin_handshake");
+        self.client
+            .begin_handshake(cx)
+            .expect("client begin_handshake");
+        self.server
+            .begin_handshake(cx)
+            .expect("server begin_handshake");
 
         assert_eq!(self.client.state(), QuicConnectionState::Handshaking);
         assert_eq!(self.server.state(), QuicConnectionState::Handshaking);
@@ -169,7 +173,10 @@ fn full_request_response_cycle() {
         .expect("client receives server settings");
 
     // -- Client opens a request stream --
-    let stream = pair.client.open_local_bidi(cx).expect("open request stream");
+    let stream = pair
+        .client
+        .open_local_bidi(cx)
+        .expect("open request stream");
     assert!(stream.is_local_for(StreamRole::Client));
     assert_eq!(stream.direction(), StreamDirection::Bidirectional);
 
@@ -185,7 +192,10 @@ fn full_request_response_cycle() {
             status: None,
         },
         vec![
-            ("content-type".to_string(), "application/octet-stream".to_string()),
+            (
+                "content-type".to_string(),
+                "application/octet-stream".to_string(),
+            ),
             ("user-agent".to_string(), "asupersync/0.2".to_string()),
         ],
     )
@@ -229,7 +239,9 @@ fn full_request_response_cycle() {
 
     // Simulate wire: encode request frames and transport them.
     let mut request_wire = Vec::new();
-    headers_frame.encode(&mut request_wire).expect("encode headers");
+    headers_frame
+        .encode(&mut request_wire)
+        .expect("encode headers");
     data_frame.encode(&mut request_wire).expect("encode data");
 
     let wire_len = request_wire.len() as u64;
@@ -262,7 +274,9 @@ fn full_request_response_cycle() {
     let resp_body = H3Frame::Data(b"OK: uploaded successfully".to_vec());
 
     let mut resp_wire = Vec::new();
-    resp_headers.encode(&mut resp_wire).expect("encode resp headers");
+    resp_headers
+        .encode(&mut resp_wire)
+        .expect("encode resp headers");
     resp_body.encode(&mut resp_wire).expect("encode resp body");
 
     // Transport response bytes.
@@ -392,7 +406,11 @@ fn multiple_concurrent_requests() {
         .expect("valid request head");
 
         let plan = qpack_static_plan_for_request(&head);
-        assert!(!plan.is_empty(), "plan for {} should have entries", methods[i]);
+        assert!(
+            !plan.is_empty(),
+            "plan for {} should have entries",
+            methods[i]
+        );
     }
 }
 
@@ -1204,11 +1222,7 @@ fn multi_frame_wire_sequential_decode() {
             ..H3Settings::default()
         }),
         H3Frame::Headers(vec![0x00, 0x00, 0x80, 0x17]),
-        H3Frame::Data(
-            (0..64)
-                .map(|_| (rng.next_u64() & 0xFF) as u8)
-                .collect(),
-        ),
+        H3Frame::Data((0..64).map(|_| (rng.next_u64() & 0xFF) as u8).collect()),
         H3Frame::Headers(vec![0x00, 0x00, 0x81]), // trailing headers
         H3Frame::Goaway(12),
         H3Frame::CancelPush(99),
@@ -1310,9 +1324,13 @@ fn full_h3_lifecycle_over_quic_streams() {
         let resp_data_frame = H3Frame::Data(resp_body.to_vec());
 
         let mut resp_wire = Vec::new();
-        resp_headers_frame.encode(&mut resp_wire).expect("encode resp headers");
+        resp_headers_frame
+            .encode(&mut resp_wire)
+            .expect("encode resp headers");
         if !resp_body.is_empty() {
-            resp_data_frame.encode(&mut resp_wire).expect("encode resp data");
+            resp_data_frame
+                .encode(&mut resp_wire)
+                .expect("encode resp data");
         }
 
         // Transport response bytes over QUIC.
@@ -1338,7 +1356,11 @@ fn full_h3_lifecycle_over_quic_streams() {
             pos += n;
             assert_eq!(dec_d, resp_data_frame);
         }
-        assert_eq!(pos, resp_wire.len(), "all response bytes consumed for stream {i}");
+        assert_eq!(
+            pos,
+            resp_wire.len(),
+            "all response bytes consumed for stream {i}"
+        );
 
         // Validate QPACK plan for this request.
         let pseudo = if *method == "CONNECT" {
@@ -1356,14 +1378,23 @@ fn full_h3_lifecycle_over_quic_streams() {
                 status: None,
             }
         };
-        let req_head =
-            H3RequestHead::new(pseudo, vec![]).expect("valid request head");
+        let req_head = H3RequestHead::new(pseudo, vec![]).expect("valid request head");
         let req_plan = qpack_static_plan_for_request(&req_head);
-        assert!(!req_plan.is_empty(), "plan should not be empty for {method}");
+        assert!(
+            !req_plan.is_empty(),
+            "plan should not be empty for {method}"
+        );
     }
 
     // Verify QUIC-level stream offsets for stream 1 (POST with body).
     let post_stream = streams[1];
-    let client_view = pair.client.streams().stream(post_stream).expect("client stream view");
-    assert!(client_view.recv_offset > 0, "client should have received response data");
+    let client_view = pair
+        .client
+        .streams()
+        .stream(post_stream)
+        .expect("client stream view");
+    assert!(
+        client_view.recv_offset > 0,
+        "client should have received response data"
+    );
 }

@@ -1247,8 +1247,7 @@ default_timeout_ms = 5000
         assert!(err.source().is_none());
 
         // ConfigError has a blanket Error impl with no source override.
-        let err =
-            ConfigError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
+        let err = ConfigError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
         assert!(err.source().is_none());
     }
 

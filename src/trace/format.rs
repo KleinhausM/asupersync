@@ -394,9 +394,7 @@ mod tests {
 
     #[test]
     fn golden_trace_oracle_summary_empty() {
-        let summary = GoldenTraceOracleSummary {
-            violations: vec![],
-        };
+        let summary = GoldenTraceOracleSummary { violations: vec![] };
         assert!(summary.violations.is_empty());
     }
 
@@ -481,10 +479,7 @@ mod tests {
             canonical_prefix_layers: 1,
             canonical_prefix_events: 1,
         };
-        let cfg2 = GoldenTraceConfig {
-            seed: 2,
-            ..cfg1
-        };
+        let cfg2 = GoldenTraceConfig { seed: 2, ..cfg1 };
         let m = GoldenTraceMismatch::Config {
             expected: cfg1,
             actual: cfg2,

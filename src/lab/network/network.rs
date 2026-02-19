@@ -959,7 +959,9 @@ mod tests {
         let dbg2 = format!("{cloned:?}");
         assert_eq!(dbg, dbg2);
 
-        let crash = Fault::HostCrash { host: HostId::new(5) };
+        let crash = Fault::HostCrash {
+            host: HostId::new(5),
+        };
         let dbg = format!("{crash:?}");
         assert!(dbg.contains("HostCrash"));
     }

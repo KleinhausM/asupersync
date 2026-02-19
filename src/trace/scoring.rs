@@ -457,10 +457,7 @@ mod tests {
     #[test]
     fn evidence_entry_debug_clone() {
         let e = EvidenceEntry {
-            class: ClassId {
-                birth: 0,
-                death: 5,
-            },
+            class: ClassId { birth: 0, death: 5 },
             is_novel: true,
             persistence: Some(5),
         };

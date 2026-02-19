@@ -763,7 +763,10 @@ mod tests {
         assert!(dbg.contains("LeaseTimeMonotonicity"));
 
         let cloned = constraint.clone();
-        assert_eq!(cloned.invariant, TimeIndexedInvariant::LeaseTimeMonotonicity);
+        assert_eq!(
+            cloned.invariant,
+            TimeIndexedInvariant::LeaseTimeMonotonicity
+        );
         assert_eq!(cloned.constraint, "test constraint");
     }
 

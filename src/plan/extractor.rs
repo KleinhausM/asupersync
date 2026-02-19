@@ -636,8 +636,18 @@ mod tests {
 
     #[test]
     fn plan_cost_add_sequential() {
-        let a = PlanCost { allocations: 2, cancel_checkpoints: 1, obligation_pressure: 0, critical_path: 3 };
-        let b = PlanCost { allocations: 3, cancel_checkpoints: 0, obligation_pressure: 1, critical_path: 5 };
+        let a = PlanCost {
+            allocations: 2,
+            cancel_checkpoints: 1,
+            obligation_pressure: 0,
+            critical_path: 3,
+        };
+        let b = PlanCost {
+            allocations: 3,
+            cancel_checkpoints: 0,
+            obligation_pressure: 1,
+            critical_path: 5,
+        };
 
         // add: critical_path = max
         let sum = a.add(b);
@@ -669,9 +679,18 @@ mod tests {
 
     #[test]
     fn extraction_verify_error_debug_clone_eq() {
-        let e1 = ExtractionVerifyError::VersionMismatch { expected: 1, found: 2 };
-        let e2 = ExtractionVerifyError::HashMismatch { expected: 10, actual: 20 };
-        let e3 = ExtractionVerifyError::NodeCountMismatch { expected: 5, actual: 3 };
+        let e1 = ExtractionVerifyError::VersionMismatch {
+            expected: 1,
+            found: 2,
+        };
+        let e2 = ExtractionVerifyError::HashMismatch {
+            expected: 10,
+            actual: 20,
+        };
+        let e3 = ExtractionVerifyError::NodeCountMismatch {
+            expected: 5,
+            actual: 3,
+        };
 
         let dbg1 = format!("{e1:?}");
         assert!(dbg1.contains("VersionMismatch"));

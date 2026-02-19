@@ -94,8 +94,12 @@ impl ConnectionPair {
     fn establish(&mut self) {
         let cx = &self.cx;
 
-        self.client.begin_handshake(cx).expect("client begin_handshake");
-        self.server.begin_handshake(cx).expect("server begin_handshake");
+        self.client
+            .begin_handshake(cx)
+            .expect("client begin_handshake");
+        self.server
+            .begin_handshake(cx)
+            .expect("server begin_handshake");
 
         assert_eq!(self.client.state(), QuicConnectionState::Handshaking);
         assert_eq!(self.server.state(), QuicConnectionState::Handshaking);
@@ -183,7 +187,10 @@ fn selective_ack_with_gaps_odd_only() {
         )
         .expect("ack odd");
 
-    assert_eq!(ack.acked_packets, 5, "5 odd-numbered packets should be acked");
+    assert_eq!(
+        ack.acked_packets, 5,
+        "5 odd-numbered packets should be acked"
+    );
     assert_eq!(ack.acked_bytes, 5 * 1200, "5 packets x 1200 bytes acked");
 
     // Packets 0, 2, 4, 6 are unacked. Largest acked = 9.
@@ -278,7 +285,14 @@ fn loss_detection_via_time_threshold() {
     // First establish an RTT sample: send pn 0 at t=base, ack at t=base+20ms.
     let t_base = pair.clock.now();
     pair.client
-        .on_packet_sent(cx, PacketNumberSpace::ApplicationData, 1200, true, true, t_base)
+        .on_packet_sent(
+            cx,
+            PacketNumberSpace::ApplicationData,
+            1200,
+            true,
+            true,
+            t_base,
+        )
         .expect("send pn 0");
 
     pair.clock.advance(20_000);
@@ -309,11 +323,25 @@ fn loss_detection_via_time_threshold() {
     // Send pn 1 and pn 2 close together.
     let t_send1 = pair.clock.now();
     pair.client
-        .on_packet_sent(cx, PacketNumberSpace::ApplicationData, 1200, true, true, t_send1)
+        .on_packet_sent(
+            cx,
+            PacketNumberSpace::ApplicationData,
+            1200,
+            true,
+            true,
+            t_send1,
+        )
         .expect("send pn 1");
     pair.clock.advance(100);
     pair.client
-        .on_packet_sent(cx, PacketNumberSpace::ApplicationData, 1200, true, true, pair.clock.now())
+        .on_packet_sent(
+            cx,
+            PacketNumberSpace::ApplicationData,
+            1200,
+            true,
+            true,
+            pair.clock.now(),
+        )
         .expect("send pn 2");
 
     // ACK pn 2 only, but NOT enough time has passed for pn 1 time-threshold loss.
@@ -330,13 +358,23 @@ fn loss_detection_via_time_threshold() {
         )
         .expect("ack pn 2 early");
     assert_eq!(ack1.acked_packets, 1);
-    assert_eq!(ack1.lost_packets, 0, "too early for time-threshold loss on pn 1");
+    assert_eq!(
+        ack1.lost_packets, 0,
+        "too early for time-threshold loss on pn 1"
+    );
 
     // Now send pn 3 and ack it at a time well past loss_delay from pn 1's send time.
     pair.clock.advance(loss_delay + 5_000); // well past threshold
     let t_send3 = pair.clock.now();
     pair.client
-        .on_packet_sent(cx, PacketNumberSpace::ApplicationData, 1200, true, true, t_send3)
+        .on_packet_sent(
+            cx,
+            PacketNumberSpace::ApplicationData,
+            1200,
+            true,
+            true,
+            t_send3,
+        )
         .expect("send pn 3");
 
     pair.clock.advance(5_000);
@@ -413,7 +451,14 @@ fn pto_fire_after_timeout() {
     let t_probe = pair.clock.now();
     let probe_pn = pair
         .client
-        .on_packet_sent(cx, PacketNumberSpace::ApplicationData, 1200, true, true, t_probe)
+        .on_packet_sent(
+            cx,
+            PacketNumberSpace::ApplicationData,
+            1200,
+            true,
+            true,
+            t_probe,
+        )
         .expect("send probe after PTO");
     assert_eq!(probe_pn, 2, "probe packet should get next packet number");
 
@@ -502,15 +547,29 @@ fn congestion_window_reduction_on_loss() {
 
     let initial_cwnd = t.congestion_window_bytes();
     assert_eq!(initial_cwnd, 12_000, "default cwnd");
-    assert_eq!(t.ssthresh_bytes(), u64::MAX, "initial ssthresh is infinity (slow start)");
+    assert_eq!(
+        t.ssthresh_bytes(),
+        u64::MAX,
+        "initial ssthresh is infinity (slow start)"
+    );
 
     // Grow cwnd in slow start: send and ack multiple packets.
     // Slow start: cwnd grows by acked_bytes.
     for pn in 0u64..5 {
-        t.on_packet_sent(sent(PacketNumberSpace::ApplicationData, pn, 1200, 10_000 + pn * 100));
+        t.on_packet_sent(sent(
+            PacketNumberSpace::ApplicationData,
+            pn,
+            1200,
+            10_000 + pn * 100,
+        ));
     }
     // ACK all 5 individually to grow cwnd.
-    let _ = t.on_ack_received(PacketNumberSpace::ApplicationData, &[0, 1, 2, 3, 4], 0, 30_000);
+    let _ = t.on_ack_received(
+        PacketNumberSpace::ApplicationData,
+        &[0, 1, 2, 3, 4],
+        0,
+        30_000,
+    );
     let cwnd_after_growth = t.congestion_window_bytes();
     assert!(
         cwnd_after_growth > initial_cwnd,
@@ -522,7 +581,12 @@ fn congestion_window_reduction_on_loss() {
     // Now send packets that will trigger packet-threshold loss.
     // Send pn 5..11 (7 packets).
     for pn in 5u64..12 {
-        t.on_packet_sent(sent(PacketNumberSpace::ApplicationData, pn, 1200, 40_000 + pn * 100));
+        t.on_packet_sent(sent(
+            PacketNumberSpace::ApplicationData,
+            pn,
+            1200,
+            40_000 + pn * 100,
+        ));
     }
 
     // ACK only pn 11 -- this triggers packet-threshold loss for pn 5..8
@@ -590,13 +654,7 @@ fn rtt_estimation_with_variable_delays() {
 
         let ack = pair
             .client
-            .on_ack_received(
-                cx,
-                PacketNumberSpace::ApplicationData,
-                &[pn],
-                0,
-                t_current,
-            )
+            .on_ack_received(cx, PacketNumberSpace::ApplicationData, &[pn], 0, t_current)
             .expect(&format!("ack pn {pn}"));
         assert_eq!(ack.acked_packets, 1);
 
@@ -629,7 +687,10 @@ fn rtt_estimation_with_variable_delays() {
         .rtt()
         .rttvar_micros()
         .expect("should have rttvar");
-    assert!(rttvar > 0, "rttvar should be positive after variable delays");
+    assert!(
+        rttvar > 0,
+        "rttvar should be positive after variable delays"
+    );
 }
 
 // ===========================================================================
@@ -717,15 +778,26 @@ fn bytes_in_flight_across_spaces() {
     assert_eq!(pair.client.transport().bytes_in_flight(), 3200);
 
     // Complete handshake, then send AppData packets.
-    pair.client.on_handshake_keys_available(cx).expect("hs keys");
-    pair.server.on_handshake_keys_available(cx).expect("hs keys");
+    pair.client
+        .on_handshake_keys_available(cx)
+        .expect("hs keys");
+    pair.server
+        .on_handshake_keys_available(cx)
+        .expect("hs keys");
     pair.client.on_1rtt_keys_available(cx).expect("1rtt keys");
     pair.server.on_1rtt_keys_available(cx).expect("1rtt keys");
     pair.client.on_handshake_confirmed(cx).expect("confirmed");
     pair.server.on_handshake_confirmed(cx).expect("confirmed");
 
     pair.client
-        .on_packet_sent(cx, PacketNumberSpace::ApplicationData, 1000, true, true, t0 + 300)
+        .on_packet_sent(
+            cx,
+            PacketNumberSpace::ApplicationData,
+            1000,
+            true,
+            true,
+            t0 + 300,
+        )
         .expect("send AppData pn 0");
     assert_eq!(
         pair.client.transport().bytes_in_flight(),
@@ -787,15 +859,33 @@ fn recovery_from_sustained_loss() {
 
     // --- Phase 1: Normal operation (slow start growth) ---
     for pn in 0u64..5 {
-        t.on_packet_sent(sent(PacketNumberSpace::ApplicationData, pn, 1200, 10_000 + pn * 100));
+        t.on_packet_sent(sent(
+            PacketNumberSpace::ApplicationData,
+            pn,
+            1200,
+            10_000 + pn * 100,
+        ));
     }
-    let _ = t.on_ack_received(PacketNumberSpace::ApplicationData, &[0, 1, 2, 3, 4], 0, 30_000);
+    let _ = t.on_ack_received(
+        PacketNumberSpace::ApplicationData,
+        &[0, 1, 2, 3, 4],
+        0,
+        30_000,
+    );
     let cwnd_after_growth = t.congestion_window_bytes();
-    assert!(cwnd_after_growth > initial_cwnd, "Phase 1: cwnd should grow");
+    assert!(
+        cwnd_after_growth > initial_cwnd,
+        "Phase 1: cwnd should grow"
+    );
 
     // --- Phase 2: Loss event (cwnd reduced) ---
     for pn in 10u64..17 {
-        t.on_packet_sent(sent(PacketNumberSpace::ApplicationData, pn, 1200, 40_000 + pn * 100));
+        t.on_packet_sent(sent(
+            PacketNumberSpace::ApplicationData,
+            pn,
+            1200,
+            40_000 + pn * 100,
+        ));
     }
     let loss_event = t.on_ack_received(PacketNumberSpace::ApplicationData, &[16], 0, 60_000);
     assert!(loss_event.lost_packets > 0, "Phase 2: should detect loss");
@@ -808,12 +898,7 @@ fn recovery_from_sustained_loss() {
     assert_eq!(cwnd_after_loss, ssthresh);
 
     // Clean up remaining unacked packets from phase 2.
-    let _ = t.on_ack_received(
-        PacketNumberSpace::ApplicationData,
-        &[13, 14, 15],
-        0,
-        61_000,
-    );
+    let _ = t.on_ack_received(PacketNumberSpace::ApplicationData, &[13, 14, 15], 0, 61_000);
 
     // --- Phase 3: Recovery (congestion avoidance, additive increase) ---
     let cwnd_before_recovery = t.congestion_window_bytes();
@@ -890,11 +975,7 @@ fn pto_counter_resets_on_ack() {
     }
     let backed_off_deadline = t.pto_deadline_micros(now).expect("backed off");
     let backed_off_timeout = backed_off_deadline - now;
-    assert_eq!(
-        backed_off_timeout,
-        base_timeout * 32,
-        "2^5 = 32x backoff"
-    );
+    assert_eq!(backed_off_timeout, base_timeout * 32, "2^5 = 32x backoff");
 
     // Now ACK pn 1 -- this should reset pto_count to 0.
     // Note: this ACK also updates the RTT estimator, which may change the
@@ -953,7 +1034,14 @@ fn non_in_flight_packets_excluded_from_tracking() {
 
     // pn 1: NOT in-flight (e.g., ACK-only frame).
     transport
-        .on_packet_sent(cx, PacketNumberSpace::ApplicationData, 50, true, false, t0 + 100)
+        .on_packet_sent(
+            cx,
+            PacketNumberSpace::ApplicationData,
+            50,
+            true,
+            false,
+            t0 + 100,
+        )
         .expect("send pn 1 not-in-flight");
     assert_eq!(
         transport.transport().bytes_in_flight(),
@@ -974,7 +1062,11 @@ fn non_in_flight_packets_excluded_from_tracking() {
             )
             .expect(&format!("send pn {i}"));
     }
-    assert_eq!(transport.transport().bytes_in_flight(), 4800, "4 in-flight packets x 1200");
+    assert_eq!(
+        transport.transport().bytes_in_flight(),
+        4800,
+        "4 in-flight packets x 1200"
+    );
 
     // ACK pn 1 (non-in-flight): should NOT change bytes_in_flight.
     pair.clock.advance(20_000);
@@ -988,7 +1080,10 @@ fn non_in_flight_packets_excluded_from_tracking() {
         )
         .expect("ack pn 1");
     assert_eq!(ack_nofly.acked_packets, 1);
-    assert_eq!(ack_nofly.acked_bytes, 0, "non-in-flight ack has 0 acked_bytes");
+    assert_eq!(
+        ack_nofly.acked_bytes, 0,
+        "non-in-flight ack has 0 acked_bytes"
+    );
     assert_eq!(transport.transport().bytes_in_flight(), 4800);
 
     // ACK pn 4 (in-flight, triggers loss of pn 0 via packet threshold: 0+3=3 <= 4).

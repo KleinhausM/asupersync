@@ -1329,26 +1329,38 @@ mod tests {
 
     #[test]
     fn nats_error_display_all_variants() {
-        assert!(NatsError::Io(io::Error::other("e"))
-            .to_string()
-            .contains("I/O error"));
-        assert!(NatsError::Protocol("p".into())
-            .to_string()
-            .contains("protocol error"));
-        assert!(NatsError::Server("s".into())
-            .to_string()
-            .contains("server error"));
-        assert!(NatsError::InvalidUrl("bad://".into())
-            .to_string()
-            .contains("bad://"));
+        assert!(
+            NatsError::Io(io::Error::other("e"))
+                .to_string()
+                .contains("I/O error")
+        );
+        assert!(
+            NatsError::Protocol("p".into())
+                .to_string()
+                .contains("protocol error")
+        );
+        assert!(
+            NatsError::Server("s".into())
+                .to_string()
+                .contains("server error")
+        );
+        assert!(
+            NatsError::InvalidUrl("bad://".into())
+                .to_string()
+                .contains("bad://")
+        );
         assert!(NatsError::Cancelled.to_string().contains("cancelled"));
         assert!(NatsError::Closed.to_string().contains("closed"));
-        assert!(NatsError::SubscriptionNotFound(42)
-            .to_string()
-            .contains("42"));
-        assert!(NatsError::NotConnected
-            .to_string()
-            .contains("not connected"));
+        assert!(
+            NatsError::SubscriptionNotFound(42)
+                .to_string()
+                .contains("42")
+        );
+        assert!(
+            NatsError::NotConnected
+                .to_string()
+                .contains("not connected")
+        );
     }
 
     #[test]

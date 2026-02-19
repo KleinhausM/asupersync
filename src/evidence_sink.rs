@@ -496,9 +496,15 @@ mod tests {
         let entry = &sink.entries()[0];
         let map = &entry.expected_loss_by_action;
 
-        assert!(map.contains_key("meet_deadlines"), "missing meet_deadlines key");
+        assert!(
+            map.contains_key("meet_deadlines"),
+            "missing meet_deadlines key"
+        );
         assert!(map.contains_key("drain_cancel"), "missing drain_cancel key");
-        assert!(map.contains_key("process_ready"), "missing process_ready key");
+        assert!(
+            map.contains_key("process_ready"),
+            "missing process_ready key"
+        );
 
         let meet = map["meet_deadlines"];
         let drain = map["drain_cancel"];

@@ -643,7 +643,9 @@ mod tests {
 
     #[test]
     fn acceptor_clone() {
-        let acceptor = WebSocketAcceptor::new().protocol("chat").max_frame_size(4096);
+        let acceptor = WebSocketAcceptor::new()
+            .protocol("chat")
+            .max_frame_size(4096);
         let cloned = acceptor;
         assert_eq!(cloned.config.max_frame_size, 4096);
         assert_eq!(cloned.config.protocols.len(), 1);

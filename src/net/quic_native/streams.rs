@@ -1265,7 +1265,9 @@ mod tests {
         let id = StreamId::local(StreamRole::Client, StreamDirection::Bidirectional, 0);
         tbl.accept_remote_stream(id).expect("accept");
         let s = tbl.stream_mut(id).expect("stream");
-        let err = s.receive_segment(u64::MAX, 1, false).expect_err("must overflow");
+        let err = s
+            .receive_segment(u64::MAX, 1, false)
+            .expect_err("must overflow");
         assert_eq!(
             err,
             QuicStreamError::OffsetOverflow {
@@ -1291,10 +1293,13 @@ mod tests {
         let mut tbl =
             StreamTable::new_with_connection_limits(StreamRole::Client, 2, 0, 100, 100, 10, 10);
         // Increase send limit
-        tbl.increase_connection_send_limit(20).expect("increase send");
+        tbl.increase_connection_send_limit(20)
+            .expect("increase send");
         assert_eq!(tbl.connection_send_remaining(), 20);
         // Regression must fail
-        let err = tbl.increase_connection_send_limit(15).expect_err("regression");
+        let err = tbl
+            .increase_connection_send_limit(15)
+            .expect_err("regression");
         assert_eq!(
             err,
             FlowControlError::LimitRegression {
@@ -1303,13 +1308,17 @@ mod tests {
             }
         );
         // Same value is fine
-        tbl.increase_connection_send_limit(20).expect("same value ok");
+        tbl.increase_connection_send_limit(20)
+            .expect("same value ok");
 
         // Increase recv limit
-        tbl.increase_connection_recv_limit(30).expect("increase recv");
+        tbl.increase_connection_recv_limit(30)
+            .expect("increase recv");
         assert_eq!(tbl.connection_recv_remaining(), 30);
         // Regression must fail
-        let err = tbl.increase_connection_recv_limit(5).expect_err("regression");
+        let err = tbl
+            .increase_connection_recv_limit(5)
+            .expect_err("regression");
         assert_eq!(
             err,
             FlowControlError::LimitRegression {
@@ -1412,13 +1421,15 @@ mod tests {
         tbl.accept_remote_stream(id).expect("accept");
 
         // Receive 10 bytes first
-        tbl.receive_stream_segment(id, 0, 10, false).expect("recv data");
+        tbl.receive_stream_segment(id, 0, 10, false)
+            .expect("recv data");
         let s = tbl.stream(id).expect("stream");
         assert_eq!(s.recv_offset, 10);
         assert_eq!(s.final_size, None);
 
         // FIN with zero-length segment at offset=10
-        tbl.receive_stream_segment(id, 10, 0, true).expect("fin zero len");
+        tbl.receive_stream_segment(id, 10, 0, true)
+            .expect("fin zero len");
         let s = tbl.stream(id).expect("stream");
         assert_eq!(s.final_size, Some(10));
         // recv_offset should not regress
@@ -1494,7 +1505,8 @@ mod tests {
 
         // Server can still accept client-initiated bidi streams (no limit on remote accept)
         let remote_bidi = StreamId::local(StreamRole::Client, StreamDirection::Bidirectional, 0);
-        tbl.accept_remote_stream(remote_bidi).expect("accept client bidi");
+        tbl.accept_remote_stream(remote_bidi)
+            .expect("accept client bidi");
         assert!(!remote_bidi.is_local_for(StreamRole::Server));
         assert_eq!(tbl.len(), 4); // 2 local bidi + 1 local uni + 1 remote bidi
     }
@@ -1520,7 +1532,10 @@ mod tests {
         let copied = d;
         let cloned = d.clone();
         assert_eq!(copied, cloned);
-        assert_ne!(StreamDirection::Bidirectional, StreamDirection::Unidirectional);
+        assert_ne!(
+            StreamDirection::Bidirectional,
+            StreamDirection::Unidirectional
+        );
         assert!(format!("{d:?}").contains("Bidirectional"));
     }
 

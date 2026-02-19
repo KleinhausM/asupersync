@@ -659,7 +659,10 @@ mod tests {
     #[test]
     fn tla_obligation_state_display_all_variants() {
         assert_eq!(format!("{}", TlaObligationState::Reserved), "\"Reserved\"");
-        assert_eq!(format!("{}", TlaObligationState::Committed), "\"Committed\"");
+        assert_eq!(
+            format!("{}", TlaObligationState::Committed),
+            "\"Committed\""
+        );
         assert_eq!(format!("{}", TlaObligationState::Aborted), "\"Aborted\"");
         assert_eq!(format!("{}", TlaObligationState::Leaked), "\"Leaked\"");
     }

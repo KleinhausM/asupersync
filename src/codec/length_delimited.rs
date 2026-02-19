@@ -354,9 +354,7 @@ mod tests {
 
     #[test]
     fn builder_little_endian_decode() {
-        let mut codec = LengthDelimitedCodec::builder()
-            .little_endian()
-            .new_codec();
+        let mut codec = LengthDelimitedCodec::builder().little_endian().new_codec();
 
         let mut buf = BytesMut::new();
         // Little-endian length 3: [3, 0, 0, 0]

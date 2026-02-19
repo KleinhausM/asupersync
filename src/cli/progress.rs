@@ -667,8 +667,8 @@ mod tests {
     fn progress_reporter_with_writer_and_operation() {
         init_test("progress_reporter_with_writer_and_operation");
         let cursor = Cursor::new(Vec::new());
-        let mut reporter = ProgressReporter::with_writer(OutputFormat::Json, cursor)
-            .operation("test_op");
+        let mut reporter =
+            ProgressReporter::with_writer(OutputFormat::Json, cursor).operation("test_op");
         reporter.start("starting").unwrap();
         reporter.update(1, 10, "step 1").unwrap();
         reporter.complete("finished").unwrap();
@@ -723,8 +723,7 @@ mod tests {
     #[test]
     fn progress_reporter_with_color() {
         init_test("progress_reporter_with_color");
-        let reporter = ProgressReporter::new(OutputFormat::Human)
-            .with_color(ColorChoice::Never);
+        let reporter = ProgressReporter::new(OutputFormat::Human).with_color(ColorChoice::Never);
         let dbg = format!("{:?}", reporter.elapsed());
         assert!(!dbg.is_empty());
         crate::test_complete!("progress_reporter_with_color");

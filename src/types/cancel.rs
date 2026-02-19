@@ -2239,7 +2239,10 @@ mod tests {
         assert_eq!(CancelKind::FailFast.as_str(), "FailFast");
         assert_eq!(CancelKind::RaceLost.as_str(), "RaceLost");
         assert_eq!(CancelKind::ParentCancelled.as_str(), "ParentCancelled");
-        assert_eq!(CancelKind::ResourceUnavailable.as_str(), "ResourceUnavailable");
+        assert_eq!(
+            CancelKind::ResourceUnavailable.as_str(),
+            "ResourceUnavailable"
+        );
         assert_eq!(CancelKind::Shutdown.as_str(), "Shutdown");
         assert_eq!(CancelKind::LinkedExit.as_str(), "LinkedExit");
     }
@@ -2253,8 +2256,14 @@ mod tests {
         assert_eq!(format!("{}", CancelKind::CostBudget), "cost budget");
         assert_eq!(format!("{}", CancelKind::FailFast), "fail-fast");
         assert_eq!(format!("{}", CancelKind::RaceLost), "race lost");
-        assert_eq!(format!("{}", CancelKind::ParentCancelled), "parent cancelled");
-        assert_eq!(format!("{}", CancelKind::ResourceUnavailable), "resource unavailable");
+        assert_eq!(
+            format!("{}", CancelKind::ParentCancelled),
+            "parent cancelled"
+        );
+        assert_eq!(
+            format!("{}", CancelKind::ResourceUnavailable),
+            "resource unavailable"
+        );
         assert_eq!(format!("{}", CancelKind::Shutdown), "shutdown");
         assert_eq!(format!("{}", CancelKind::LinkedExit), "linked exit");
     }

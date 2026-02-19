@@ -504,8 +504,7 @@ mod tests {
 
     #[test]
     fn config_with_leak_threshold() {
-        let cfg = ObligationTrackerConfig::default()
-            .with_leak_threshold(Duration::from_mins(2));
+        let cfg = ObligationTrackerConfig::default().with_leak_threshold(Duration::from_mins(2));
         assert_eq!(cfg.leak_age_threshold, Duration::from_mins(2));
         assert!(!cfg.periodic_checks);
     }
@@ -528,7 +527,10 @@ mod tests {
 
     #[test]
     fn obligation_state_info_ne() {
-        assert_ne!(ObligationStateInfo::Reserved, ObligationStateInfo::Committed);
+        assert_ne!(
+            ObligationStateInfo::Reserved,
+            ObligationStateInfo::Committed
+        );
         assert_ne!(ObligationStateInfo::Aborted, ObligationStateInfo::Leaked);
     }
 

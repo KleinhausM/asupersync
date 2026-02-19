@@ -1264,9 +1264,7 @@ mod tests {
         };
         assert!(format!("{e3:?}").contains("EmptyChildren"));
 
-        let e4 = PlanError::Cycle {
-            at: PlanId::new(3),
-        };
+        let e4 = PlanError::Cycle { at: PlanId::new(3) };
         assert!(format!("{e4:?}").contains("Cycle"));
     }
 
@@ -1339,9 +1337,7 @@ mod tests {
     #[test]
     fn enode_leaf_debug_eq_hash() {
         use std::collections::HashSet;
-        let n1 = ENode::Leaf {
-            label: "x".into(),
-        };
+        let n1 = ENode::Leaf { label: "x".into() };
         let n2 = n1.clone();
         assert_eq!(n1, n2);
         assert!(format!("{n1:?}").contains("Leaf"));

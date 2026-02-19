@@ -1264,10 +1264,17 @@ mod tests {
         // Hash - all 11 variants distinct
         let mut set = HashSet::new();
         for v in [
-            Verdict::Restart, Verdict::Stop, Verdict::Escalate,
-            Verdict::Accept, Verdict::Reject, Verdict::Release,
-            Verdict::Abort, Verdict::Propagate, Verdict::Suppress,
-            Verdict::Deliver, Verdict::Drop,
+            Verdict::Restart,
+            Verdict::Stop,
+            Verdict::Escalate,
+            Verdict::Accept,
+            Verdict::Reject,
+            Verdict::Release,
+            Verdict::Abort,
+            Verdict::Propagate,
+            Verdict::Suppress,
+            Verdict::Deliver,
+            Verdict::Drop,
         ] {
             set.insert(v);
         }

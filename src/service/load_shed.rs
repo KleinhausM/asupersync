@@ -547,13 +547,11 @@ mod tests {
 
     #[test]
     fn load_shed_error_debug_both_variants() {
-        let overloaded: LoadShedError<String> =
-            LoadShedError::Overloaded(Overloaded::new());
+        let overloaded: LoadShedError<String> = LoadShedError::Overloaded(Overloaded::new());
         let dbg = format!("{overloaded:?}");
         assert!(dbg.contains("Overloaded"));
 
-        let inner: LoadShedError<String> =
-            LoadShedError::Inner("fail".to_string());
+        let inner: LoadShedError<String> = LoadShedError::Inner("fail".to_string());
         let dbg = format!("{inner:?}");
         assert!(dbg.contains("Inner"));
     }
@@ -561,8 +559,7 @@ mod tests {
     #[test]
     fn load_shed_error_source() {
         use std::io;
-        let overloaded: LoadShedError<io::Error> =
-            LoadShedError::Overloaded(Overloaded::new());
+        let overloaded: LoadShedError<io::Error> = LoadShedError::Overloaded(Overloaded::new());
         let err: &dyn std::error::Error = &overloaded;
         assert!(err.source().is_some()); // Overloaded implements Error
 
@@ -574,7 +571,9 @@ mod tests {
 
     #[test]
     fn load_shed_future_debug() {
-        let fut = LoadShedFuture::<std::future::Ready<Result<(), std::convert::Infallible>>>::overloaded();
+        let fut =
+            LoadShedFuture::<std::future::Ready<Result<(), std::convert::Infallible>>>::overloaded(
+            );
         let dbg = format!("{fut:?}");
         assert!(dbg.contains("LoadShedFuture"));
     }
