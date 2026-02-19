@@ -576,4 +576,17 @@ mod tests {
         });
         crate::test_complete!("unix_vfs_symlink_metadata");
     }
+
+    // --- wave 80 trait coverage ---
+
+    #[test]
+    fn unix_vfs_debug_clone_copy_default() {
+        let v = UnixVfs::default();
+        let v2 = v; // Copy
+        let v3 = v.clone();
+        let _ = v2;
+        let _ = v3;
+        let dbg = format!("{v:?}");
+        assert!(dbg.contains("UnixVfs"));
+    }
 }

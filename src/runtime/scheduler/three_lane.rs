@@ -5249,4 +5249,21 @@ mod tests {
         let ack = cx_inner.read().cancel_acknowledged;
         assert!(!ack, "cancel_acknowledged should be cleared");
     }
+
+    // --- wave 80 trait coverage ---
+
+    #[test]
+    fn preemption_metrics_debug_clone_default() {
+        let m = PreemptionMetrics::default();
+        assert_eq!(m.cancel_dispatches, 0);
+        assert_eq!(m.timed_dispatches, 0);
+        assert_eq!(m.ready_dispatches, 0);
+        assert_eq!(m.fairness_yields, 0);
+        assert_eq!(m.max_cancel_streak, 0);
+        assert_eq!(m.fallback_cancel_dispatches, 0);
+        let m2 = m.clone();
+        assert_eq!(m2.cancel_dispatches, 0);
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("PreemptionMetrics"));
+    }
 }

@@ -1356,4 +1356,18 @@ mod tests {
     }
 
     // Deterministic RNG for scheduling fuzz in tests: no ambient time.
+
+    // --- wave 80 trait coverage ---
+
+    #[test]
+    fn parker_debug_clone() {
+        let p = Parker::new();
+        let p2 = p.clone();
+        let dbg = format!("{p:?}");
+        assert!(dbg.contains("Parker"));
+        // Clone shares the Arc, so unparking p2 affects the same inner state
+        p2.unpark();
+        let dbg2 = format!("{p2:?}");
+        assert!(dbg2.contains("Parker"));
+    }
 }

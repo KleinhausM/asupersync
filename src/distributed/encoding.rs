@@ -663,4 +663,29 @@ mod tests {
         let reconstructed = rebuild_source_bytes(&encoded);
         assert_eq!(reconstructed, bytes);
     }
+
+    // --- wave 80 trait coverage ---
+
+    #[test]
+    fn encoding_config_debug_clone_default() {
+        let c = EncodingConfig::default();
+        assert_eq!(c.symbol_size, 1280);
+        assert_eq!(c.min_repair_symbols, 4);
+        assert_eq!(c.max_source_blocks, 1);
+        let c2 = c.clone();
+        assert_eq!(c2.symbol_size, c.symbol_size);
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("EncodingConfig"));
+    }
+
+    #[test]
+    fn encoding_error_debug_clone_eq() {
+        let e = EncodingError::EmptyData;
+        let e2 = e.clone();
+        assert_eq!(e, e2);
+        assert_ne!(e, EncodingError::NoSourceSymbols);
+        assert_ne!(e, EncodingError::Pipeline("x".into()));
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("EmptyData"));
+    }
 }
