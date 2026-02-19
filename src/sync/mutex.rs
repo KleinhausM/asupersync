@@ -1118,4 +1118,36 @@ mod tests {
         );
         crate::test_complete!("owned_mutex_try_lock_returns_poisoned");
     }
+
+    // =========================================================================
+    // Pure data-type tests (wave 41 – CyanBarn)
+    // =========================================================================
+
+    #[test]
+    fn lock_error_debug_clone_copy_eq_display() {
+        let poisoned = LockError::Poisoned;
+        let cancelled = LockError::Cancelled;
+        let copied = poisoned;
+        let cloned = poisoned.clone();
+        assert_eq!(copied, cloned);
+        assert_eq!(copied, LockError::Poisoned);
+        assert_ne!(poisoned, cancelled);
+        assert!(format!("{poisoned:?}").contains("Poisoned"));
+        assert!(format!("{cancelled:?}").contains("Cancelled"));
+        assert!(poisoned.to_string().contains("poisoned"));
+        assert!(cancelled.to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn try_lock_error_debug_clone_copy_eq_display() {
+        let locked = TryLockError::Locked;
+        let poisoned = TryLockError::Poisoned;
+        let copied = locked;
+        let cloned = locked.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(locked, poisoned);
+        assert!(format!("{locked:?}").contains("Locked"));
+        assert!(locked.to_string().contains("locked"));
+        assert!(poisoned.to_string().contains("poisoned"));
+    }
 }

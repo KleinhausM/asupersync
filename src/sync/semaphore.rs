@@ -1454,4 +1454,23 @@ mod tests {
 
         crate::test_complete!("semaphore_cancel_then_drop_does_not_leak");
     }
+
+    // =========================================================================
+    // Pure data-type tests (wave 41 – CyanBarn)
+    // =========================================================================
+
+    #[test]
+    fn acquire_error_debug_clone_copy_eq_display() {
+        let closed = AcquireError::Closed;
+        let cancelled = AcquireError::Cancelled;
+        let copied = closed;
+        let cloned = closed.clone();
+        assert_eq!(copied, cloned);
+        assert_eq!(copied, AcquireError::Closed);
+        assert_ne!(closed, cancelled);
+        assert!(format!("{closed:?}").contains("Closed"));
+        assert!(format!("{cancelled:?}").contains("Cancelled"));
+        assert!(closed.to_string().contains("closed"));
+        assert!(cancelled.to_string().contains("cancelled"));
+    }
 }

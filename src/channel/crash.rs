@@ -808,4 +808,54 @@ mod tests {
         ctrl.restart();
         assert!(block_on(tx.send(&cx, 4)).is_err());
     }
+
+    // =========================================================================
+    // Pure data-type tests (wave 41 – CyanBarn)
+    // =========================================================================
+
+    #[test]
+    fn restart_mode_debug_clone_copy_eq() {
+        let cold = RestartMode::Cold;
+        let warm = RestartMode::Warm;
+        let copied = cold;
+        let cloned = cold.clone();
+        assert_eq!(copied, cloned);
+        assert_eq!(copied, RestartMode::Cold);
+        assert_ne!(cold, warm);
+        assert!(format!("{cold:?}").contains("Cold"));
+        assert!(format!("{warm:?}").contains("Warm"));
+    }
+
+    #[test]
+    fn crash_stats_snapshot_debug_clone_eq_display() {
+        let snap = CrashStatsSnapshot {
+            sends_attempted: 10,
+            sends_succeeded: 8,
+            sends_rejected: 2,
+            crashes: 1,
+            restarts: 1,
+        };
+        let cloned = snap.clone();
+        assert_eq!(cloned, snap);
+        let dbg = format!("{snap:?}");
+        assert!(dbg.contains("CrashStatsSnapshot"));
+        let display = format!("{snap}");
+        assert!(display.contains("attempted: 10"));
+        assert!(display.contains("crashes: 1"));
+    }
+
+    #[test]
+    fn crash_config_debug_clone() {
+        let config = CrashConfig::new(42)
+            .with_crash_probability(0.5)
+            .with_crash_after_sends(10)
+            .with_max_restarts(3)
+            .with_restart_mode(RestartMode::Warm);
+        let cloned = config.clone();
+        assert_eq!(cloned.seed, 42);
+        assert_eq!(cloned.restart_mode, RestartMode::Warm);
+        assert_eq!(cloned.max_restarts, Some(3));
+        let dbg = format!("{config:?}");
+        assert!(dbg.contains("CrashConfig"));
+    }
 }
