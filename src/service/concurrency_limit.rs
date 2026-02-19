@@ -636,6 +636,93 @@ mod tests {
         crate::test_complete!("inner_error_after_reserved_permit_releases_state");
     }
 
+    // =========================================================================
+    // Wave 30: Data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn concurrency_limit_layer_debug_clone() {
+        let layer = ConcurrencyLimitLayer::new(5);
+        let dbg = format!("{layer:?}");
+        assert!(dbg.contains("ConcurrencyLimitLayer"));
+        let cloned = layer.clone();
+        assert_eq!(cloned.max_concurrency(), 5);
+    }
+
+    #[test]
+    fn concurrency_limit_layer_with_semaphore() {
+        let sem = Arc::new(Semaphore::new(7));
+        let layer = ConcurrencyLimitLayer::with_semaphore(sem);
+        assert_eq!(layer.max_concurrency(), 7);
+        assert_eq!(layer.available(), 7);
+    }
+
+    #[test]
+    fn concurrency_limit_service_debug() {
+        let sem = Arc::new(Semaphore::new(5));
+        let svc = ConcurrencyLimit::new(42_i32, sem);
+        let dbg = format!("{svc:?}");
+        assert!(dbg.contains("ConcurrencyLimit"));
+    }
+
+    #[test]
+    fn concurrency_limit_service_clone() {
+        let sem = Arc::new(Semaphore::new(5));
+        let svc = ConcurrencyLimit::new(42_i32, sem);
+        let cloned = svc.clone();
+        assert_eq!(cloned.max_concurrency(), 5);
+        assert_eq!(cloned.available(), 5);
+    }
+
+    #[test]
+    fn concurrency_limit_into_inner() {
+        let sem = Arc::new(Semaphore::new(5));
+        let mut svc = ConcurrencyLimit::new(42_i32, sem);
+        assert_eq!(*svc.inner(), 42);
+        *svc.inner_mut() = 99;
+        assert_eq!(svc.into_inner(), 99);
+    }
+
+    #[test]
+    fn concurrency_limit_error_debug() {
+        let err: ConcurrencyLimitError<&str> = ConcurrencyLimitError::LimitExceeded;
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("LimitExceeded"));
+
+        let err: ConcurrencyLimitError<&str> = ConcurrencyLimitError::Inner("fail");
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("Inner"));
+        assert!(dbg.contains("fail"));
+    }
+
+    #[test]
+    fn concurrency_limit_error_source() {
+        use std::error::Error;
+        let err: ConcurrencyLimitError<std::io::Error> = ConcurrencyLimitError::LimitExceeded;
+        assert!(err.source().is_none());
+
+        let inner = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let err = ConcurrencyLimitError::Inner(inner);
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn state_debug_idle() {
+        let state = State::Idle;
+        let dbg = format!("{state:?}");
+        assert_eq!(dbg, "Idle");
+    }
+
+    #[test]
+    fn concurrency_limit_future_debug() {
+        let sem = Arc::new(Semaphore::new(1));
+        let permit = OwnedSemaphorePermit::try_acquire_arc(&sem, 1).unwrap();
+        let future =
+            ConcurrencyLimitFuture::new(ready(Ok::<i32, std::convert::Infallible>(42)), permit);
+        let dbg = format!("{future:?}");
+        assert!(dbg.contains("ConcurrencyLimitFuture"));
+    }
+
     #[test]
     fn error_display() {
         init_test("error_display");

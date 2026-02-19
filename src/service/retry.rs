@@ -621,6 +621,82 @@ mod tests {
         crate::test_complete!("retry_succeeds_after_failures");
     }
 
+    // =========================================================================
+    // Wave 30: Data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn retry_layer_debug() {
+        let layer = RetryLayer::new(LimitedRetry::<i32>::new(3));
+        let dbg = format!("{layer:?}");
+        assert!(dbg.contains("RetryLayer"));
+    }
+
+    #[test]
+    fn retry_layer_clone() {
+        let layer = RetryLayer::new(LimitedRetry::<i32>::new(3));
+        let cloned = layer.clone();
+        assert_eq!(cloned.policy().max_retries(), 3);
+    }
+
+    #[test]
+    fn retry_layer_policy_accessor() {
+        let layer = RetryLayer::new(LimitedRetry::<i32>::new(5));
+        assert_eq!(layer.policy().max_retries(), 5);
+        assert_eq!(layer.policy().current_attempt(), 0);
+    }
+
+    #[test]
+    fn retry_service_debug_clone() {
+        let svc = Retry::new(42_i32, LimitedRetry::<i32>::new(3));
+        let dbg = format!("{svc:?}");
+        assert!(dbg.contains("Retry"));
+        let cloned = svc.clone();
+        assert_eq!(*cloned.inner(), 42);
+    }
+
+    #[test]
+    fn retry_service_accessors() {
+        let mut svc = Retry::new(42_i32, LimitedRetry::<i32>::new(3));
+        assert_eq!(*svc.inner(), 42);
+        assert_eq!(svc.policy().max_retries(), 3);
+        *svc.inner_mut() = 99;
+        assert_eq!(*svc.inner(), 99);
+        let inner = svc.into_inner();
+        assert_eq!(inner, 99);
+    }
+
+    #[test]
+    fn limited_retry_debug_clone_copy() {
+        let policy = LimitedRetry::<i32>::new(5);
+        let dbg = format!("{policy:?}");
+        assert!(dbg.contains("LimitedRetry"));
+        assert!(dbg.contains("5"));
+        let cloned = policy.clone();
+        let copied = policy; // Copy
+        assert_eq!(cloned.max_retries(), copied.max_retries());
+    }
+
+    #[test]
+    fn no_retry_debug_clone_copy_default() {
+        let policy = NoRetry::new();
+        let dbg = format!("{policy:?}");
+        assert!(dbg.contains("NoRetry"));
+        let _cloned = policy.clone();
+        let _copied = policy; // Copy
+        let default = NoRetry::default();
+        let _ = format!("{default:?}");
+    }
+
+    #[test]
+    fn retry_future_debug() {
+        let (svc, _) = FailingService::new(0);
+        let policy = LimitedRetry::<i32>::new(1);
+        let future = RetryFuture::new(svc, policy, 42);
+        let dbg = format!("{future:?}");
+        assert!(dbg.contains("RetryFuture"));
+    }
+
     #[test]
     fn retry_exhausts_and_returns_error() {
         init_test("retry_exhausts_and_returns_error");
