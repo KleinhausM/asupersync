@@ -476,4 +476,106 @@ mod tests {
         crate::assert_with_log!(has_inner, "inner error", true, has_inner);
         crate::test_complete!("load_shed_error_display");
     }
+
+    // =========================================================================
+    // Wave 28: Data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn load_shed_layer_debug_clone_copy_default() {
+        let layer = LoadShedLayer::new();
+        let dbg = format!("{layer:?}");
+        assert!(dbg.contains("LoadShedLayer"));
+
+        let cloned = layer.clone();
+        let _ = format!("{cloned:?}");
+
+        let copied = layer; // Copy
+        let _ = format!("{copied:?}");
+
+        let default = LoadShedLayer::default();
+        let _ = format!("{default:?}");
+    }
+
+    #[test]
+    fn load_shed_debug() {
+        let svc = LoadShed::new(42_i32);
+        let dbg = format!("{svc:?}");
+        assert!(dbg.contains("LoadShed"));
+        assert!(dbg.contains("overloaded"));
+    }
+
+    #[test]
+    fn load_shed_into_inner() {
+        let svc = LoadShed::new(42_i32);
+        let inner = svc.into_inner();
+        assert_eq!(inner, 42);
+    }
+
+    #[test]
+    fn load_shed_inner_accessor() {
+        let svc = LoadShed::new(99_i32);
+        assert_eq!(*svc.inner(), 99);
+    }
+
+    #[test]
+    fn overloaded_debug_clone_copy() {
+        let err = Overloaded::new();
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("Overloaded"));
+
+        let cloned = err.clone();
+        assert_eq!(err, cloned);
+
+        let copied = err; // Copy
+        assert_eq!(copied, Overloaded::new());
+    }
+
+    #[test]
+    fn overloaded_default() {
+        let err = Overloaded::default();
+        assert_eq!(err, Overloaded::new());
+    }
+
+    #[test]
+    fn overloaded_is_std_error() {
+        let err: &dyn std::error::Error = &Overloaded::new();
+        let _ = format!("{err}");
+        let _ = format!("{err:?}");
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn load_shed_error_debug_both_variants() {
+        let overloaded: LoadShedError<String> =
+            LoadShedError::Overloaded(Overloaded::new());
+        let dbg = format!("{overloaded:?}");
+        assert!(dbg.contains("Overloaded"));
+
+        let inner: LoadShedError<String> =
+            LoadShedError::Inner("fail".to_string());
+        let dbg = format!("{inner:?}");
+        assert!(dbg.contains("Inner"));
+    }
+
+    #[test]
+    fn load_shed_error_source() {
+        use std::io;
+        let overloaded: LoadShedError<io::Error> =
+            LoadShedError::Overloaded(Overloaded::new());
+        let err: &dyn std::error::Error = &overloaded;
+        assert!(err.source().is_some()); // Overloaded implements Error
+
+        let inner: LoadShedError<io::Error> =
+            LoadShedError::Inner(io::Error::new(io::ErrorKind::Other, "test"));
+        let err: &dyn std::error::Error = &inner;
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn load_shed_future_debug() {
+        let fut = LoadShedFuture::<std::future::Ready<Result<(), std::convert::Infallible>>>::overloaded();
+        let dbg = format!("{fut:?}");
+        assert!(dbg.contains("LoadShedFuture"));
+    }
 }

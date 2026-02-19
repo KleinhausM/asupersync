@@ -571,4 +571,135 @@ mod tests {
         crate::assert_with_log!(ok, "auth ok", true, ok);
         crate::test_complete!("test_auth_interceptor");
     }
+
+    // =========================================================================
+    // Wave 28: Data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn server_config_debug() {
+        let config = ServerConfig::default();
+        let dbg = format!("{config:?}");
+        assert!(dbg.contains("ServerConfig"));
+        assert!(dbg.contains("max_recv_message_size"));
+        assert!(dbg.contains("max_concurrent_streams"));
+    }
+
+    #[test]
+    fn server_config_clone() {
+        let config = ServerConfig {
+            max_recv_message_size: 1024,
+            max_send_message_size: 2048,
+            ..Default::default()
+        };
+        let config2 = config.clone();
+        assert_eq!(config2.max_recv_message_size, 1024);
+        assert_eq!(config2.max_send_message_size, 2048);
+    }
+
+    #[test]
+    fn server_config_default_values() {
+        let config = ServerConfig::default();
+        assert_eq!(config.max_recv_message_size, 4 * 1024 * 1024);
+        assert_eq!(config.max_send_message_size, 4 * 1024 * 1024);
+        assert_eq!(config.initial_connection_window_size, 1024 * 1024);
+        assert_eq!(config.initial_stream_window_size, 1024 * 1024);
+        assert_eq!(config.max_concurrent_streams, 100);
+        assert!(config.keepalive_interval_ms.is_none());
+        assert!(config.keepalive_timeout_ms.is_none());
+    }
+
+    #[test]
+    fn server_builder_debug() {
+        let builder = ServerBuilder::new();
+        let dbg = format!("{builder:?}");
+        assert!(dbg.contains("ServerBuilder"));
+        assert!(dbg.contains("config"));
+    }
+
+    #[test]
+    fn server_builder_default() {
+        let builder = ServerBuilder::default();
+        let dbg = format!("{builder:?}");
+        assert!(dbg.contains("ServerBuilder"));
+    }
+
+    #[test]
+    fn server_debug() {
+        let server = Server::builder().build();
+        let dbg = format!("{server:?}");
+        assert!(dbg.contains("Server"));
+        assert!(dbg.contains("config"));
+    }
+
+    #[test]
+    fn call_context_debug() {
+        let ctx = CallContext::new();
+        let dbg = format!("{ctx:?}");
+        assert!(dbg.contains("CallContext"));
+        assert!(dbg.contains("metadata"));
+    }
+
+    #[test]
+    fn call_context_default() {
+        let ctx = CallContext::default();
+        assert!(ctx.deadline().is_none());
+        assert!(ctx.peer_addr().is_none());
+        assert!(ctx.metadata().is_empty());
+    }
+
+    #[test]
+    fn noop_interceptor_debug_clone_copy_default() {
+        let interceptor = NoopInterceptor;
+        let dbg = format!("{interceptor:?}");
+        assert!(dbg.contains("NoopInterceptor"));
+
+        let cloned = interceptor.clone();
+        let _ = format!("{cloned:?}");
+
+        let copied = interceptor; // Copy
+        let _ = format!("{copied:?}");
+
+        let default = NoopInterceptor::default();
+        let _ = format!("{default:?}");
+    }
+
+    #[test]
+    fn ok_utility_returns_ok_response() {
+        let result: Result<Response<i32>, Status> = ok(42);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().into_inner(), 42);
+    }
+
+    #[test]
+    fn err_utility_returns_err_status() {
+        let result: Result<Response<i32>, Status> = err(Status::not_found("missing"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn server_builder_keepalive() {
+        let server = Server::builder()
+            .keepalive_interval(5000)
+            .keepalive_timeout(2000)
+            .build();
+        assert_eq!(server.config().keepalive_interval_ms, Some(5000));
+        assert_eq!(server.config().keepalive_timeout_ms, Some(2000));
+    }
+
+    #[test]
+    fn server_builder_window_sizes() {
+        let server = Server::builder()
+            .initial_connection_window_size(512 * 1024)
+            .initial_stream_window_size(256 * 1024)
+            .build();
+        assert_eq!(server.config().initial_connection_window_size, 512 * 1024);
+        assert_eq!(server.config().initial_stream_window_size, 256 * 1024);
+    }
+
+    #[test]
+    fn server_get_service_missing() {
+        let server = Server::builder().build();
+        assert!(server.get_service("nonexistent").is_none());
+    }
 }
