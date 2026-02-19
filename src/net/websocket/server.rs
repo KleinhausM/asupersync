@@ -631,4 +631,81 @@ mod tests {
         assert!(matches!(ws_err, WsAcceptError::Io(_)));
         assert!(ws_err.to_string().contains("I/O error"));
     }
+
+    // Pure data-type tests (wave 15 – CyanBarn)
+
+    #[test]
+    fn acceptor_debug() {
+        let acceptor = WebSocketAcceptor::new();
+        let dbg = format!("{acceptor:?}");
+        assert!(dbg.contains("WebSocketAcceptor"));
+    }
+
+    #[test]
+    fn acceptor_clone() {
+        let acceptor = WebSocketAcceptor::new().protocol("chat").max_frame_size(4096);
+        let cloned = acceptor.clone();
+        assert_eq!(cloned.config.max_frame_size, 4096);
+        assert_eq!(cloned.config.protocols.len(), 1);
+    }
+
+    #[test]
+    fn acceptor_close_timeout_default() {
+        let acceptor = WebSocketAcceptor::default();
+        // Default close timeout should be reasonable (non-zero).
+        assert!(acceptor.config.close_config.close_timeout > Duration::ZERO);
+    }
+
+    #[test]
+    fn acceptor_builder_chain_all() {
+        let acceptor = WebSocketAcceptor::new()
+            .protocol("mqtt")
+            .extension("permessage-deflate")
+            .max_frame_size(512)
+            .max_message_size(2048)
+            .ping_interval(Some(Duration::from_secs(15)))
+            .close_timeout(Duration::from_secs(5));
+
+        assert_eq!(acceptor.config.max_frame_size, 512);
+        assert_eq!(acceptor.config.max_message_size, 2048);
+        assert_eq!(acceptor.config.ping_interval, Some(Duration::from_secs(15)));
+        assert_eq!(
+            acceptor.config.close_config.close_timeout,
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn acceptor_ping_interval_none() {
+        let acceptor = WebSocketAcceptor::new().ping_interval(None);
+        assert_eq!(acceptor.config.ping_interval, None);
+    }
+
+    #[test]
+    fn ws_accept_error_display_invalid_request() {
+        let err = WsAcceptError::InvalidRequest("missing Upgrade header".into());
+        let s = err.to_string();
+        assert!(s.contains("invalid request"));
+        assert!(s.contains("missing Upgrade header"));
+    }
+
+    #[test]
+    fn ws_accept_error_display_cancelled() {
+        let err = WsAcceptError::Cancelled;
+        assert_eq!(err.to_string(), "accept cancelled");
+    }
+
+    #[test]
+    fn ws_accept_error_debug() {
+        let err = WsAcceptError::Cancelled;
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("Cancelled"));
+    }
+
+    #[test]
+    fn ws_accept_error_from_ws_error() {
+        let ws_err = WsError::ProtocolViolation("bad frame".into());
+        let accept_err = WsAcceptError::from(ws_err);
+        assert!(matches!(accept_err, WsAcceptError::Protocol(_)));
+    }
 }

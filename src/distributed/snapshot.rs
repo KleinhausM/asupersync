@@ -739,4 +739,176 @@ mod tests {
         }
         assert_eq!(TaskState::from_u8(255), None);
     }
+
+    // Pure data-type tests (wave 15 – CyanBarn)
+
+    #[test]
+    fn task_state_debug() {
+        let dbg = format!("{:?}", TaskState::Pending);
+        assert!(dbg.contains("Pending"));
+    }
+
+    #[test]
+    fn task_state_clone_copy() {
+        let state = TaskState::Running;
+        let cloned = state.clone();
+        let copied = state;
+        assert_eq!(cloned, copied);
+    }
+
+    #[test]
+    fn task_state_eq() {
+        assert_eq!(TaskState::Completed, TaskState::Completed);
+        assert_ne!(TaskState::Pending, TaskState::Cancelled);
+    }
+
+    #[test]
+    fn task_state_as_u8_all() {
+        assert_eq!(TaskState::Pending.as_u8(), 0);
+        assert_eq!(TaskState::Running.as_u8(), 1);
+        assert_eq!(TaskState::Completed.as_u8(), 2);
+        assert_eq!(TaskState::Cancelled.as_u8(), 3);
+        assert_eq!(TaskState::Panicked.as_u8(), 4);
+    }
+
+    #[test]
+    fn task_state_from_u8_invalid_range() {
+        for v in 5..=10 {
+            assert_eq!(TaskState::from_u8(v), None);
+        }
+    }
+
+    #[test]
+    fn task_snapshot_debug() {
+        let snap = TaskSnapshot {
+            task_id: TaskId::new_for_test(1, 0),
+            state: TaskState::Pending,
+            priority: 5,
+        };
+        let dbg = format!("{snap:?}");
+        assert!(dbg.contains("TaskSnapshot"));
+    }
+
+    #[test]
+    fn task_snapshot_clone() {
+        let snap = TaskSnapshot {
+            task_id: TaskId::new_for_test(2, 0),
+            state: TaskState::Running,
+            priority: 10,
+        };
+        let cloned = snap.clone();
+        assert_eq!(cloned.state, TaskState::Running);
+        assert_eq!(cloned.priority, 10);
+    }
+
+    #[test]
+    fn budget_snapshot_debug() {
+        let budget = BudgetSnapshot {
+            deadline_nanos: Some(1_000_000),
+            polls_remaining: Some(100),
+            cost_remaining: None,
+        };
+        let dbg = format!("{budget:?}");
+        assert!(dbg.contains("BudgetSnapshot"));
+    }
+
+    #[test]
+    fn budget_snapshot_clone() {
+        let budget = BudgetSnapshot {
+            deadline_nanos: None,
+            polls_remaining: None,
+            cost_remaining: Some(500),
+        };
+        let cloned = budget.clone();
+        assert_eq!(cloned.cost_remaining, Some(500));
+        assert!(cloned.deadline_nanos.is_none());
+    }
+
+    #[test]
+    fn budget_snapshot_all_none() {
+        let budget = BudgetSnapshot {
+            deadline_nanos: None,
+            polls_remaining: None,
+            cost_remaining: None,
+        };
+        assert!(budget.deadline_nanos.is_none());
+        assert!(budget.polls_remaining.is_none());
+        assert!(budget.cost_remaining.is_none());
+    }
+
+    #[test]
+    fn region_snapshot_debug() {
+        let snap = RegionSnapshot::empty(RegionId::new_for_test(1, 0));
+        let dbg = format!("{snap:?}");
+        assert!(dbg.contains("RegionSnapshot"));
+    }
+
+    #[test]
+    fn region_snapshot_clone() {
+        let snap = RegionSnapshot::empty(RegionId::new_for_test(3, 0));
+        let cloned = snap.clone();
+        assert_eq!(cloned.region_id, snap.region_id);
+        assert_eq!(cloned.sequence, 0);
+    }
+
+    #[test]
+    fn region_snapshot_empty_fields() {
+        let snap = RegionSnapshot::empty(RegionId::new_for_test(7, 0));
+        assert_eq!(snap.state, RegionState::Open);
+        assert_eq!(snap.timestamp, Time::ZERO);
+        assert!(snap.tasks.is_empty());
+        assert!(snap.children.is_empty());
+        assert_eq!(snap.finalizer_count, 0);
+        assert!(snap.cancel_reason.is_none());
+        assert!(snap.parent.is_none());
+        assert!(snap.metadata.is_empty());
+    }
+
+    #[test]
+    fn snapshot_error_debug() {
+        let err = SnapshotError::InvalidMagic;
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("InvalidMagic"));
+    }
+
+    #[test]
+    fn snapshot_error_clone_eq() {
+        let err = SnapshotError::UnsupportedVersion(42);
+        let cloned = err.clone();
+        assert_eq!(err, cloned);
+    }
+
+    #[test]
+    fn snapshot_error_display_all() {
+        let err = SnapshotError::InvalidMagic;
+        assert!(err.to_string().contains("invalid snapshot magic"));
+
+        let err = SnapshotError::UnsupportedVersion(99);
+        assert!(err.to_string().contains("99"));
+
+        let err = SnapshotError::InvalidState(0xFF);
+        assert!(err.to_string().contains("invalid state byte"));
+
+        let err = SnapshotError::UnexpectedEof;
+        assert!(err.to_string().contains("unexpected end"));
+
+        let err = SnapshotError::InvalidString;
+        assert!(err.to_string().contains("invalid UTF-8"));
+    }
+
+    #[test]
+    fn snapshot_error_eq_ne() {
+        assert_eq!(SnapshotError::InvalidMagic, SnapshotError::InvalidMagic);
+        assert_ne!(SnapshotError::InvalidMagic, SnapshotError::UnexpectedEof);
+        assert_ne!(
+            SnapshotError::UnsupportedVersion(1),
+            SnapshotError::UnsupportedVersion(2)
+        );
+    }
+
+    #[test]
+    fn snapshot_error_trait() {
+        let err: &dyn std::error::Error = &SnapshotError::InvalidMagic;
+        assert!(err.source().is_none());
+    }
 }

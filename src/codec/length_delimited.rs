@@ -294,4 +294,130 @@ mod tests {
         let err = codec.decode(&mut buf).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
+
+    // Pure data-type tests (wave 15 – CyanBarn)
+
+    #[test]
+    fn codec_debug() {
+        let codec = LengthDelimitedCodec::new();
+        let dbg = format!("{codec:?}");
+        assert!(dbg.contains("LengthDelimitedCodec"));
+    }
+
+    #[test]
+    fn codec_clone() {
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(1024)
+            .new_codec();
+        let cloned = codec.clone();
+        let dbg = format!("{cloned:?}");
+        assert!(dbg.contains("LengthDelimitedCodec"));
+    }
+
+    #[test]
+    fn codec_default() {
+        let codec = LengthDelimitedCodec::default();
+        // Default max frame is 8MB.
+        let dbg = format!("{codec:?}");
+        assert!(dbg.contains("8388608"));
+    }
+
+    #[test]
+    fn builder_debug() {
+        let builder = LengthDelimitedCodec::builder();
+        let dbg = format!("{builder:?}");
+        assert!(dbg.contains("LengthDelimitedCodecBuilder"));
+    }
+
+    #[test]
+    fn builder_clone() {
+        let builder = LengthDelimitedCodec::builder().max_frame_length(512);
+        let cloned = builder.clone();
+        let dbg = format!("{cloned:?}");
+        assert!(dbg.contains("512"));
+    }
+
+    #[test]
+    fn builder_all_setters() {
+        let codec = LengthDelimitedCodec::builder()
+            .length_field_offset(2)
+            .length_field_length(2)
+            .length_adjustment(-2)
+            .num_skip(4)
+            .max_frame_length(4096)
+            .big_endian()
+            .new_codec();
+
+        let dbg = format!("{codec:?}");
+        assert!(dbg.contains("4096"));
+    }
+
+    #[test]
+    fn builder_little_endian_decode() {
+        let mut codec = LengthDelimitedCodec::builder()
+            .little_endian()
+            .new_codec();
+
+        let mut buf = BytesMut::new();
+        // Little-endian length 3: [3, 0, 0, 0]
+        buf.put_u8(3);
+        buf.put_u8(0);
+        buf.put_u8(0);
+        buf.put_u8(0);
+        buf.put_slice(b"abc");
+
+        let frame = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(&frame[..], b"abc");
+    }
+
+    #[test]
+    fn builder_length_field_length_2() {
+        let mut codec = LengthDelimitedCodec::builder()
+            .length_field_length(2)
+            .num_skip(2)
+            .new_codec();
+
+        let mut buf = BytesMut::new();
+        // Big-endian 2-byte length: 4
+        buf.put_u8(0);
+        buf.put_u8(4);
+        buf.put_slice(b"data");
+
+        let frame = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(&frame[..], b"data");
+    }
+
+    #[test]
+    fn builder_length_field_offset() {
+        let mut codec = LengthDelimitedCodec::builder()
+            .length_field_offset(2)
+            .num_skip(6)
+            .new_codec();
+
+        let mut buf = BytesMut::new();
+        // 2 prefix bytes, then 4-byte big-endian length 3
+        buf.put_u8(0xAA);
+        buf.put_u8(0xBB);
+        buf.put_u8(0);
+        buf.put_u8(0);
+        buf.put_u8(0);
+        buf.put_u8(3);
+        buf.put_slice(b"xyz");
+
+        let frame = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(&frame[..], b"xyz");
+    }
+
+    #[test]
+    fn decode_empty_frame() {
+        let mut codec = LengthDelimitedCodec::new();
+        let mut buf = BytesMut::new();
+        buf.put_u8(0);
+        buf.put_u8(0);
+        buf.put_u8(0);
+        buf.put_u8(0);
+
+        let frame = codec.decode(&mut buf).unwrap().unwrap();
+        assert!(frame.is_empty());
+    }
 }

@@ -244,6 +244,7 @@ mod tests {
     }
 
     /// Duplex transport backed by separate read and write buffers.
+    #[derive(Debug)]
     struct DuplexBuf {
         read_data: Vec<u8>,
         read_pos: usize,
@@ -372,5 +373,81 @@ mod tests {
         let parts = framed.into_parts();
         assert!(parts.read_buf.is_empty());
         assert!(parts.write_buf.is_empty());
+    }
+
+    // Pure data-type tests (wave 15 – CyanBarn)
+
+    #[test]
+    fn framed_debug() {
+        let transport = DuplexBuf::new(b"");
+        let framed = Framed::new(transport, LinesCodec::new());
+        let dbg = format!("{framed:?}");
+        assert!(dbg.contains("Framed"));
+        assert!(dbg.contains("read_buf_len"));
+        assert!(dbg.contains("write_buf_len"));
+    }
+
+    #[test]
+    fn framed_with_capacity() {
+        let transport = DuplexBuf::new(b"");
+        let framed = Framed::with_capacity(transport, LinesCodec::new(), 256);
+        // Buffers should have been allocated with the specified capacity.
+        assert!(framed.read_buffer().is_empty());
+        assert!(framed.write_buffer().is_empty());
+    }
+
+    #[test]
+    fn framed_into_inner() {
+        let transport = DuplexBuf::new(b"test-data");
+        let framed = Framed::new(transport, LinesCodec::new());
+        let inner = framed.into_inner();
+        assert_eq!(&inner.read_data, b"test-data");
+        assert_eq!(inner.read_pos, 0);
+    }
+
+    #[test]
+    fn framed_parts_fields() {
+        let transport = DuplexBuf::new(b"parts-test\n");
+        let mut framed = Framed::new(transport, LinesCodec::new());
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // Read to populate the read buffer then extract parts.
+        let _ = Pin::new(&mut framed).poll_next(&mut cx);
+        let parts = framed.into_parts();
+        // The inner transport and codec should be accessible.
+        let _inner = parts.inner;
+        let _codec = parts.codec;
+    }
+
+    #[test]
+    fn framed_get_mut_modifies_transport() {
+        let transport = DuplexBuf::new(b"");
+        let mut framed = Framed::new(transport, LinesCodec::new());
+        framed.get_mut().read_data = b"modified\n".to_vec();
+
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let poll = Pin::new(&mut framed).poll_next(&mut cx);
+        assert!(matches!(poll, Poll::Ready(Some(Ok(ref s))) if s == "modified"));
+    }
+
+    #[test]
+    fn framed_codec_mut_accessible() {
+        let transport = DuplexBuf::new(b"");
+        let mut framed = Framed::new(transport, LinesCodec::new());
+        // Just verify codec_mut returns a mutable reference.
+        let _codec = framed.codec_mut();
+    }
+
+    #[test]
+    fn framed_empty_read_returns_none() {
+        let transport = DuplexBuf::new(b"");
+        let mut framed = Framed::new(transport, LinesCodec::new());
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let poll = Pin::new(&mut framed).poll_next(&mut cx);
+        assert!(matches!(poll, Poll::Ready(None)));
     }
 }
