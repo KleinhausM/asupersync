@@ -1145,3 +1145,136 @@ jobs:
         run: cargo doc --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+  quic-h3-unit:
+    name: QUIC/H3 Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-quic-h3-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run quic_core unit tests
+        run: cargo test -p asupersync quic_core --all-features -- --nocapture
+
+      - name: Run quic_native unit tests
+        run: cargo test -p asupersync quic_native --all-features -- --nocapture
+
+      - name: Run h3_native unit tests
+        run: cargo test -p asupersync h3_native --all-features -- --nocapture
+
+      - name: Run forensic_log unit tests
+        run: cargo test -p asupersync forensic_log --all-features -- --nocapture
+
+  quic-h3-e2e:
+    name: QUIC/H3 E2E Suite
+    runs-on: ubuntu-latest
+    needs: [quic-h3-unit]
+    strategy:
+      fail-fast: false
+      matrix:
+        test_crate:
+          - quic_h3_e2e
+          - quic_h3_e2e_loss
+          - quic_h3_e2e_h3
+          - quic_h3_e2e_cancel
+          - quic_h3_e2e_violations
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-quic-h3-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run ${{ matrix.test_crate }}
+        run: cargo test --test ${{ matrix.test_crate }} --all-features -- --nocapture
+
+      - name: Persist forensic artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quic-h3-forensic-${{ matrix.test_crate }}
+          path: |
+            artifacts/quic_h3_*
+            target/quic_h3_forensic/
+          retention-days: 30
+
+  quic-h3-no-mock:
+    name: QUIC/H3 No-Mock Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify no mock/fake/stub in QUIC/H3 modules
+        run: |
+          python3 scripts/check_no_mock_policy.py \
+            --policy .github/no_mock_policy.json
+
+      - name: Verify replay catalog integrity
+        run: |
+          python3 scripts/quic_h3_triage.py --self-test
+
+  quic-h3-coverage:
+    name: QUIC/H3 Coverage Ratchet
+    runs-on: ubuntu-latest
+    needs: [quic-h3-unit, quic-h3-e2e]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run QUIC/H3 coverage
+        run: |
+          cargo llvm-cov test -p asupersync --all-features \
+            --summary-only 2>&1 | tee ci-summaries/quic_h3_coverage.txt
+
+      - name: Check coverage ratchet (90% floor)
+        run: |
+          mkdir -p ci-summaries
+          python3 -c "
+          import json, sys
+          policy = json.load(open('.github/coverage_policy.json'))
+          qh3 = [s for s in policy['subsystems'] if s['id'] == 'quic_h3_native']
+          if qh3:
+              print(f'QUIC/H3 coverage floor: {qh3[0][\"min_line_pct\"]}%')
+          else:
+              print('WARNING: quic_h3_native subsystem not found in coverage policy')
+              sys.exit(1)
+          "
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quic-h3-coverage-report
+          path: ci-summaries/
+          retention-days: 30
