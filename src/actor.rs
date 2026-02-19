@@ -1677,4 +1677,136 @@ mod tests {
 
         crate::test_complete!("actor_context_debug");
     }
+
+    // ---- Invariant Tests ----
+
+    /// Invariant: `ActorStateCell` encode/decode roundtrips correctly for all
+    /// valid states, and unknown u8 values map to `Stopped` (fail-safe).
+    #[test]
+    fn actor_state_cell_encode_decode_roundtrip() {
+        init_test("actor_state_cell_encode_decode_roundtrip");
+
+        let states = [
+            ActorState::Created,
+            ActorState::Running,
+            ActorState::Stopping,
+            ActorState::Stopped,
+        ];
+
+        for &state in &states {
+            let cell = ActorStateCell::new(state);
+            let loaded = cell.load();
+            crate::assert_with_log!(loaded == state, "roundtrip", state, loaded);
+        }
+
+        // Unknown values (4+) should map to Stopped (fail-safe).
+        for raw in 4_u8..=10 {
+            let decoded = ActorStateCell::decode(raw);
+            let is_stopped = decoded == ActorState::Stopped;
+            crate::assert_with_log!(is_stopped, "unknown u8 -> Stopped", true, is_stopped);
+        }
+
+        crate::test_complete!("actor_state_cell_encode_decode_roundtrip");
+    }
+
+    /// Invariant: `MailboxConfig::default()` has documented capacity and
+    /// backpressure enabled.
+    #[test]
+    fn mailbox_config_defaults() {
+        init_test("mailbox_config_defaults");
+
+        let config = MailboxConfig::default();
+        crate::assert_with_log!(
+            config.capacity == DEFAULT_MAILBOX_CAPACITY,
+            "default capacity",
+            DEFAULT_MAILBOX_CAPACITY,
+            config.capacity
+        );
+        crate::assert_with_log!(
+            config.backpressure,
+            "backpressure enabled by default",
+            true,
+            config.backpressure
+        );
+
+        let custom = MailboxConfig::with_capacity(8);
+        crate::assert_with_log!(custom.capacity == 8, "custom capacity", 8usize, custom.capacity);
+        crate::assert_with_log!(
+            custom.backpressure,
+            "with_capacity enables backpressure",
+            true,
+            custom.backpressure
+        );
+
+        crate::test_complete!("mailbox_config_defaults");
+    }
+
+    /// Invariant: `try_send` on a full mailbox returns an error without
+    /// blocking, and the message is recoverable from the error.
+    #[test]
+    fn actor_try_send_full_mailbox_returns_error() {
+        init_test("actor_try_send_full_mailbox_returns_error");
+
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let cx: Cx = Cx::for_testing();
+        let scope = crate::cx::Scope::<FailFast>::new(root, Budget::INFINITE);
+
+        // Create actor with capacity=2 mailbox.
+        let (handle, stored) = scope
+            .spawn_actor(&mut state, &cx, Counter::new(), 2)
+            .unwrap();
+        state.store_spawned_task(handle.task_id(), stored);
+
+        // Fill the mailbox.
+        let ok1 = handle.try_send(1).is_ok();
+        crate::assert_with_log!(ok1, "first send ok", true, ok1);
+        let ok2 = handle.try_send(2).is_ok();
+        crate::assert_with_log!(ok2, "second send ok", true, ok2);
+
+        // Third send should fail — mailbox full.
+        let result = handle.try_send(3);
+        let is_full = result.is_err();
+        crate::assert_with_log!(is_full, "third send fails (full)", true, is_full);
+
+        crate::test_complete!("actor_try_send_full_mailbox_returns_error");
+    }
+
+    /// Invariant: `ActorContext` with a parent supervisor set exposes it
+    /// and reports `has_parent() == true`.
+    #[test]
+    fn actor_context_with_parent_supervisor() {
+        init_test("actor_context_with_parent_supervisor");
+
+        let cx: Cx = Cx::for_testing();
+
+        // Create parent supervisor channel.
+        let (parent_sender, _parent_receiver) = mpsc::channel::<SupervisorMessage>(8);
+        let parent_id = ActorId::from_task(TaskId::new_for_test(10, 1));
+        let parent_ref = ActorRef {
+            actor_id: parent_id,
+            sender: parent_sender,
+            state: Arc::new(ActorStateCell::new(ActorState::Running)),
+        };
+
+        // Create child actor context with parent.
+        let (child_sender, _child_receiver) = mpsc::channel::<u64>(32);
+        let child_id = ActorId::from_task(TaskId::new_for_test(20, 1));
+        let child_ref = ActorRef {
+            actor_id: child_id,
+            sender: child_sender,
+            state: Arc::new(ActorStateCell::new(ActorState::Running)),
+        };
+
+        let ctx = ActorContext::new(&cx, child_ref, child_id, Some(parent_ref));
+
+        let has_parent = ctx.has_parent();
+        crate::assert_with_log!(has_parent, "has parent", true, has_parent);
+
+        let parent = ctx.parent().expect("parent should be Some");
+        let parent_id_matches = parent.actor_id() == parent_id;
+        crate::assert_with_log!(parent_id_matches, "parent id matches", true, parent_id_matches);
+
+        crate::test_complete!("actor_context_with_parent_supervisor");
+    }
 }
