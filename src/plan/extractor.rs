@@ -597,4 +597,92 @@ mod tests {
             Err(ExtractionVerifyError::HashMismatch { .. })
         ));
     }
+
+    // Pure data-type tests (wave 37 – CyanBarn)
+
+    #[test]
+    fn plan_cost_debug_copy_default() {
+        let cost = PlanCost::default();
+        assert_eq!(cost.allocations, 0);
+        assert_eq!(cost.cancel_checkpoints, 0);
+        assert_eq!(cost.obligation_pressure, 0);
+        assert_eq!(cost.critical_path, 0);
+
+        let dbg = format!("{cost:?}");
+        assert!(dbg.contains("PlanCost"));
+
+        // Copy
+        let cost2 = cost;
+        assert_eq!(cost, cost2);
+
+        // Clone
+        let cost3 = cost.clone();
+        assert_eq!(cost, cost3);
+    }
+
+    #[test]
+    fn plan_cost_constants() {
+        assert_eq!(PlanCost::ZERO.total(), 0);
+        assert_eq!(PlanCost::ZERO.allocations, 0);
+
+        assert_eq!(PlanCost::LEAF.allocations, 1);
+        assert_eq!(PlanCost::LEAF.critical_path, 1);
+        assert_eq!(PlanCost::LEAF.cancel_checkpoints, 0);
+
+        // UNKNOWN is sentinel
+        assert_eq!(PlanCost::UNKNOWN.allocations, u64::MAX);
+        assert_eq!(PlanCost::UNKNOWN.critical_path, u64::MAX);
+    }
+
+    #[test]
+    fn plan_cost_add_sequential() {
+        let a = PlanCost { allocations: 2, cancel_checkpoints: 1, obligation_pressure: 0, critical_path: 3 };
+        let b = PlanCost { allocations: 3, cancel_checkpoints: 0, obligation_pressure: 1, critical_path: 5 };
+
+        // add: critical_path = max
+        let sum = a.add(b);
+        assert_eq!(sum.allocations, 5);
+        assert_eq!(sum.cancel_checkpoints, 1);
+        assert_eq!(sum.obligation_pressure, 1);
+        assert_eq!(sum.critical_path, 5); // max(3,5)
+
+        // sequential: critical_path = sum
+        let seq = a.sequential(b);
+        assert_eq!(seq.allocations, 5);
+        assert_eq!(seq.critical_path, 8); // 3+5
+    }
+
+    #[test]
+    fn extraction_certificate_debug_clone() {
+        let mut eg = EGraph::new();
+        let a = eg.add_leaf("x");
+        let mut ext = Extractor::new(&mut eg);
+        let (_dag, cert) = ext.extract(a);
+
+        let dbg = format!("{cert:?}");
+        assert!(dbg.contains("ExtractionCertificate"));
+
+        let cloned = cert.clone();
+        assert_eq!(cloned.node_count, cert.node_count);
+        assert_eq!(cloned.cost, cert.cost);
+    }
+
+    #[test]
+    fn extraction_verify_error_debug_clone_eq() {
+        let e1 = ExtractionVerifyError::VersionMismatch { expected: 1, found: 2 };
+        let e2 = ExtractionVerifyError::HashMismatch { expected: 10, actual: 20 };
+        let e3 = ExtractionVerifyError::NodeCountMismatch { expected: 5, actual: 3 };
+
+        let dbg1 = format!("{e1:?}");
+        assert!(dbg1.contains("VersionMismatch"));
+        let dbg2 = format!("{e2:?}");
+        assert!(dbg2.contains("HashMismatch"));
+        let dbg3 = format!("{e3:?}");
+        assert!(dbg3.contains("NodeCountMismatch"));
+
+        // Clone + PartialEq
+        let e1c = e1.clone();
+        assert_eq!(e1, e1c);
+        assert_ne!(e1, e2);
+    }
 }

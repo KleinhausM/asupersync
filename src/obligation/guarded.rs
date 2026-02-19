@@ -722,6 +722,79 @@ mod tests {
         assert_eq!(cost_remaining, 500);
     }
 
+    // Pure data-type tests (wave 37 – CyanBarn)
+
+    #[test]
+    fn time_indexed_invariant_debug_copy_hash() {
+        use std::collections::HashSet;
+        let all = [
+            TimeIndexedInvariant::ActorSequentialProcessing,
+            TimeIndexedInvariant::ActorCleanFinalization,
+            TimeIndexedInvariant::LeaseTimeMonotonicity,
+            TimeIndexedInvariant::LeaseRenewalFromNow,
+            TimeIndexedInvariant::LeaseTerminalIrreversibility,
+            TimeIndexedInvariant::RegionPhaseMonotonicity,
+            TimeIndexedInvariant::BudgetMonotonicConsumption,
+            TimeIndexedInvariant::DeadlineTreeMonotonicity,
+            TimeIndexedInvariant::SupervisedRestartGuarded,
+        ];
+
+        let mut set = HashSet::new();
+        for inv in &all {
+            let dbg = format!("{inv:?}");
+            assert!(!dbg.is_empty());
+            // Copy
+            let inv2 = *inv;
+            assert_eq!(*inv, inv2);
+            set.insert(*inv);
+        }
+        assert_eq!(set.len(), 9);
+    }
+
+    #[test]
+    fn preservation_constraint_debug_clone() {
+        let constraint = PreservationConstraint {
+            invariant: TimeIndexedInvariant::LeaseTimeMonotonicity,
+            constraint: "test constraint",
+            rationale: "test rationale",
+        };
+        let dbg = format!("{constraint:?}");
+        assert!(dbg.contains("PreservationConstraint"));
+        assert!(dbg.contains("LeaseTimeMonotonicity"));
+
+        let cloned = constraint.clone();
+        assert_eq!(cloned.invariant, TimeIndexedInvariant::LeaseTimeMonotonicity);
+        assert_eq!(cloned.constraint, "test constraint");
+    }
+
+    #[test]
+    fn lease_model_debug_clone() {
+        let lease = LeaseModel::new(t(100), dur(500));
+        let dbg = format!("{lease:?}");
+        assert!(dbg.contains("LeaseModel"));
+
+        let cloned = lease.clone();
+        assert_eq!(cloned.created_at, t(100));
+        assert_eq!(cloned.expires_at, t(600));
+        assert_eq!(cloned.renewal_count, 0);
+        assert!(!cloned.released);
+    }
+
+    #[test]
+    fn actor_step_model_debug_clone_default() {
+        let actor = ActorStepModel::default();
+        assert_eq!(actor.step, 0);
+        assert!(!actor.mailbox_closed);
+        assert!(!actor.finalized);
+
+        let dbg = format!("{actor:?}");
+        assert!(dbg.contains("ActorStepModel"));
+
+        let cloned = actor.clone();
+        assert_eq!(cloned.step, 0);
+        assert!(!cloned.is_terminal());
+    }
+
     /// Deadline approaches monotonically as time advances.
     #[test]
     fn deadline_approaches_monotonically() {
