@@ -645,7 +645,7 @@ mod tests {
         let layer = ConcurrencyLimitLayer::new(5);
         let dbg = format!("{layer:?}");
         assert!(dbg.contains("ConcurrencyLimitLayer"));
-        let cloned = layer.clone();
+        let cloned = layer;
         assert_eq!(cloned.max_concurrency(), 5);
     }
 
@@ -669,7 +669,7 @@ mod tests {
     fn concurrency_limit_service_clone() {
         let sem = Arc::new(Semaphore::new(5));
         let svc = ConcurrencyLimit::new(42_i32, sem);
-        let cloned = svc.clone();
+        let cloned = svc;
         assert_eq!(cloned.max_concurrency(), 5);
         assert_eq!(cloned.available(), 5);
     }
@@ -701,7 +701,7 @@ mod tests {
         let err: ConcurrencyLimitError<std::io::Error> = ConcurrencyLimitError::LimitExceeded;
         assert!(err.source().is_none());
 
-        let inner = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let inner = std::io::Error::other("test");
         let err = ConcurrencyLimitError::Inner(inner);
         assert!(err.source().is_some());
     }

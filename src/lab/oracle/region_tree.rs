@@ -975,13 +975,13 @@ mod tests {
         let v = RegionTreeViolation::NoRoot;
         let dbg = format!("{v:?}");
         assert!(dbg.contains("NoRoot"), "{dbg}");
-        let cloned = v.clone();
+        let cloned = v;
         assert!(format!("{cloned:?}").contains("NoRoot"));
 
         let v2 = RegionTreeViolation::MultipleRoots {
             roots: vec![region(0), region(1)],
         };
-        let cloned2 = v2.clone();
+        let cloned2 = v2;
         assert!(format!("{cloned2:?}").contains("MultipleRoots"));
     }
 

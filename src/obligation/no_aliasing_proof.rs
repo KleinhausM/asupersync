@@ -1996,7 +1996,7 @@ mod tests {
     fn lemma_debug_clone_copy_eq() {
         let a = Lemma::AllocationFreshness;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, Lemma::DropSafety);
@@ -2008,7 +2008,7 @@ mod tests {
     fn violation_kind_debug_clone_copy_eq() {
         let a = ViolationKind::DoubleOwnership;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, ViolationKind::SelfTransfer);

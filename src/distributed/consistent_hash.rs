@@ -300,7 +300,7 @@ mod tests {
         let ring = build_ring(2, 4);
         let dbg = format!("{ring:?}");
         assert!(dbg.contains("HashRing"), "{dbg}");
-        let cloned = ring.clone();
+        let cloned = ring;
         assert_eq!(cloned.node_count(), 2);
         assert_eq!(cloned.vnode_count(), 8);
     }

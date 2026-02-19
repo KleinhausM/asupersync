@@ -1446,7 +1446,7 @@ mod tests {
         let dbg = format!("{cfg:?}");
         assert!(dbg.contains("PipelineConfig"), "{dbg}");
         let copied = cfg;
-        let cloned = cfg.clone();
+        let cloned = cfg;
         assert_eq!(copied, cloned);
     }
 
@@ -1456,7 +1456,7 @@ mod tests {
         let dbg = format!("{fs:?}");
         assert!(dbg.contains("FailedStage"), "{dbg}");
         let copied = fs;
-        let cloned = fs.clone();
+        let cloned = fs;
         assert_eq!(copied, cloned);
         assert_ne!(fs, FailedStage::new(3, 5));
     }

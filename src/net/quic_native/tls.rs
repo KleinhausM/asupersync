@@ -468,7 +468,7 @@ mod tests {
     fn crypto_level_debug_clone_copy_eq() {
         let l = CryptoLevel::Initial;
         let copied = l;
-        let cloned = l.clone();
+        let cloned = l;
         assert_eq!(copied, cloned);
         assert_ne!(CryptoLevel::Initial, CryptoLevel::OneRtt);
         let dbg = format!("{l:?}");
@@ -490,7 +490,7 @@ mod tests {
         assert!(format!("{e2:?}").contains("LocalUpdateScheduled"));
         assert!(format!("{e3:?}").contains("RemoteUpdateAccepted"));
         let copied = e2;
-        let cloned = e2.clone();
+        let cloned = e2;
         assert_eq!(copied, cloned);
         assert_ne!(e1, e2);
     }

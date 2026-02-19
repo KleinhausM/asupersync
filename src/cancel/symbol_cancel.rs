@@ -1701,7 +1701,7 @@ mod tests {
         let m = CancelBroadcastMetrics::default();
         let dbg = format!("{m:?}");
         assert!(dbg.contains("CancelBroadcastMetrics"), "{dbg}");
-        let cloned = m.clone();
+        let cloned = m;
         assert_eq!(cloned.initiated, 0);
     }
 
@@ -1710,7 +1710,7 @@ mod tests {
         let s = CleanupStats::default();
         let dbg = format!("{s:?}");
         assert!(dbg.contains("CleanupStats"), "{dbg}");
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(cloned.pending_objects, 0);
     }
 
@@ -1725,7 +1725,7 @@ mod tests {
         };
         let dbg = format!("{r:?}");
         assert!(dbg.contains("CleanupResult"), "{dbg}");
-        let cloned = r.clone();
+        let cloned = r;
         assert_eq!(cloned.symbols_cleaned, 5);
     }
 }

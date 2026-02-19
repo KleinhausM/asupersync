@@ -281,7 +281,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("SpanId"), "{dbg}");
         let copied = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         let display = format!("{s}");
         assert_eq!(display, "S99");
@@ -297,7 +297,7 @@ mod tests {
         let dbg = format!("{def:?}");
         assert!(dbg.contains("DiagnosticContext"), "{dbg}");
         let ctx = DiagnosticContext::new().with_custom("k", "v");
-        let cloned = ctx.clone();
+        let cloned = ctx;
         assert_eq!(cloned.custom("k"), Some("v"));
     }
 }

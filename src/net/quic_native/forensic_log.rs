@@ -1302,7 +1302,7 @@ mod tests {
         };
         let dbg = format!("{ev:?}");
         assert!(dbg.contains("PacketSent"), "{dbg}");
-        let cloned = ev.clone();
+        let cloned = ev;
         let dbg2 = format!("{cloned:?}");
         assert_eq!(dbg, dbg2);
     }
@@ -1316,7 +1316,7 @@ mod tests {
         };
         let dbg = format!("{v:?}");
         assert!(dbg.contains("inv.test"), "{dbg}");
-        let cloned = v.clone();
+        let cloned = v;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1329,7 +1329,7 @@ mod tests {
         };
         let dbg = format!("{t:?}");
         assert!(dbg.contains("42"), "{dbg}");
-        let cloned = t.clone();
+        let cloned = t;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1339,7 +1339,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("TransportSummary"), "{dbg}");
         assert_eq!(s.packets_sent, 0);
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1350,7 +1350,7 @@ mod tests {
         assert!(dbg.contains("H3Summary"), "{dbg}");
         assert_eq!(h.requests_sent, 0);
         assert!(!h.settings_exchanged);
-        let cloned = h.clone();
+        let cloned = h;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1364,7 +1364,7 @@ mod tests {
         };
         let dbg = format!("{t:?}");
         assert!(dbg.contains("idle"), "{dbg}");
-        let cloned = t.clone();
+        let cloned = t;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1378,7 +1378,7 @@ mod tests {
         };
         let dbg = format!("{f:?}");
         assert!(dbg.contains("timeout"), "{dbg}");
-        let cloned = f.clone();
+        let cloned = f;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 }

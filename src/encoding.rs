@@ -853,7 +853,7 @@ mod tests {
         };
         let dbg = format!("{plan:?}");
         assert!(dbg.contains("BlockPlan"));
-        let plan2 = plan.clone();
+        let plan2 = plan;
         assert_eq!(plan2.end(), 150);
         assert_eq!(plan2.sbn, 0);
         assert_eq!(plan2.k, 5);

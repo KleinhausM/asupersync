@@ -280,7 +280,7 @@ mod tests {
         use std::collections::HashSet;
         let a = TraceId::new(1, 2);
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, TraceId::new(3, 4));
@@ -294,7 +294,7 @@ mod tests {
         use std::collections::HashSet;
         let a = SymbolSpanId::new(42);
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, SymbolSpanId::new(99));

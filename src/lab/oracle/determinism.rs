@@ -723,7 +723,7 @@ mod tests {
         };
         let dbg = format!("{v:?}");
         assert!(dbg.contains("DeterminismViolation"));
-        let v2 = v.clone();
+        let v2 = v;
         assert_eq!(v2.divergence_index, 5);
         assert_eq!(v2.trace1_len, 10);
         assert_eq!(v2.trace2_len, 8);
@@ -810,7 +810,7 @@ mod tests {
         };
         let dbg = format!("{s:?}");
         assert!(dbg.contains("TraceEventSummary"));
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s2.seq, 42);
         assert_eq!(s2.time_nanos, 1000);
         assert_eq!(s2.data_summary, "task=Task(0)");

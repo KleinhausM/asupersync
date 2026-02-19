@@ -959,27 +959,27 @@ mod tests {
         let p = RetryPolicy::new();
         let dbg = format!("{p:?}");
         assert!(dbg.contains("RetryPolicy"), "{dbg}");
-        let cloned = p.clone();
+        let cloned = p;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
     #[test]
     fn always_retry_debug_clone_copy_default() {
-        let a = AlwaysRetry::default();
+        let a = AlwaysRetry;
         let dbg = format!("{a:?}");
         assert!(dbg.contains("AlwaysRetry"), "{dbg}");
         let copied: AlwaysRetry = a;
-        let cloned = a.clone();
+        let cloned = a;
         let _ = (copied, cloned);
     }
 
     #[test]
     fn never_retry_debug_clone_copy_default() {
-        let n = NeverRetry::default();
+        let n = NeverRetry;
         let dbg = format!("{n:?}");
         assert!(dbg.contains("NeverRetry"), "{dbg}");
         let copied: NeverRetry = n;
-        let cloned = n.clone();
+        let cloned = n;
         let _ = (copied, cloned);
     }
 
@@ -988,7 +988,7 @@ mod tests {
         let s = RetryState::new(RetryPolicy::new());
         let dbg = format!("{s:?}");
         assert!(dbg.contains("RetryState"), "{dbg}");
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 }

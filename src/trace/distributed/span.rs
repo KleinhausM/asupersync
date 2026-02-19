@@ -463,7 +463,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("InProgress"), "{dbg}");
         let copied = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
     }
 
@@ -473,7 +473,7 @@ mod tests {
         let dbg = format!("{k:?}");
         assert!(dbg.contains("Encode"), "{dbg}");
         let copied = k;
-        let cloned = k.clone();
+        let cloned = k;
         assert_eq!(copied, cloned);
     }
 
@@ -489,7 +489,7 @@ mod tests {
         let span = SymbolSpan::new_encode(ctx, ObjectId::new_for_test(99), Time::from_millis(0));
         let dbg = format!("{span:?}");
         assert!(dbg.contains("SymbolSpan"), "{dbg}");
-        let cloned = span.clone();
+        let cloned = span;
         assert_eq!(cloned.kind(), SymbolSpanKind::Encode);
     }
 }

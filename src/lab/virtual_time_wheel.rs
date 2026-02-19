@@ -622,7 +622,7 @@ mod tests {
         let (_counter, waker) = counting_waker();
         let handle = wheel.insert(100, waker);
         let b = handle; // Copy
-        let c = handle.clone();
+        let c = handle;
         assert_eq!(handle, b);
         assert_eq!(handle, c);
         let dbg = format!("{handle:?}");

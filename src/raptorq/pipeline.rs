@@ -771,7 +771,7 @@ mod tests {
         };
         let dbg = format!("{o:?}");
         assert!(dbg.contains("SendOutcome"), "{dbg}");
-        let cloned = o.clone();
+        let cloned = o;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -780,7 +780,7 @@ mod tests {
         let p = SendProgress { sent: 3, total: 10 };
         let dbg = format!("{p:?}");
         assert!(dbg.contains("SendProgress"), "{dbg}");
-        let cloned = p.clone();
+        let cloned = p;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 

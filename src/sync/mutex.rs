@@ -1128,7 +1128,7 @@ mod tests {
         let poisoned = LockError::Poisoned;
         let cancelled = LockError::Cancelled;
         let copied = poisoned;
-        let cloned = poisoned.clone();
+        let cloned = poisoned;
         assert_eq!(copied, cloned);
         assert_eq!(copied, LockError::Poisoned);
         assert_ne!(poisoned, cancelled);
@@ -1143,7 +1143,7 @@ mod tests {
         let locked = TryLockError::Locked;
         let poisoned = TryLockError::Poisoned;
         let copied = locked;
-        let cloned = locked.clone();
+        let cloned = locked;
         assert_eq!(copied, cloned);
         assert_ne!(locked, poisoned);
         assert!(format!("{locked:?}").contains("Locked"));

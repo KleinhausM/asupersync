@@ -612,7 +612,7 @@ mod tests {
         let dbg = format!("{cfg:?}");
         assert!(dbg.contains("ThresholdConfig"), "{dbg}");
         let copied = cfg;
-        let cloned = cfg.clone();
+        let cloned = cfg;
         assert!((copied.overhead_factor - cloned.overhead_factor).abs() < f64::EPSILON);
     }
 
@@ -622,7 +622,7 @@ mod tests {
         let result = set.insert(test_symbol(0, 0, 4));
         let dbg = format!("{result:?}");
         assert!(dbg.contains("Insert"), "{dbg}");
-        let cloned = result.clone();
+        let cloned = result;
         let dbg2 = format!("{cloned:?}");
         assert_eq!(dbg, dbg2);
     }

@@ -290,7 +290,7 @@ mod tests {
         let meta = Metadata::from_std(fs::metadata(&path).expect("metadata"));
         let dbg = format!("{meta:?}");
         assert!(dbg.contains("Metadata"), "{dbg}");
-        let cloned = meta.clone();
+        let cloned = meta;
         assert_eq!(cloned.len(), 4);
     }
 
@@ -302,7 +302,7 @@ mod tests {
         let ft = Metadata::from_std(fs::metadata(&path).expect("metadata")).file_type();
         let dbg = format!("{ft:?}");
         assert!(dbg.contains("FileType"), "{dbg}");
-        let cloned = ft.clone();
+        let cloned = ft;
         assert!(cloned.is_file());
     }
 

@@ -818,7 +818,7 @@ mod tests {
         let cold = RestartMode::Cold;
         let warm = RestartMode::Warm;
         let copied = cold;
-        let cloned = cold.clone();
+        let cloned = cold;
         assert_eq!(copied, cloned);
         assert_eq!(copied, RestartMode::Cold);
         assert_ne!(cold, warm);

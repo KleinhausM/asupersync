@@ -312,7 +312,7 @@ mod tests {
 
         let m = Monotonicity::Monotone;
         let m2 = m; // Copy
-        let m3 = m.clone();
+        let m3 = m;
         assert_eq!(m, m2);
         assert_eq!(m2, m3);
 

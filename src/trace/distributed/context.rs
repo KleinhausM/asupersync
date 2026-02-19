@@ -506,7 +506,7 @@ mod tests {
 
         let sampled = TraceFlags::SAMPLED;
         let copied = sampled;
-        let cloned = sampled.clone();
+        let cloned = sampled;
         assert_eq!(copied, cloned);
         assert_ne!(def, sampled);
 
@@ -530,8 +530,8 @@ mod tests {
 
         let mut set = HashSet::new();
         set.insert(t1.clone());
-        set.insert(t2.clone());
-        set.insert(t1.clone());
+        set.insert(t2);
+        set.insert(t1);
         assert_eq!(set.len(), 2);
     }
 

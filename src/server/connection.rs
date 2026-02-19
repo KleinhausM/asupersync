@@ -859,7 +859,7 @@ mod tests {
         use std::collections::HashSet;
         let id = ConnectionId(42);
         let id2 = id; // Copy
-        let id3 = id.clone();
+        let id3 = id;
         assert_eq!(id, id2);
         assert_eq!(id, id3);
         assert_ne!(id, ConnectionId(99));

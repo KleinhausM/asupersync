@@ -1545,10 +1545,10 @@ mod tests {
     #[test]
     fn conformal_config_debug_clone_default() {
         let c = ConformalConfig::default();
-        let dbg = format!("{:?}", c);
+        let dbg = format!("{c:?}");
         assert!(dbg.contains("ConformalConfig"));
 
-        let c2 = c.clone();
+        let c2 = c;
         assert!((c2.alpha - 0.05).abs() < f64::EPSILON);
         assert_eq!(c2.min_calibration_samples, 5);
     }
@@ -1559,10 +1559,10 @@ mod tests {
             value: 0.42,
             violated: false,
         };
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("ConformityScore"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s, s2);
 
         // Copy
@@ -1573,10 +1573,10 @@ mod tests {
     #[test]
     fn threshold_mode_debug_clone_copy_eq() {
         let m = ThresholdMode::Upper;
-        let dbg = format!("{:?}", m);
+        let dbg = format!("{m:?}");
         assert!(dbg.contains("Upper"));
 
-        let m2 = m.clone();
+        let m2 = m;
         assert_eq!(m, m2);
 
         let m3 = m;
@@ -1591,10 +1591,10 @@ mod tests {
             total: 10,
             covered: 9,
         };
-        let dbg = format!("{:?}", t);
+        let dbg = format!("{t:?}");
         assert!(dbg.contains("CoverageTracker"));
 
-        let t2 = t.clone();
+        let t2 = t;
         assert_eq!(t2.total, 10);
         assert_eq!(t2.covered, 9);
     }

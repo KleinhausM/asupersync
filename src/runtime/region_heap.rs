@@ -699,7 +699,7 @@ mod tests {
         let dbg = format!("{stats:?}");
         assert!(dbg.contains("HeapStats"), "{dbg}");
         let copied = stats;
-        let cloned = stats.clone();
+        let cloned = stats;
         assert_eq!(format!("{copied:?}"), format!("{cloned:?}"));
     }
 
@@ -716,7 +716,7 @@ mod tests {
 
         // Clone + Copy
         let copied = idx1;
-        let cloned = idx1.clone();
+        let cloned = idx1;
         assert_eq!(copied, cloned);
 
         // PartialEq + Eq
@@ -751,7 +751,7 @@ mod tests {
 
         // Clone + Copy
         let copied = r1;
-        let cloned = r1.clone();
+        let cloned = r1;
         assert_eq!(copied, cloned);
 
         // PartialEq + Eq

@@ -8242,7 +8242,7 @@ mod tests {
         let p = RestartPolicy::default();
         assert_eq!(p, RestartPolicy::OneForOne);
         let p2 = p; // Copy
-        let p3 = p.clone();
+        let p3 = p;
         assert_eq!(p2, p3);
         assert_ne!(p, RestartPolicy::OneForAll);
         let dbg = format!("{p:?}");

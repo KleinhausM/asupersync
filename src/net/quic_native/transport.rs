@@ -1093,9 +1093,7 @@ mod tests {
         let ssthresh_after_loss = t.ssthresh_bytes();
         assert!(
             ssthresh_after_loss < initial_cwnd,
-            "ssthresh should be reduced: {} < {}",
-            ssthresh_after_loss,
-            initial_cwnd
+            "ssthresh should be reduced: {ssthresh_after_loss} < {initial_cwnd}"
         );
         assert_eq!(t.congestion_window_bytes(), ssthresh_after_loss);
 
@@ -1120,16 +1118,13 @@ mod tests {
         // = (1200 * 100) / cwnd_before, at least 1
         assert!(
             cwnd_after > cwnd_before,
-            "cwnd should grow in congestion avoidance: {} > {}",
-            cwnd_after,
-            cwnd_before
+            "cwnd should grow in congestion avoidance: {cwnd_after} > {cwnd_before}"
         );
         let growth = cwnd_after - cwnd_before;
         // Growth should be much less than acked_bytes (100), because AIMD is additive.
         assert!(
             growth < 100,
-            "congestion avoidance growth should be less than acked_bytes: {} < 100",
-            growth
+            "congestion avoidance growth should be less than acked_bytes: {growth} < 100"
         );
     }
 
@@ -1158,8 +1153,7 @@ mod tests {
         // Both should produce the same deadline because backoff is capped at 2^10
         assert_eq!(
             deadline_at_12, deadline_at_10,
-            "PTO backoff should be capped at pto_count=10: {} == {}",
-            deadline_at_12, deadline_at_10
+            "PTO backoff should be capped at pto_count=10: {deadline_at_12} == {deadline_at_10}"
         );
 
         // Verify the backoff is indeed 2^10 = 1024 times the base timeout
@@ -1284,7 +1278,7 @@ mod tests {
         let dbg = format!("{sp:?}");
         assert!(dbg.contains("ApplicationData"), "{dbg}");
         let copied: PacketNumberSpace = sp;
-        let cloned = sp.clone();
+        let cloned = sp;
         assert_eq!(copied, cloned);
         assert_ne!(sp, PacketNumberSpace::Initial);
     }
@@ -1311,7 +1305,7 @@ mod tests {
         let dbg = format!("{r:?}");
         assert!(dbg.contains("10"), "{dbg}");
         let copied: AckRange = r;
-        let cloned = r.clone();
+        let cloned = r;
         assert_eq!(copied, cloned);
         assert_eq!(r, AckRange::new(10, 5).unwrap());
     }

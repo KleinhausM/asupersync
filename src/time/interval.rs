@@ -1136,7 +1136,7 @@ mod tests {
         let b = MissedTickBehavior::default();
         assert_eq!(b, MissedTickBehavior::Burst);
         let b2 = b; // Copy
-        let b3 = b.clone();
+        let b3 = b;
         assert_eq!(b, b2);
         assert_eq!(b, b3);
         assert_ne!(b, MissedTickBehavior::Delay);

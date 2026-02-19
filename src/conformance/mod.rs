@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn test_config_clone() {
         let cfg = TestConfig::new().with_seed(99).with_tracing(true);
-        let cfg2 = cfg.clone();
+        let cfg2 = cfg;
         assert_eq!(cfg2.rng_seed, Some(99));
         assert!(cfg2.tracing_enabled);
     }

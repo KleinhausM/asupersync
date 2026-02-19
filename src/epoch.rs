@@ -2851,7 +2851,7 @@ mod tests {
         let epoch = Epoch::new(EpochId::new(5), Time::from_secs(10), cfg);
         let dbg = format!("{epoch:?}");
         assert!(dbg.contains("Epoch"));
-        let epoch2 = epoch.clone();
+        let epoch2 = epoch;
         assert_eq!(epoch2.id, EpochId::new(5));
         assert_eq!(epoch2.state, EpochState::Active);
     }
@@ -2979,7 +2979,7 @@ mod tests {
         let ctx = EpochContext::new(EpochId::new(1), Time::ZERO, Time::from_secs(10));
         let dbg = format!("{ctx:?}");
         assert!(dbg.contains("EpochContext"));
-        let ctx2 = ctx.clone();
+        let ctx2 = ctx;
         assert_eq!(ctx2.epoch_id, EpochId::new(1));
     }
 
@@ -2988,7 +2988,7 @@ mod tests {
         let p = EpochPolicy::default();
         let dbg = format!("{p:?}");
         assert!(dbg.contains("EpochPolicy"));
-        let p2 = p.clone();
+        let p2 = p;
         assert_eq!(p2.on_transition, EpochTransitionBehavior::AbortAll);
         assert!(p2.check_on_poll);
         assert!(p2.propagate_to_children);

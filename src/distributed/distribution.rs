@@ -819,7 +819,7 @@ mod tests {
         };
         let dbg = format!("{ack:?}");
         assert!(dbg.contains("ReplicaAck"), "{dbg}");
-        let cloned = ack.clone();
+        let cloned = ack;
         assert_eq!(cloned.replica_id, "r0");
     }
 
@@ -832,7 +832,7 @@ mod tests {
         };
         let dbg = format!("{fail:?}");
         assert!(dbg.contains("ReplicaFailure"), "{dbg}");
-        let cloned = fail.clone();
+        let cloned = fail;
         assert_eq!(cloned.error, "timeout");
     }
 }

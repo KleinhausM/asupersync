@@ -1054,7 +1054,7 @@ mod tests {
     fn symbolic_obligation_kind_debug_clone_copy_eq() {
         let a = SymbolicObligationKind::SendObject;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, SymbolicObligationKind::DecodeObject);
@@ -1066,7 +1066,7 @@ mod tests {
     fn symbolic_obligation_state_debug_clone_copy_eq() {
         let a = SymbolicObligationState::Committed;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, SymbolicObligationState::Aborted);

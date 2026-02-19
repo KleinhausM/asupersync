@@ -661,7 +661,7 @@ mod tests {
         let layer = RateLimitLayer::new(10, Duration::from_secs(1));
         let dbg = format!("{layer:?}");
         assert!(dbg.contains("RateLimitLayer"));
-        let cloned = layer.clone();
+        let cloned = layer;
         assert_eq!(cloned.rate(), 10);
         assert_eq!(cloned.period(), Duration::from_secs(1));
     }
@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn rate_limit_service_clone() {
         let svc = RateLimit::new(42_i32, 10, Duration::from_secs(1));
-        let cloned = svc.clone();
+        let cloned = svc;
         assert_eq!(*cloned.inner(), 42);
         assert_eq!(cloned.rate(), 10);
         assert_eq!(cloned.available_tokens(), 10);
@@ -716,7 +716,7 @@ mod tests {
         let err: RateLimitError<std::io::Error> = RateLimitError::RateLimitExceeded;
         assert!(err.source().is_none());
 
-        let inner = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let inner = std::io::Error::other("test");
         let err = RateLimitError::Inner(inner);
         assert!(err.source().is_some());
     }

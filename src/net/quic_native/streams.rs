@@ -1519,7 +1519,7 @@ mod tests {
     fn stream_role_debug_clone_copy_eq() {
         let r = StreamRole::Client;
         let copied = r;
-        let cloned = r.clone();
+        let cloned = r;
         assert_eq!(copied, cloned);
         assert_ne!(StreamRole::Client, StreamRole::Server);
         assert!(format!("{r:?}").contains("Client"));
@@ -1530,7 +1530,7 @@ mod tests {
     fn stream_direction_debug_clone_copy_eq() {
         let d = StreamDirection::Bidirectional;
         let copied = d;
-        let cloned = d.clone();
+        let cloned = d;
         assert_eq!(copied, cloned);
         assert_ne!(
             StreamDirection::Bidirectional,
@@ -1547,7 +1547,7 @@ mod tests {
         let dbg = format!("{a:?}");
         assert!(dbg.contains("StreamId"), "{dbg}");
         let copied = a;
-        let cloned = a.clone();
+        let cloned = a;
         assert_eq!(copied, cloned);
         assert!(a < b);
         assert!(b > a);

@@ -619,13 +619,13 @@ mod tests {
         let ascii = MetadataValue::Ascii("hello".into());
         let dbg = format!("{ascii:?}");
         assert!(dbg.contains("Ascii"), "{dbg}");
-        let cloned = ascii.clone();
+        let cloned = ascii;
         assert!(matches!(cloned, MetadataValue::Ascii(s) if s == "hello"));
 
         let binary = MetadataValue::Binary(Bytes::from_static(b"\x00\x01"));
         let dbg2 = format!("{binary:?}");
         assert!(dbg2.contains("Binary"), "{dbg2}");
-        let cloned2 = binary.clone();
+        let cloned2 = binary;
         assert!(matches!(cloned2, MetadataValue::Binary(_)));
     }
 }

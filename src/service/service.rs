@@ -1309,10 +1309,10 @@ mod tests {
         let m = CancellationMode::default();
         assert_eq!(m, CancellationMode::BestEffort);
 
-        let dbg = format!("{:?}", m);
+        let dbg = format!("{m:?}");
         assert!(dbg.contains("BestEffort"));
 
-        let m2 = m.clone();
+        let m2 = m;
         assert_eq!(m, m2);
 
         let m3 = m;
@@ -1324,7 +1324,7 @@ mod tests {
     #[test]
     fn tower_adapter_error_debug_clone_eq() {
         let e: TowerAdapterError<String> = TowerAdapterError::Cancelled;
-        let dbg = format!("{:?}", e);
+        let dbg = format!("{e:?}");
         assert!(dbg.contains("Cancelled"));
 
         let e2 = e.clone();

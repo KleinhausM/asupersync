@@ -1386,10 +1386,10 @@ mod tests {
     #[test]
     fn dialectica_contract_debug_clone_copy_eq() {
         let c = DialecticaContract::ExhaustiveResolution;
-        let dbg = format!("{:?}", c);
+        let dbg = format!("{c:?}");
         assert!(dbg.contains("ExhaustiveResolution"));
 
-        let c2 = c.clone();
+        let c2 = c;
         assert_eq!(c, c2);
 
         let c3 = c;
@@ -1404,21 +1404,21 @@ mod tests {
     #[test]
     fn contract_checker_debug_default() {
         let cc = ContractChecker::default();
-        let dbg = format!("{:?}", cc);
+        let dbg = format!("{cc:?}");
         assert!(dbg.contains("ContractChecker"));
 
         let cc2 = ContractChecker::new();
-        let dbg2 = format!("{:?}", cc2);
+        let dbg2 = format!("{cc2:?}");
         assert!(dbg2.contains("ContractChecker"));
     }
 
     #[test]
     fn dialectica_morphism_debug_clone_copy_eq() {
         let m = DialecticaMorphism::new(ObligationKind::SendPermit);
-        let dbg = format!("{:?}", m);
+        let dbg = format!("{m:?}");
         assert!(dbg.contains("DialecticaMorphism"));
 
-        let m2 = m.clone();
+        let m2 = m;
         assert_eq!(m, m2);
 
         let m3 = m;

@@ -734,7 +734,7 @@ mod tests {
         assert_eq!(left, left2);
 
         // Clone
-        let right2 = right.clone();
+        let right2 = right;
         assert_eq!(right, right2);
     }
 }

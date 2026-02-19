@@ -486,7 +486,7 @@ mod tests {
         };
         let dbg = format!("{v:?}");
         assert!(dbg.contains("LoserDrainViolation"), "{dbg}");
-        let cloned = v.clone();
+        let cloned = v;
         assert_eq!(cloned.race_id, 1);
         assert_eq!(cloned.undrained_losers.len(), 2);
     }

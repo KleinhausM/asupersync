@@ -778,10 +778,10 @@ mod tests {
     #[test]
     fn slab_token_debug_clone_copy_hash() {
         let t = SlabToken::from_usize(42);
-        let dbg = format!("{:?}", t);
+        let dbg = format!("{t:?}");
         assert!(dbg.contains("SlabToken"));
 
-        let t2 = t.clone();
+        let t2 = t;
         assert_eq!(t, t2);
 
         // Copy

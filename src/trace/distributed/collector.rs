@@ -405,7 +405,7 @@ mod tests {
         collector.record_span(&span, Time::from_millis(0));
 
         let record = collector.get_trace(trace_id).unwrap();
-        let record2 = record.clone();
+        let record2 = record;
         assert_eq!(record2.trace_id, trace_id);
         assert!(!record2.is_complete);
         assert!(format!("{record2:?}").contains("TraceRecord"));
@@ -428,7 +428,7 @@ mod tests {
         collector.record_span(&span, Time::from_millis(100));
 
         let summary = collector.get_summary(trace_id).unwrap();
-        let summary2 = summary.clone();
+        let summary2 = summary;
         assert_eq!(summary2.symbols_encoded, 5);
         assert!(format!("{summary2:?}").contains("TraceSummary"));
     }

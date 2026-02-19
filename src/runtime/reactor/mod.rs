@@ -1240,7 +1240,7 @@ mod tests {
         let dbg = format!("{t:?}");
         assert!(dbg.contains("42"), "{dbg}");
         let copied: Token = t;
-        let cloned = t.clone();
+        let cloned = t;
         assert_eq!(copied, cloned);
         assert!(Token::new(1) < Token::new(2));
 
@@ -1256,7 +1256,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Event"), "{dbg}");
         let copied: Event = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
         assert_ne!(e, Event::new(Token::new(2), Interest::WRITABLE));
     }

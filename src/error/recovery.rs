@@ -271,7 +271,7 @@ mod tests {
     fn circuit_state_debug_clone_copy_eq() {
         let s = CircuitState::Closed;
         let s2 = s; // Copy
-        let s3 = s.clone();
+        let s3 = s;
         assert_eq!(s, s2);
         assert_eq!(s, s3);
         assert_ne!(s, CircuitState::Open);

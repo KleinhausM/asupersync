@@ -1616,10 +1616,10 @@ mod tests {
         let m = ExplorationMode::default();
         assert_eq!(m, ExplorationMode::Baseline);
 
-        let dbg = format!("{:?}", m);
+        let dbg = format!("{m:?}");
         assert!(dbg.contains("Baseline"));
 
-        let m2 = m.clone();
+        let m2 = m;
         assert_eq!(m, m2);
 
         let m3 = m;
@@ -1634,10 +1634,10 @@ mod tests {
     #[test]
     fn explorer_config_debug_clone_default() {
         let c = ExplorerConfig::default();
-        let dbg = format!("{:?}", c);
+        let dbg = format!("{c:?}");
         assert!(dbg.contains("ExplorerConfig"));
 
-        let c2 = c.clone();
+        let c2 = c;
         assert_eq!(c2.base_seed, 0);
         assert_eq!(c2.max_runs, 100);
         assert!(c2.record_traces);
@@ -1651,10 +1651,10 @@ mod tests {
             existing_class_hits: 5,
             runs_since_last_new_class: Some(3),
         };
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("SaturationMetrics"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s2.window, 10);
         assert!(!s2.saturated);
     }

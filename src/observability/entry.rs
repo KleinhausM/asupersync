@@ -384,7 +384,7 @@ mod tests {
         let e = LogEntry::info("hello world");
         let dbg = format!("{e:?}");
         assert!(!dbg.is_empty());
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 }

@@ -110,7 +110,7 @@ mod tests {
         let dbg = format!("{k:?}");
         assert!(dbg.contains("InvalidTag"), "{dbg}");
         let copied = k;
-        let cloned = k.clone();
+        let cloned = k;
         assert_eq!(copied, cloned);
         assert_ne!(AuthErrorKind::InvalidTag, AuthErrorKind::KeyMismatch);
         let mut set = HashSet::new();

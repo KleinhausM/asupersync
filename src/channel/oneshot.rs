@@ -1479,7 +1479,7 @@ mod tests {
     fn send_error_debug_clone_copy_eq() {
         let e = SendError::Disconnected(42_i32);
         let e2 = e; // Copy
-        let e3 = e.clone();
+        let e3 = e;
         assert_eq!(e, e2);
         assert_eq!(e, e3);
         assert_ne!(e, SendError::Disconnected(99));
@@ -1491,7 +1491,7 @@ mod tests {
     fn recv_error_debug_clone_copy_eq() {
         let e = RecvError::Closed;
         let e2 = e; // Copy
-        let e3 = e.clone();
+        let e3 = e;
         assert_eq!(e, e2);
         assert_eq!(e, e3);
         assert_ne!(e, RecvError::Cancelled);
@@ -1503,7 +1503,7 @@ mod tests {
     fn try_recv_error_debug_clone_copy_eq() {
         let e = TryRecvError::Empty;
         let e2 = e; // Copy
-        let e3 = e.clone();
+        let e3 = e;
         assert_eq!(e, e2);
         assert_eq!(e, e3);
         assert_ne!(e, TryRecvError::Closed);

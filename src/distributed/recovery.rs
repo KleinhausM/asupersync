@@ -1608,7 +1608,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("Quorum"), "{dbg}");
         let copied = c;
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(copied, cloned);
         assert_ne!(CollectionConsistency::Any, CollectionConsistency::All);
     }
@@ -1619,7 +1619,7 @@ mod tests {
         let dbg = format!("{p:?}");
         assert!(dbg.contains("Collecting"), "{dbg}");
         let copied = p;
-        let cloned = p.clone();
+        let cloned = p;
         assert_eq!(copied, cloned);
     }
 
@@ -1631,7 +1631,7 @@ mod tests {
         };
         let dbg = format!("{trigger:?}");
         assert!(dbg.contains("NodeRestart"), "{dbg}");
-        let cloned = trigger.clone();
+        let cloned = trigger;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1640,7 +1640,7 @@ mod tests {
         let cfg = RecoveryConfig::default();
         let dbg = format!("{cfg:?}");
         assert!(dbg.contains("RecoveryConfig"), "{dbg}");
-        let cloned = cfg.clone();
+        let cloned = cfg;
         assert!(format!("{cloned:?}").contains("RecoveryConfig"));
     }
 
@@ -1656,7 +1656,7 @@ mod tests {
         };
         let dbg = format!("{p:?}");
         assert!(dbg.contains("RecoveryProgress"), "{dbg}");
-        let cloned = p.clone();
+        let cloned = p;
         assert!(format!("{cloned:?}").contains("RecoveryProgress"));
     }
 }

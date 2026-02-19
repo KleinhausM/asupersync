@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn retry_layer_clone() {
         let layer = RetryLayer::new(LimitedRetry::<i32>::new(3));
-        let cloned = layer.clone();
+        let cloned = layer;
         assert_eq!(cloned.policy().max_retries(), 3);
     }
 
@@ -651,7 +651,7 @@ mod tests {
         let svc = Retry::new(42_i32, LimitedRetry::<i32>::new(3));
         let dbg = format!("{svc:?}");
         assert!(dbg.contains("Retry"));
-        let cloned = svc.clone();
+        let cloned = svc;
         assert_eq!(*cloned.inner(), 42);
     }
 
@@ -671,8 +671,8 @@ mod tests {
         let policy = LimitedRetry::<i32>::new(5);
         let dbg = format!("{policy:?}");
         assert!(dbg.contains("LimitedRetry"));
-        assert!(dbg.contains("5"));
-        let cloned = policy.clone();
+        assert!(dbg.contains('5'));
+        let cloned = policy;
         let copied = policy; // Copy
         assert_eq!(cloned.max_retries(), copied.max_retries());
     }
@@ -682,9 +682,9 @@ mod tests {
         let policy = NoRetry::new();
         let dbg = format!("{policy:?}");
         assert!(dbg.contains("NoRetry"));
-        let _cloned = policy.clone();
+        let _cloned = policy;
         let _copied = policy; // Copy
-        let default = NoRetry::default();
+        let default = NoRetry;
         let _ = format!("{default:?}");
     }
 

@@ -1608,7 +1608,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Disconnected"), "{dbg}");
         let copied: SendError<i32> = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
         assert_ne!(e, SendError::Full(42));
     }
@@ -1619,7 +1619,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Disconnected"), "{dbg}");
         let copied: RecvError = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
         assert_ne!(e, RecvError::Empty);
     }

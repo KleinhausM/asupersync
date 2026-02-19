@@ -735,7 +735,7 @@ mod tests {
         ];
         for s in &statuses {
             let copied = *s;
-            let cloned = s.clone();
+            let cloned = *s;
             assert_eq!(copied, cloned);
             assert!(!format!("{s:?}").is_empty());
         }
@@ -755,7 +755,7 @@ mod tests {
         assert!(def.service.is_empty());
         let dbg = format!("{def:?}");
         assert!(dbg.contains("HealthCheckRequest"), "{dbg}");
-        let cloned = def.clone();
+        let cloned = def;
         assert_eq!(cloned.service, "");
     }
 
@@ -766,7 +766,7 @@ mod tests {
         let dbg = format!("{def:?}");
         assert!(dbg.contains("HealthCheckResponse"), "{dbg}");
         let resp = HealthCheckResponse::new(ServingStatus::Serving);
-        let cloned = resp.clone();
+        let cloned = resp;
         assert_eq!(cloned.status, ServingStatus::Serving);
     }
 }

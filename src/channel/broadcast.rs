@@ -1172,7 +1172,7 @@ mod tests {
         ];
         for (e, expected) in errors.iter().zip(expected_display.iter()) {
             let copied = *e;
-            let cloned = e.clone();
+            let cloned = *e;
             assert_eq!(copied, cloned);
             assert!(!format!("{e:?}").is_empty());
             assert_eq!(format!("{e}"), *expected);

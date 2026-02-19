@@ -984,8 +984,8 @@ mod tests {
         let r = CompatibilityResult::NeedsMigration { from: 1, to: 3 };
         let dbg = format!("{r:?}");
         assert!(dbg.contains("NeedsMigration"));
-        assert!(dbg.contains("1"));
-        assert!(dbg.contains("3"));
+        assert!(dbg.contains('1'));
+        assert!(dbg.contains('3'));
     }
 
     #[test]
@@ -996,7 +996,7 @@ mod tests {
         };
         let dbg = format!("{r:?}");
         assert!(dbg.contains("TooOld"));
-        assert!(dbg.contains("0"));
+        assert!(dbg.contains('0'));
     }
 
     #[test]

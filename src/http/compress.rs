@@ -575,7 +575,7 @@ mod tests {
         assert!(dbg.contains("Gzip"), "{dbg}");
 
         let copied: ContentEncoding = gz;
-        let cloned = gz.clone();
+        let cloned = gz;
         assert_eq!(copied, cloned);
         assert_eq!(gz, ContentEncoding::Gzip);
         assert_ne!(gz, ContentEncoding::Brotli);
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn identity_compressor_debug_default() {
-        let c = IdentityCompressor::default();
+        let c = IdentityCompressor;
         let dbg = format!("{c:?}");
         assert!(dbg.contains("IdentityCompressor"), "{dbg}");
     }

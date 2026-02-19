@@ -286,7 +286,7 @@ mod tests {
     fn trace_buffer_handle_clone() {
         let handle = TraceBufferHandle::new(8);
         handle.push_event(make_event(1));
-        let handle2 = handle.clone();
+        let handle2 = handle;
         // Cloned handle shares the same buffer
         assert_eq!(handle2.len(), 1);
     }

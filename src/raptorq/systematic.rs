@@ -1916,7 +1916,7 @@ mod tests {
         let p = SystematicParams::for_source_block(10, 64);
         let dbg = format!("{p:?}");
         assert!(dbg.contains("SystematicParams"), "{dbg}");
-        let cloned = p.clone();
+        let cloned = p;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1929,7 +1929,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("UnsupportedSourceBlockSize"), "{dbg}");
         let copied: SystematicParamError = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
     }
 }

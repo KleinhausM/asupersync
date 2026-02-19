@@ -1031,7 +1031,7 @@ mod tests {
         let mut set = HashSet::new();
         for ip in &all {
             let copied = *ip;
-            let cloned = ip.clone();
+            let cloned = *ip;
             assert_eq!(copied, cloned);
             assert!(!format!("{ip:?}").is_empty());
             set.insert(*ip);
@@ -1052,7 +1052,7 @@ mod tests {
         let mut set = HashSet::new();
         for ct in &all {
             let copied = *ct;
-            let cloned = ct.clone();
+            let cloned = *ct;
             assert_eq!(copied, cloned);
             set.insert(*ct);
         }
@@ -1068,7 +1068,7 @@ mod tests {
         assert_eq!(def.io_errors, 0);
         let dbg = format!("{def:?}");
         assert!(dbg.contains("ChaosStats"), "{dbg}");
-        let cloned = def.clone();
+        let cloned = def;
         assert_eq!(cloned.cancellations, 0);
     }
 }

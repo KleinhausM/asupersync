@@ -1210,7 +1210,7 @@ mod tests {
         let dbg = format!("{order:?}");
         assert!(dbg.contains("Biased"), "{dbg}");
         let copied = order;
-        let cloned = order.clone();
+        let cloned = order;
         assert_eq!(copied, cloned);
         assert_ne!(PollingOrder::Biased, PollingOrder::Unbiased);
     }

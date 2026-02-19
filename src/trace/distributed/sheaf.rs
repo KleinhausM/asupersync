@@ -584,7 +584,7 @@ mod tests {
         let snap = NodeSnapshot::new(node("X"));
         let dbg = format!("{snap:?}");
         assert!(dbg.contains("NodeSnapshot"));
-        let snap2 = snap.clone();
+        let snap2 = snap;
         assert!(snap2.states.is_empty());
     }
 
@@ -615,7 +615,7 @@ mod tests {
         };
         let dbg = format!("{c:?}");
         assert!(dbg.contains("AllOrNothing"));
-        let c2 = c.clone();
+        let c2 = c;
         let dbg2 = format!("{c2:?}");
         assert!(dbg2.contains("test"));
     }
@@ -629,7 +629,7 @@ mod tests {
         };
         let dbg = format!("{report:?}");
         assert!(dbg.contains("ConsistencyReport"));
-        let r2 = report.clone();
+        let r2 = report;
         assert!(!r2.has_issues());
         assert!(!r2.has_sheaf_issues());
     }
@@ -662,7 +662,7 @@ mod tests {
         };
         let dbg = format!("{c:?}");
         assert!(dbg.contains("PairwiseConflict"));
-        let c2 = c.clone();
+        let c2 = c;
         assert_eq!(c2.state_a, LatticeState::Committed);
     }
 
@@ -675,7 +675,7 @@ mod tests {
         };
         let dbg = format!("{p:?}");
         assert!(dbg.contains("PhantomState"));
-        let p2 = p.clone();
+        let p2 = p;
         assert!(p2.node_observations.is_empty());
     }
 
@@ -688,7 +688,7 @@ mod tests {
         };
         let dbg = format!("{cv:?}");
         assert!(dbg.contains("ConstraintViolation"));
-        let cv2 = cv.clone();
+        let cv2 = cv;
         assert_eq!(cv2.constraint_name, "saga-1");
         assert_eq!(cv2.explanation, "test violation");
     }
@@ -701,7 +701,7 @@ mod tests {
         };
         let dbg = format!("{od:?}");
         assert!(dbg.contains("ObligationDetail"));
-        let od2 = od.clone();
+        let od2 = od;
         assert_eq!(od2.merged, LatticeState::Reserved);
     }
 

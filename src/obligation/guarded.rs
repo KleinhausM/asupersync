@@ -762,7 +762,7 @@ mod tests {
         assert!(dbg.contains("PreservationConstraint"));
         assert!(dbg.contains("LeaseTimeMonotonicity"));
 
-        let cloned = constraint.clone();
+        let cloned = constraint;
         assert_eq!(
             cloned.invariant,
             TimeIndexedInvariant::LeaseTimeMonotonicity
@@ -776,7 +776,7 @@ mod tests {
         let dbg = format!("{lease:?}");
         assert!(dbg.contains("LeaseModel"));
 
-        let cloned = lease.clone();
+        let cloned = lease;
         assert_eq!(cloned.created_at, t(100));
         assert_eq!(cloned.expires_at, t(600));
         assert_eq!(cloned.renewal_count, 0);
@@ -793,7 +793,7 @@ mod tests {
         let dbg = format!("{actor:?}");
         assert!(dbg.contains("ActorStepModel"));
 
-        let cloned = actor.clone();
+        let cloned = actor;
         assert_eq!(cloned.step, 0);
         assert!(!cloned.is_terminal());
     }

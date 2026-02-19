@@ -616,7 +616,7 @@ mod tests {
         assert_eq!(cost, cost2);
 
         // Clone
-        let cost3 = cost.clone();
+        let cost3 = cost;
         assert_eq!(cost, cost3);
     }
 

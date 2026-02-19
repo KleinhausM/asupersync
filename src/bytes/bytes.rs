@@ -680,7 +680,7 @@ mod tests {
         let cursor = BytesCursor::new(b);
         let dbg = format!("{cursor:?}");
         assert!(dbg.contains("BytesCursor"));
-        let cloned = cursor.clone();
+        let cloned = cursor;
         assert_eq!(cloned.position(), 0);
     }
 

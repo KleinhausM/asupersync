@@ -759,7 +759,7 @@ mod tests {
         let dbg = format!("{pt:?}");
         assert!(dbg.contains("PriorityTask"), "{dbg}");
         let copied = pt;
-        let cloned = pt.clone();
+        let cloned = pt;
         assert_eq!(copied.task, cloned.task);
         assert_eq!(copied.priority, cloned.priority);
     }
@@ -770,7 +770,7 @@ mod tests {
         let dbg = format!("{tt:?}");
         assert!(dbg.contains("TimedTask"), "{dbg}");
         let copied = tt;
-        let cloned = tt.clone();
+        let cloned = tt;
         assert_eq!(copied, cloned);
     }
 }

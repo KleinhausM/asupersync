@@ -1231,7 +1231,7 @@ mod tests {
             max_history: 500,
             fallback_threshold: Duration::from_mins(1),
         };
-        let cfg2 = cfg.clone();
+        let cfg2 = cfg;
         assert!(cfg2.adaptive_enabled);
         assert!((cfg2.warning_percentile - 0.95).abs() < f64::EPSILON);
         assert_eq!(cfg2.min_samples, 20);
@@ -1271,7 +1271,7 @@ mod tests {
             adaptive: AdaptiveDeadlineConfig::default(),
             enabled: false,
         };
-        let cfg2 = cfg.clone();
+        let cfg2 = cfg;
         assert_eq!(cfg2.check_interval, Duration::from_millis(500));
         assert!((cfg2.warning_threshold_fraction - 0.1).abs() < f64::EPSILON);
         assert_eq!(cfg2.checkpoint_timeout, Duration::from_secs(10));
@@ -1342,7 +1342,7 @@ mod tests {
         init_test("deadline_monitor_on_warning_callback");
         let mut monitor = DeadlineMonitor::new(MonitorConfig::default());
         let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let called_ref = called.clone();
+        let called_ref = called;
         monitor.on_warning(move |_| {
             called_ref.store(true, Ordering::Relaxed);
         });

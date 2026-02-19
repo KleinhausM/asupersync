@@ -257,7 +257,7 @@ mod tests {
         let dbg = format!("{l:?}");
         assert!(dbg.contains("Structural"), "{dbg}");
         let copied = l;
-        let cloned = l.clone();
+        let cloned = l;
         assert_eq!(copied, cloned);
         assert_ne!(Level::Lossless, Level::Skeleton);
     }

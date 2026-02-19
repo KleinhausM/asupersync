@@ -1161,7 +1161,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("None"), "{dbg}");
         let copied: Compression = c;
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(copied, cloned);
         assert_ne!(c, Compression::Zstd);
     }
@@ -1173,7 +1173,7 @@ mod tests {
         let dbg = format!("{a:?}");
         assert!(dbg.contains("All"), "{dbg}");
         let copied: Acks = a;
-        let cloned = a.clone();
+        let cloned = a;
         assert_eq!(copied, cloned);
         assert_ne!(a, Acks::Leader);
     }

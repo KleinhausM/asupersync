@@ -1304,7 +1304,7 @@ mod tests {
         };
         let dbg = format!("{detail:?}");
         assert!(dbg.contains("RestartAllowed"));
-        assert!(dbg.contains("3"));
+        assert!(dbg.contains('3'));
 
         let cloned = detail.clone();
         assert_eq!(detail, cloned);

@@ -1041,7 +1041,7 @@ mod tests {
         let dbg = format!("{stats:?}");
         assert!(dbg.contains("LedgerStats"), "{dbg}");
         let copied = stats;
-        let cloned = stats.clone();
+        let cloned = stats;
         assert_eq!(copied, cloned);
         assert_eq!(stats.total_acquired, 0);
         assert!(stats.is_clean());
@@ -1052,7 +1052,7 @@ mod tests {
         let result = LeakCheckResult { leaked: vec![] };
         let dbg = format!("{result:?}");
         assert!(dbg.contains("LeakCheckResult"), "{dbg}");
-        let cloned = result.clone();
+        let cloned = result;
         assert!(cloned.is_clean());
     }
 }

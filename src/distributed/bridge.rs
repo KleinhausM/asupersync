@@ -1618,7 +1618,7 @@ mod tests {
 
         let dist = RegionMode::distributed(3);
         let copied: RegionMode = dist;
-        let cloned = dist.clone();
+        let cloned = dist;
         assert_eq!(copied, cloned);
         assert_ne!(dist, RegionMode::Local);
     }
@@ -1629,7 +1629,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Synchronous"), "{dbg}");
         let copied: SyncMode = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         assert_ne!(s, SyncMode::Asynchronous);
     }
@@ -1640,7 +1640,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("DistributedWins"), "{dbg}");
         let copied: ConflictResolution = c;
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(copied, cloned);
     }
 
@@ -1650,7 +1650,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("BridgeConfig"), "{dbg}");
         assert!(c.allow_upgrade);
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1660,7 +1660,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Open"), "{dbg}");
         let copied: EffectiveState = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
         assert_ne!(e, EffectiveState::Closed);
     }
@@ -1671,7 +1671,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("SyncState"), "{dbg}");
         assert_eq!(s.pending_ops, 0);
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 

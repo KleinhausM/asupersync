@@ -1167,7 +1167,7 @@ mod tests {
         let s = PoolStats::default();
         assert_eq!(s.allocations, 0);
         assert_eq!(s.current_usage, 0);
-        let s2 = s.clone();
+        let s2 = s;
         let dbg = format!("{s2:?}");
         assert!(dbg.contains("PoolStats"));
     }
@@ -1176,7 +1176,7 @@ mod tests {
     fn pool_exhausted_debug_clone_copy_eq() {
         let e = PoolExhausted;
         let e2 = e; // Copy
-        let e3 = e.clone();
+        let e3 = e;
         assert_eq!(e, e2);
         assert_eq!(e2, e3);
         let dbg = format!("{e:?}");
@@ -1197,7 +1197,7 @@ mod tests {
     fn resource_limits_debug_clone_default() {
         let l = ResourceLimits::default();
         assert!(l.is_zero());
-        let l2 = l.clone();
+        let l2 = l;
         assert_eq!(l2.max_symbol_memory, 0);
         let dbg = format!("{l2:?}");
         assert!(dbg.contains("ResourceLimits"));
@@ -1217,7 +1217,7 @@ mod tests {
     fn resource_request_debug_clone_copy_default() {
         let r = ResourceRequest::default();
         let r2 = r; // Copy
-        let r3 = r.clone();
+        let r3 = r;
         let _ = r2;
         let _ = r3;
         let dbg = format!("{r:?}");
@@ -1228,7 +1228,7 @@ mod tests {
     fn resource_exhausted_debug_clone_copy_eq() {
         let e = ResourceExhausted::SymbolMemory;
         let e2 = e; // Copy
-        let e3 = e.clone();
+        let e3 = e;
         assert_eq!(e, e2);
         assert_eq!(e2, e3);
         assert_ne!(e, ResourceExhausted::DecodingOps);

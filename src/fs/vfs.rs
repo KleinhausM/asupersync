@@ -581,9 +581,9 @@ mod tests {
 
     #[test]
     fn unix_vfs_debug_clone_copy_default() {
-        let v = UnixVfs::default();
+        let v = UnixVfs;
         let v2 = v; // Copy
-        let v3 = v.clone();
+        let v3 = v;
         let _ = v2;
         let _ = v3;
         let dbg = format!("{v:?}");

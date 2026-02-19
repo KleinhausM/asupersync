@@ -1344,10 +1344,10 @@ mod tests {
     #[test]
     fn monitor_ref_debug_clone_copy_eq_hash_ord() {
         let r = MonitorRef::from_raw(42);
-        let dbg = format!("{:?}", r);
+        let dbg = format!("{r:?}");
         assert!(dbg.contains("MonitorRef"));
 
-        let r2 = r.clone();
+        let r2 = r;
         assert_eq!(r, r2);
 
         // Copy
@@ -1369,7 +1369,7 @@ mod tests {
     #[test]
     fn down_reason_debug_clone_eq() {
         let d = DownReason::Normal;
-        let dbg = format!("{:?}", d);
+        let dbg = format!("{d:?}");
         assert!(dbg.contains("Normal"));
 
         let d2 = d.clone();

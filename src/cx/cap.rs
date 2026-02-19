@@ -340,7 +340,7 @@ mod tests {
         let dbg = format!("{all:?}");
         assert!(dbg.contains("CapSet"), "{dbg}");
         let copied = all;
-        let cloned = all.clone();
+        let cloned = all;
         // ZST so all instances are identical
         let _ = (copied, cloned);
 

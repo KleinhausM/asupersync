@@ -1276,7 +1276,7 @@ mod tests {
         assert_eq!(dag.node_count(), 0);
         assert!(dag.root().is_none());
 
-        let dag2 = dag.clone();
+        let dag2 = dag;
         assert_eq!(dag2.node_count(), 0);
     }
 

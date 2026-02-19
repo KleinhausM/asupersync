@@ -1255,7 +1255,7 @@ mod tests {
     fn compact_task_id_debug_clone_copy_eq() {
         let id = CompactTaskId(42);
         let id2 = id; // Copy
-        let id3 = id.clone();
+        let id3 = id;
         assert_eq!(id, id2);
         assert_eq!(id, id3);
         assert_ne!(id, CompactTaskId(99));
@@ -1267,7 +1267,7 @@ mod tests {
     fn compact_region_id_debug_clone_copy_eq() {
         let id = CompactRegionId(7);
         let id2 = id; // Copy
-        let id3 = id.clone();
+        let id3 = id;
         assert_eq!(id, id2);
         assert_eq!(id, id3);
         assert_ne!(id, CompactRegionId(99));

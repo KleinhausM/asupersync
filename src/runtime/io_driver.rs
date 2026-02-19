@@ -1582,10 +1582,10 @@ mod tests {
     #[test]
     fn io_stats_debug_clone_default() {
         let s = IoStats::default();
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("IoStats"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s2.polls, 0);
         assert_eq!(s2.events_received, 0);
         assert_eq!(s2.registrations, 0);

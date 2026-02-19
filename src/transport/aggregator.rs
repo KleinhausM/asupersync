@@ -2184,7 +2184,7 @@ mod tests {
         let id = PathId::new(42);
         assert!(format!("{id:?}").contains("42"));
         assert_eq!(format!("{id}"), "Path(42)");
-        let cloned = id.clone();
+        let cloned = id;
         let copied = id; // Copy
         assert_eq!(cloned, copied);
         assert_eq!(id.0, 42);
@@ -2208,7 +2208,7 @@ mod tests {
     fn path_state_debug_clone_copy_eq() {
         let state = PathState::Active;
         assert!(format!("{state:?}").contains("Active"));
-        let cloned = state.clone();
+        let cloned = state;
         let copied = state; // Copy
         assert_eq!(cloned, copied);
         assert_ne!(PathState::Active, PathState::Closed);
@@ -2233,7 +2233,7 @@ mod tests {
         assert_eq!(chars.jitter_ms, 10);
         assert!(!chars.is_primary);
         assert_eq!(chars.priority, 100);
-        let _cloned = chars.clone();
+        let _cloned = chars;
     }
 
     #[test]
@@ -2241,7 +2241,7 @@ mod tests {
         let policy = PathSelectionPolicy::default();
         assert_eq!(policy, PathSelectionPolicy::UseAll);
         assert!(format!("{policy:?}").contains("UseAll"));
-        let cloned = policy.clone();
+        let cloned = policy;
         let copied = policy; // Copy
         assert_eq!(cloned, copied);
     }
@@ -2257,7 +2257,7 @@ mod tests {
             aggregate_bandwidth_bps: 5_000_000,
         };
         assert!(format!("{stats:?}").contains("PathSetStats"));
-        let stats2 = stats.clone();
+        let stats2 = stats;
         assert_eq!(stats2.path_count, 3);
         assert_eq!(stats2.total_received, 100);
     }
@@ -2269,7 +2269,7 @@ mod tests {
         assert_eq!(config.max_symbols_per_object, 10_000);
         assert_eq!(config.max_objects, 1_000);
         assert!(config.track_path);
-        let _cloned = config.clone();
+        let _cloned = config;
     }
 
     #[test]
@@ -2281,7 +2281,7 @@ mod tests {
             unique_symbols: 47,
         };
         assert!(format!("{stats:?}").contains("DeduplicatorStats"));
-        let stats2 = stats.clone();
+        let stats2 = stats;
         assert_eq!(stats2.objects_tracked, 5);
     }
 
@@ -2292,7 +2292,7 @@ mod tests {
         assert_eq!(config.max_buffer_per_object, 1_000);
         assert!(!config.immediate_delivery);
         assert_eq!(config.max_sequence_gap, 100);
-        let _cloned = config.clone();
+        let _cloned = config;
     }
 
     #[test]
@@ -2305,7 +2305,7 @@ mod tests {
             timeout_deliveries: 1,
         };
         assert!(format!("{stats:?}").contains("ReordererStats"));
-        let stats2 = stats.clone();
+        let stats2 = stats;
         assert_eq!(stats2.symbols_buffered, 10);
     }
 
@@ -2315,14 +2315,14 @@ mod tests {
         assert!(format!("{config:?}").contains("AggregatorConfig"));
         assert!(config.enable_reordering);
         assert_eq!(config.path_policy, PathSelectionPolicy::UseAll);
-        let _cloned = config.clone();
+        let _cloned = config;
     }
 
     #[test]
     fn aggregation_error_debug_clone() {
         let err = AggregationError::PathNotFound { path: PathId(1) };
         assert!(format!("{err:?}").contains("PathNotFound"));
-        let cloned = err.clone();
+        let cloned = err;
         assert!(format!("{cloned}").contains("not found"));
     }
 

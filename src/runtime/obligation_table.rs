@@ -745,7 +745,7 @@ mod tests {
         };
         let dbg = format!("{info:?}");
         assert!(dbg.contains("ObligationCommitInfo"));
-        let cloned = info.clone();
+        let cloned = info;
         assert_eq!(cloned.duration, 42);
         assert_eq!(cloned.kind, ObligationKind::SendPermit);
     }
@@ -762,7 +762,7 @@ mod tests {
         };
         let dbg = format!("{info:?}");
         assert!(dbg.contains("ObligationAbortInfo"));
-        let cloned = info.clone();
+        let cloned = info;
         assert_eq!(cloned.duration, 500);
         assert_eq!(cloned.reason, ObligationAbortReason::Cancel);
     }
@@ -781,7 +781,7 @@ mod tests {
         };
         let dbg = format!("{info:?}");
         assert!(dbg.contains("ObligationLeakInfo"));
-        let cloned = info.clone();
+        let cloned = info;
         assert_eq!(cloned.duration, 2000);
         assert_eq!(cloned.description.as_deref(), Some("test leak"));
     }
@@ -799,7 +799,7 @@ mod tests {
         };
         let dbg = format!("{args:?}");
         assert!(dbg.contains("ObligationCreateArgs"));
-        let cloned = args.clone();
+        let cloned = args;
         assert_eq!(cloned.kind, ObligationKind::Lease);
         assert_eq!(cloned.description.as_deref(), Some("test create"));
     }

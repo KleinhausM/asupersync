@@ -983,7 +983,7 @@ mod tests {
         use std::collections::HashSet;
         let l = Law::SeverityOrder;
         let l2 = l; // Copy
-        let l3 = l.clone();
+        let l3 = l;
         assert_eq!(l, l2);
         assert_eq!(l, l3);
         assert_ne!(l, Law::JoinCommutativity);
@@ -999,7 +999,7 @@ mod tests {
         use std::collections::HashSet;
         let c = LawClassification::Unconditional;
         let c2 = c; // Copy
-        let c3 = c.clone();
+        let c3 = c;
         assert_eq!(c, c2);
         assert_eq!(c, c3);
         assert_ne!(c, LawClassification::SeverityLevelOnly);

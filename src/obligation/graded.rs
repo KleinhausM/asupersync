@@ -1319,7 +1319,7 @@ mod tests {
         let dbg = format!("{r:?}");
         assert!(dbg.contains("Commit"), "{dbg}");
         let copied = r;
-        let cloned = r.clone();
+        let cloned = r;
         assert_eq!(copied, cloned);
         assert_ne!(r, Resolution::Abort);
     }
@@ -1345,7 +1345,7 @@ mod tests {
         };
         let dbg = format!("{sp:?}");
         assert!(dbg.contains("ScopeProof"), "{dbg}");
-        let cloned = sp.clone();
+        let cloned = sp;
         assert_eq!(cloned.label, "test");
     }
 }

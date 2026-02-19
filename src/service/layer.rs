@@ -503,9 +503,9 @@ mod tests {
         let dbg = format!("{id:?}");
         assert_eq!(dbg, "Identity");
         let copied = id;
-        let cloned = id.clone();
+        let cloned = id;
         assert_eq!(format!("{copied:?}"), format!("{cloned:?}"));
-        let def = Identity::default();
+        let def = Identity;
         assert_eq!(format!("{def:?}"), "Identity");
     }
 
@@ -518,7 +518,7 @@ mod tests {
             dbg.contains("Identity"),
             "Debug should contain inner/outer: {dbg}"
         );
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(format!("{cloned:?}"), dbg);
         assert_eq!(format!("{:?}", cloned.inner()), "Identity");
         assert_eq!(format!("{:?}", cloned.outer()), "Identity");

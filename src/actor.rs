@@ -2123,10 +2123,10 @@ mod tests {
     #[test]
     fn actor_id_clone_copy_eq_hash() {
         let id = ActorId::from_task(TaskId::new_for_test(1, 0));
-        let dbg = format!("{:?}", id);
+        let dbg = format!("{id:?}");
         assert!(dbg.contains("ActorId"));
 
-        let id2 = id.clone();
+        let id2 = id;
         assert_eq!(id, id2);
 
         // Copy
@@ -2144,10 +2144,10 @@ mod tests {
     #[test]
     fn actor_state_debug_clone_copy_eq() {
         let s = ActorState::Running;
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("Running"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s, s2);
 
         let s3 = s;
@@ -2159,10 +2159,10 @@ mod tests {
     #[test]
     fn mailbox_config_debug_clone_copy_default() {
         let c = MailboxConfig::default();
-        let dbg = format!("{:?}", c);
+        let dbg = format!("{c:?}");
         assert!(dbg.contains("MailboxConfig"));
 
-        let c2 = c.clone();
+        let c2 = c;
         assert_eq!(c2.capacity, c.capacity);
         assert_eq!(c2.backpressure, c.backpressure);
 

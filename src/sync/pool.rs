@@ -3419,7 +3419,7 @@ mod tests {
             WarmupStrategy::RequireMinimum,
         ] {
             let copied = s;
-            let cloned = s.clone();
+            let cloned = s;
             assert_eq!(copied, cloned);
             let dbg = format!("{s:?}");
             assert!(!dbg.is_empty());
@@ -3436,7 +3436,7 @@ mod tests {
             DestroyReason::MaxLifetime,
         ] {
             let copied = r;
-            let cloned = r.clone();
+            let cloned = r;
             assert_eq!(copied, cloned);
             let dbg = format!("{r:?}");
             assert!(!dbg.is_empty());

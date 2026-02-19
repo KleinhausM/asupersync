@@ -949,8 +949,8 @@ mod tests {
     #[test]
     fn timer_duration_exceeded_debug_clone_display() {
         let err = TimerDurationExceeded {
-            duration: Duration::from_secs(7200),
-            max: Duration::from_secs(3600),
+            duration: Duration::from_hours(2),
+            max: Duration::from_hours(1),
         };
         let cloned = err.clone();
         assert_eq!(cloned.duration, err.duration);
@@ -972,7 +972,7 @@ mod tests {
         let h2 = wheel.register(Time::from_millis(20), waker2);
         assert_ne!(h1, h2);
         let copied = h1;
-        let cloned = h1.clone();
+        let cloned = h1;
         assert_eq!(copied, cloned);
         let dbg = format!("{h1:?}");
         assert!(dbg.contains("TimerHandle"));

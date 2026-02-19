@@ -491,7 +491,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Striped"), "{dbg}");
         let copied = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         assert_ne!(s, AssignmentStrategy::Full);
     }
@@ -505,7 +505,7 @@ mod tests {
         };
         let dbg = format!("{ra:?}");
         assert!(dbg.contains("ReplicaAssignment"), "{dbg}");
-        let cloned = ra.clone();
+        let cloned = ra;
         assert_eq!(cloned.replica_id, "r0");
         assert_eq!(cloned.symbol_indices, [0, 1, 2]);
     }

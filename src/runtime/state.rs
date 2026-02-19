@@ -7009,7 +7009,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("BudgetSnapshot"), "{dbg}");
         let copied = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied.priority, cloned.priority);
     }
 
@@ -7018,7 +7018,7 @@ mod tests {
         let k = CancelKindSnapshot::User;
         let dbg = format!("{k:?}");
         assert!(dbg.contains("User"), "{dbg}");
-        let cloned = k.clone();
+        let cloned = k;
         let dbg2 = format!("{cloned:?}");
         assert_eq!(dbg, dbg2);
     }
@@ -7028,7 +7028,7 @@ mod tests {
         let s = RegionStateSnapshot::Open;
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Open"), "{dbg}");
-        let cloned = s.clone();
+        let cloned = s;
         let dbg2 = format!("{cloned:?}");
         assert_eq!(dbg, dbg2);
     }

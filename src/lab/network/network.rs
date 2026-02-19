@@ -941,7 +941,7 @@ mod tests {
         let dbg = format!("{pkt:?}");
         assert!(dbg.contains("Packet"));
 
-        let cloned = pkt.clone();
+        let cloned = pkt;
         assert_eq!(cloned.src, HostId::new(1));
         assert_eq!(cloned.dst, HostId::new(2));
         assert!(!cloned.corrupted);
@@ -955,7 +955,7 @@ mod tests {
         };
         let dbg = format!("{partition:?}");
         assert!(dbg.contains("Partition"));
-        let cloned = partition.clone();
+        let cloned = partition;
         let dbg2 = format!("{cloned:?}");
         assert_eq!(dbg, dbg2);
 
@@ -978,7 +978,7 @@ mod tests {
         let dbg = format!("{metrics:?}");
         assert!(dbg.contains("NetworkMetrics"));
 
-        let cloned = metrics.clone();
+        let cloned = metrics;
         assert_eq!(cloned.packets_sent, 0);
     }
 
@@ -993,7 +993,7 @@ mod tests {
         let dbg = format!("{event:?}");
         assert!(dbg.contains("NetworkTraceEvent"));
 
-        let cloned = event.clone();
+        let cloned = event;
         assert_eq!(cloned.kind, NetworkTraceKind::Send);
         assert_eq!(cloned.src, HostId::new(1));
     }

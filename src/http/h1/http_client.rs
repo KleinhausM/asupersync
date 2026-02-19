@@ -964,7 +964,7 @@ mod tests {
     fn scheme_debug_clone_copy_eq() {
         let a = Scheme::Http;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, Scheme::Https);
@@ -978,7 +978,7 @@ mod tests {
         let b = a.clone();
         let dbg = format!("{a:?}");
         assert!(dbg.contains("Limited"));
-        assert!(dbg.contains("5"));
+        assert!(dbg.contains('5'));
         let dbg2 = format!("{b:?}");
         assert_eq!(dbg, dbg2);
     }

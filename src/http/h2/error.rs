@@ -402,7 +402,7 @@ mod tests {
         use std::collections::HashSet;
         let a = ErrorCode::Cancel;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, ErrorCode::NoError);

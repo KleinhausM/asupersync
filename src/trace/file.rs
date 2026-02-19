@@ -1227,7 +1227,7 @@ mod tests {
         let def = CompressionMode::default();
         assert_eq!(def, CompressionMode::None);
         let copied = def;
-        let cloned = def.clone();
+        let cloned = def;
         assert_eq!(copied, cloned);
         assert!(!def.is_compressed());
         let dbg = format!("{def:?}");

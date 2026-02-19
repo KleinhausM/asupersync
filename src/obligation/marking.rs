@@ -1400,10 +1400,10 @@ mod tests {
             kind: ObligationKind::SendPermit,
             region: r(1),
         };
-        let dbg = format!("{:?}", d);
+        let dbg = format!("{d:?}");
         assert!(dbg.contains("MarkingDimension"));
 
-        let d2 = d.clone();
+        let d2 = d;
         assert_eq!(d, d2);
 
         let d3 = d;
@@ -1413,10 +1413,10 @@ mod tests {
     #[test]
     fn obligation_marking_debug_clone_default() {
         let m = ObligationMarking::default();
-        let dbg = format!("{:?}", m);
+        let dbg = format!("{m:?}");
         assert!(dbg.contains("ObligationMarking"));
 
-        let m2 = m.clone();
+        let m2 = m;
         assert!(m2.is_zero());
 
         let m3 = ObligationMarking::empty();
@@ -1426,20 +1426,20 @@ mod tests {
     #[test]
     fn marking_timeline_debug_clone_default() {
         let t = MarkingTimeline::default();
-        let dbg = format!("{:?}", t);
+        let dbg = format!("{t:?}");
         assert!(dbg.contains("MarkingTimeline"));
 
-        let t2 = t.clone();
+        let t2 = t;
         assert!(t2.snapshots.is_empty());
     }
 
     #[test]
     fn analysis_stats_debug_clone_default() {
         let s = AnalysisStats::default();
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("AnalysisStats"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s2.total_reserved, 0);
         assert_eq!(s2.total_committed, 0);
     }

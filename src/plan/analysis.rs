@@ -2656,10 +2656,10 @@ mod tests {
     #[test]
     fn obligation_safety_debug_clone_copy_ord() {
         let s = ObligationSafety::Clean;
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("Clean"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s, s2);
 
         // Copy
@@ -2675,10 +2675,10 @@ mod tests {
     #[test]
     fn cancel_safety_debug_clone_copy_ord() {
         let c = CancelSafety::Safe;
-        let dbg = format!("{:?}", c);
+        let dbg = format!("{c:?}");
         assert!(dbg.contains("Safe"));
 
-        let c2 = c.clone();
+        let c2 = c;
         assert_eq!(c, c2);
 
         let c3 = c;
@@ -2690,10 +2690,10 @@ mod tests {
     #[test]
     fn deadline_micros_debug_clone_copy_eq() {
         let d = DeadlineMicros(Some(1000));
-        let dbg = format!("{:?}", d);
+        let dbg = format!("{d:?}");
         assert!(dbg.contains("1000"));
 
-        let d2 = d.clone();
+        let d2 = d;
         assert_eq!(d, d2);
 
         let d3 = d;
@@ -2705,7 +2705,7 @@ mod tests {
     #[test]
     fn obligation_flow_debug_clone_default() {
         let f = ObligationFlow::default();
-        let dbg = format!("{:?}", f);
+        let dbg = format!("{f:?}");
         assert!(dbg.contains("ObligationFlow"));
 
         let f2 = f.clone();
@@ -2720,10 +2720,10 @@ mod tests {
     #[test]
     fn independence_result_debug_clone_copy_eq() {
         let r = IndependenceResult::Independent;
-        let dbg = format!("{:?}", r);
+        let dbg = format!("{r:?}");
         assert!(dbg.contains("Independent"));
 
-        let r2 = r.clone();
+        let r2 = r;
         assert_eq!(r, r2);
 
         let r3 = r;
@@ -2738,7 +2738,7 @@ mod tests {
     #[test]
     fn trace_equivalence_hint_debug_clone_eq() {
         let h = TraceEquivalenceHint::Atomic;
-        let dbg = format!("{:?}", h);
+        let dbg = format!("{h:?}");
         assert!(dbg.contains("Atomic"));
 
         let h2 = h.clone();

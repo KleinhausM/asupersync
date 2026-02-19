@@ -1656,7 +1656,7 @@ mod tests {
         set.insert(p3);
         assert_eq!(set.len(), 2);
 
-        let dbg = format!("{:?}", p1);
+        let dbg = format!("{p1:?}");
         assert!(dbg.contains("AwaitPoint"));
     }
 
@@ -1666,7 +1666,7 @@ mod tests {
         assert_eq!(m, InjectionMode::Recording);
 
         let m2 = m; // Copy
-        let m3 = m.clone();
+        let m3 = m;
         assert_eq!(m2, m3);
 
         let inj = InjectionMode::Injecting { target: 42 };
@@ -1700,7 +1700,7 @@ mod tests {
     fn instrumented_poll_result_debug_clone_copy_eq() {
         let r1: InstrumentedPollResult<i32> = InstrumentedPollResult::Inner(42);
         let r2 = r1; // Copy
-        let r3 = r1.clone();
+        let r3 = r1;
         assert_eq!(r1, r2);
         assert_eq!(r2, r3);
 

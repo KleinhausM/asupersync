@@ -153,7 +153,7 @@ mod tests {
         let dbg = format!("{l:?}");
         assert!(dbg.contains("Warn"), "{dbg}");
         let copied = l;
-        let cloned = l.clone();
+        let cloned = l;
         assert_eq!(copied, cloned);
         let def = LogLevel::default();
         assert_eq!(def, LogLevel::Info);

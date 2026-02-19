@@ -1331,7 +1331,7 @@ mod tests {
     fn body_kind_debug_clone_copy_eq() {
         let a = BodyKind::Chunked;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, BodyKind::Empty);

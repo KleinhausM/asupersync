@@ -1641,10 +1641,10 @@ mod tests {
     #[test]
     fn rewrite_policy_debug_clone_copy_default_eq() {
         let p = RewritePolicy::default();
-        let dbg = format!("{:?}", p);
+        let dbg = format!("{p:?}");
         assert!(dbg.contains("RewritePolicy"));
 
-        let p2 = p.clone();
+        let p2 = p;
         assert_eq!(p, p2);
 
         // Copy
@@ -1659,10 +1659,10 @@ mod tests {
     #[test]
     fn algebraic_law_debug_clone_copy_eq_hash() {
         let law = AlgebraicLaw::Associativity;
-        let dbg = format!("{:?}", law);
+        let dbg = format!("{law:?}");
         assert!(dbg.contains("Associativity"));
 
-        let law2 = law.clone();
+        let law2 = law;
         assert_eq!(law, law2);
 
         let law3 = law;
@@ -1680,10 +1680,10 @@ mod tests {
     #[test]
     fn rewrite_rule_debug_clone_copy_eq() {
         let r = RewriteRule::JoinAssoc;
-        let dbg = format!("{:?}", r);
+        let dbg = format!("{r:?}");
         assert!(dbg.contains("JoinAssoc"));
 
-        let r2 = r.clone();
+        let r2 = r;
         assert_eq!(r, r2);
 
         let r3 = r;
@@ -1695,10 +1695,10 @@ mod tests {
     #[test]
     fn rewrite_report_debug_clone_default() {
         let rr = RewriteReport::default();
-        let dbg = format!("{:?}", rr);
+        let dbg = format!("{rr:?}");
         assert!(dbg.contains("RewriteReport"));
 
-        let rr2 = rr.clone();
+        let rr2 = rr;
         assert_eq!(rr2.steps().len(), 0);
     }
 }

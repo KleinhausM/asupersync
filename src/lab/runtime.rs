@@ -3880,7 +3880,7 @@ mod tests {
             schedule_hash: 789,
         };
         let copied = summary;
-        let cloned = summary.clone();
+        let cloned = summary;
         assert_eq!(copied, cloned);
         assert_ne!(
             summary,
@@ -3929,7 +3929,7 @@ mod tests {
         // Copy/Clone/Eq
         for &k in &kinds {
             let copied = k;
-            let cloned = k.clone();
+            let cloned = k;
             assert_eq!(copied, cloned);
         }
         // Hash
@@ -3979,7 +3979,7 @@ mod tests {
             budget_exhaust_probability: 0.03,
         };
         let copied = summary;
-        let cloned = summary.clone();
+        let cloned = summary;
         assert_eq!(copied, cloned);
         let dbg = format!("{summary:?}");
         assert!(dbg.contains("ChaosConfigSummary"));

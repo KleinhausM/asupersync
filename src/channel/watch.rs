@@ -1519,7 +1519,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Closed"), "{dbg}");
         let copied: SendError<i32> = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
     }
 
@@ -1529,7 +1529,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Closed"), "{dbg}");
         let copied: RecvError = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
         assert_ne!(e, RecvError::Cancelled);
     }
@@ -1540,7 +1540,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("ModifyError"), "{dbg}");
         let copied: ModifyError = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
     }
 }

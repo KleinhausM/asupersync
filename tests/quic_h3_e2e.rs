@@ -365,7 +365,7 @@ fn h3_frame_encode_decode_over_stream() {
         max_field_section_size: Some(16384),
         ..H3Settings::default()
     };
-    let settings_frame = H3Frame::Settings(settings.clone());
+    let settings_frame = H3Frame::Settings(settings);
 
     // Encode the SETTINGS frame.
     let mut wire = Vec::new();
@@ -493,7 +493,7 @@ fn h3_request_response_lifecycle() {
 
     // Client sends DATA.
     let data_bytes: Vec<u8> = (0..64).map(|_| (rng.next_u64() & 0xFF) as u8).collect();
-    let data_frame = H3Frame::Data(data_bytes.clone());
+    let data_frame = H3Frame::Data(data_bytes);
     request_stream_state.on_frame(&data_frame).expect("data ok");
 
     server_h3
@@ -626,7 +626,7 @@ fn key_update_lifecycle() {
             assert!(next_phase, "phase should flip to true");
             assert_eq!(generation, 1);
         }
-        other => panic!("expected LocalUpdateScheduled, got {:?}", other),
+        other => panic!("expected LocalUpdateScheduled, got {other:?}"),
     }
 
     // Commit the key update.
@@ -642,7 +642,7 @@ fn key_update_lifecycle() {
             assert!(next_phase);
             assert_eq!(generation, 1);
         }
-        other => panic!("expected LocalUpdateScheduled, got {:?}", other),
+        other => panic!("expected LocalUpdateScheduled, got {other:?}"),
     }
 
     assert!(pair.client.tls().local_key_phase());
@@ -660,7 +660,7 @@ fn key_update_lifecycle() {
             assert!(new_phase);
             assert_eq!(generation, 1);
         }
-        other => panic!("expected RemoteUpdateAccepted, got {:?}", other),
+        other => panic!("expected RemoteUpdateAccepted, got {other:?}"),
     }
 
     assert!(pair.server.tls().remote_key_phase());
@@ -833,7 +833,7 @@ fn h3_goaway_and_connection_drain() {
         .on_request_stream_frame(s1.0, &H3Frame::Headers(vec![0x80]))
         .expect_err("should reject after goaway");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: request stream id rejected after GOAWAY"
     );
 
@@ -1131,15 +1131,13 @@ fn multiple_concurrent_bidi_streams() {
         let client_view = pair.client.streams().stream(s).expect("client stream");
         assert_eq!(
             client_view.send_offset, expected,
-            "stream {} send_offset mismatch",
-            i
+            "stream {i} send_offset mismatch"
         );
 
         let server_view = pair.server.streams().stream(s).expect("server stream");
         assert_eq!(
             server_view.recv_offset, expected,
-            "stream {} recv_offset mismatch",
-            i
+            "stream {i} recv_offset mismatch"
         );
     }
 
@@ -1216,8 +1214,7 @@ fn stream_fin_sets_final_size() {
                 asupersync::net::quic_native::streams::QuicStreamError::InvalidFinalSize { .. }
             )
         ),
-        "expected InvalidFinalSize, got {:?}",
-        err
+        "expected InvalidFinalSize, got {err:?}"
     );
 }
 
@@ -1498,8 +1495,7 @@ fn interleaved_uni_and_bidi_streams() {
         let sv = pair.server.streams().stream(s).expect("stream");
         assert_eq!(
             sv.recv_offset, expected_len,
-            "stream {:?} recv_offset mismatch",
-            s
+            "stream {s:?} recv_offset mismatch"
         );
     }
 

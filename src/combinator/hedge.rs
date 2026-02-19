@@ -897,7 +897,7 @@ mod tests {
     fn hedge_config_debug_clone_copy_eq() {
         let c = HedgeConfig::from_millis(100);
         let c2 = c; // Copy
-        let c3 = c.clone();
+        let c3 = c;
         assert_eq!(c, c2);
         assert_eq!(c, c3);
         assert_ne!(c, HedgeConfig::from_secs(5));
@@ -909,7 +909,7 @@ mod tests {
     fn hedge_winner_debug_clone_copy_eq() {
         let w = HedgeWinner::Primary;
         let w2 = w; // Copy
-        let w3 = w.clone();
+        let w3 = w;
         assert_eq!(w, w2);
         assert_eq!(w, w3);
         assert_ne!(w, HedgeWinner::Backup);

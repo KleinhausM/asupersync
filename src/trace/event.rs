@@ -2277,7 +2277,7 @@ mod tests {
         use std::collections::HashSet;
         let k = TraceEventKind::Spawn;
         let k2 = k; // Copy
-        let k3 = k.clone();
+        let k3 = k;
         assert_eq!(k, k2);
         assert_eq!(k, k3);
         assert_ne!(k, TraceEventKind::Complete);

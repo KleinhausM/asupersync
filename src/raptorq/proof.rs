@@ -1044,7 +1044,7 @@ mod tests {
             },
         ];
         for v in &variants {
-            assert!(format!("{v:?}").len() > 0);
+            assert!(!format!("{v:?}").is_empty());
         }
     }
 

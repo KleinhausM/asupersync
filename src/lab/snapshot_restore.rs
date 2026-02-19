@@ -945,7 +945,7 @@ mod tests {
         assert_eq!(s.resolved_obligation_count, 0);
         assert_eq!(s.closed_region_count, 0);
 
-        let s2 = s.clone();
+        let s2 = s;
         let dbg = format!("{s2:?}");
         assert!(dbg.contains("SnapshotStats"));
     }
@@ -957,7 +957,7 @@ mod tests {
             errors: vec![],
             stats: SnapshotStats::default(),
         };
-        let vr2 = vr.clone();
+        let vr2 = vr;
         assert!(vr2.is_valid);
         assert!(vr2.errors.is_empty());
         let dbg = format!("{vr2:?}");

@@ -342,7 +342,7 @@ mod tests {
         let desc = ServiceDescriptor::new("Greeter", "helloworld", METHODS_GREETER);
         let dbg = format!("{desc:?}");
         assert!(dbg.contains("ServiceDescriptor"), "{dbg}");
-        let cloned = desc.clone();
+        let cloned = desc;
         assert_eq!(cloned.name, "Greeter");
         assert_eq!(cloned.package, "helloworld");
         assert_eq!(cloned.methods.len(), 1);

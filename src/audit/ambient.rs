@@ -611,7 +611,7 @@ let x = Instant::now();
         let dbg = format!("{c:?}");
         assert!(dbg.contains("Time"), "{dbg}");
         let copied = c;
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(copied, cloned);
         let mut set = HashSet::new();
         set.insert(c);
@@ -624,7 +624,7 @@ let x = Instant::now();
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Warning"), "{dbg}");
         let copied = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
     }
 }

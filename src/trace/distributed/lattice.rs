@@ -625,7 +625,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Committed"), "{dbg}");
         let copied: LatticeState = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
 
         let mut set = HashSet::new();
@@ -644,7 +644,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Active"), "{dbg}");
         let copied: LeaseLatticeState = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
 
         let mut set = HashSet::new();

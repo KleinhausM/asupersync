@@ -1110,7 +1110,7 @@ mod tests {
             obligation_type: "Ack".into(),
             holder_task: Some(TaskId::new_for_test(2, 0)),
             region_id: RegionId::new_for_test(1, 0),
-            age: std::time::Duration::from_secs(60),
+            age: std::time::Duration::from_mins(1),
         };
         let leak2 = leak;
         assert!(format!("{leak2:?}").contains("ObligationLeak"));

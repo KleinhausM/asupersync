@@ -163,7 +163,7 @@ mod tests {
         let k1 = AuthKey::from_seed(1);
         let k2 = AuthKey::from_seed(2);
         let copied = k1;
-        let cloned = k1.clone();
+        let cloned = k1;
         assert_eq!(copied, cloned);
         assert_ne!(k1, k2);
 

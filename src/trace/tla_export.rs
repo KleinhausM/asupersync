@@ -672,7 +672,7 @@ mod tests {
         let snap = TlaStateSnapshot::new();
         let dbg = format!("{snap:?}");
         assert!(dbg.contains("TlaStateSnapshot"));
-        let snap2 = snap.clone();
+        let snap2 = snap;
         assert_eq!(snap2.step, 0);
         assert_eq!(snap2.time_nanos, 0);
         assert!(snap2.tasks.is_empty());
@@ -735,7 +735,7 @@ mod tests {
         map.insert(1, (TlaRegionState::Open, Some(0)));
         let result = format_tla_region_map(&map);
         assert!(result.contains("\"Open\""));
-        assert!(result.contains("0"));
+        assert!(result.contains('0'));
     }
 
     #[test]
@@ -758,7 +758,7 @@ mod tests {
         map.insert(1, (TlaObligationState::Committed, 2, 3));
         let result = format_tla_obligation_map(&map);
         assert!(result.contains("\"Committed\""));
-        assert!(result.contains("2"));
-        assert!(result.contains("3"));
+        assert!(result.contains('2'));
+        assert!(result.contains('3'));
     }
 }

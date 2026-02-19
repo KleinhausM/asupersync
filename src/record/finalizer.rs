@@ -263,7 +263,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("BoundedLog"), "{dbg}");
         let copied = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
         let def = FinalizerEscalation::default();
         assert_eq!(def, FinalizerEscalation::BoundedLog);

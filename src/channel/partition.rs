@@ -760,7 +760,7 @@ mod tests {
         let b = ActorId::new(2);
         let dbg = format!("{a:?}");
         assert!(dbg.contains("ActorId"));
-        let _cloned = a.clone();
+        let _cloned = a;
         let _copied = a; // Copy
         assert_eq!(a, a);
         assert_ne!(a, b);
@@ -787,7 +787,7 @@ mod tests {
         assert!(dbg.contains("PartitionStats"));
         let display = format!("{stats}");
         assert!(display.contains("created: 0"));
-        let cloned = stats.clone();
+        let cloned = stats;
         assert_eq!(cloned.partitions_created, 0);
     }
 
@@ -797,7 +797,7 @@ mod tests {
         let err_b = PartitionBehavior::Error;
         let dbg = format!("{drop_b:?}");
         assert!(dbg.contains("Drop"));
-        let _cloned = drop_b.clone();
+        let _cloned = drop_b;
         let _copied = drop_b; // Copy
         assert_eq!(drop_b, PartitionBehavior::Drop);
         assert_ne!(drop_b, err_b);

@@ -2407,7 +2407,7 @@ mod tests {
         };
         let dbg = format!("{v:?}");
         assert!(dbg.contains("SLViolation"), "{dbg}");
-        let cloned = v.clone();
+        let cloned = v;
         assert_eq!(cloned.description, "test violation");
     }
 
@@ -2422,7 +2422,7 @@ mod tests {
         };
         let dbg = format!("{result:?}");
         assert!(dbg.contains("VerificationResult"), "{dbg}");
-        let cloned = result.clone();
+        let cloned = result;
         assert!(cloned.is_sound());
         assert_eq!(cloned.events_checked, 10);
     }

@@ -1968,10 +1968,10 @@ mod tests {
     #[test]
     fn frame_type_debug_clone_copy_eq_hash() {
         let ft = FrameType::Headers;
-        let dbg = format!("{:?}", ft);
+        let dbg = format!("{ft:?}");
         assert!(dbg.contains("Headers"));
 
-        let ft2 = ft.clone();
+        let ft2 = ft;
         assert_eq!(ft, ft2);
 
         // Copy
@@ -1996,10 +1996,10 @@ mod tests {
             flags: 0x4,
             stream_id: 1,
         };
-        let dbg = format!("{:?}", fh);
+        let dbg = format!("{fh:?}");
         assert!(dbg.contains("FrameHeader"));
 
-        let fh2 = fh.clone();
+        let fh2 = fh;
         assert_eq!(fh, fh2);
 
         let fh3 = fh;
@@ -2013,10 +2013,10 @@ mod tests {
             dependency: 0,
             weight: 16,
         };
-        let dbg = format!("{:?}", ps);
+        let dbg = format!("{ps:?}");
         assert!(dbg.contains("PrioritySpec"));
 
-        let ps2 = ps.clone();
+        let ps2 = ps;
         assert_eq!(ps, ps2);
 
         let ps3 = ps;
@@ -2026,10 +2026,10 @@ mod tests {
     #[test]
     fn settings_frame_debug_clone_default() {
         let sf = SettingsFrame::default();
-        let dbg = format!("{:?}", sf);
+        let dbg = format!("{sf:?}");
         assert!(dbg.contains("SettingsFrame"));
 
-        let sf2 = sf.clone();
+        let sf2 = sf;
         assert_eq!(sf2.settings.len(), 0);
         assert!(!sf2.ack);
     }
@@ -2037,11 +2037,11 @@ mod tests {
     #[test]
     fn setting_debug_clone_copy_eq() {
         let s = Setting::HeaderTableSize(4096);
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("HeaderTableSize"));
         assert!(dbg.contains("4096"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s, s2);
 
         let s3 = s;

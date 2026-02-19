@@ -619,7 +619,7 @@ mod tests {
     fn monitor_config_debug_clone_copy() {
         let c = MonitorConfig::default();
         let c2 = c; // Copy
-        let c3 = c.clone();
+        let c3 = c;
         assert!((c2.alpha - 0.01).abs() < 1e-10);
         assert_eq!(c3.min_observations, 3);
         let dbg = format!("{c:?}");
@@ -630,7 +630,7 @@ mod tests {
     fn alert_state_debug_clone_copy_eq() {
         let s = AlertState::Clear;
         let s2 = s; // Copy
-        let s3 = s.clone();
+        let s3 = s;
         assert_eq!(s, s2);
         assert_eq!(s2, s3);
         assert_ne!(s, AlertState::Alert);
@@ -648,7 +648,7 @@ mod tests {
             peak_e_value: 2.0,
             alert_count: 0,
         };
-        let ms2 = ms.clone();
+        let ms2 = ms;
         assert_eq!(ms2.observations, 10);
         assert_eq!(ms2.alert_state, AlertState::Watching);
         let dbg = format!("{ms2:?}");

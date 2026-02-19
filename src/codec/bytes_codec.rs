@@ -120,11 +120,11 @@ mod tests {
 
     #[test]
     fn bytes_codec_debug_clone_copy_default() {
-        let codec = BytesCodec::default();
+        let codec = BytesCodec;
         let dbg = format!("{codec:?}");
         assert_eq!(dbg, "BytesCodec");
         let copied = codec;
-        let cloned = codec.clone();
+        let cloned = codec;
         assert_eq!(format!("{copied:?}"), format!("{cloned:?}"));
     }
 }

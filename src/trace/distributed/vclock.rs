@@ -1133,7 +1133,7 @@ mod tests {
         let dbg = format!("{ht:?}");
         assert!(dbg.contains("HybridTime"), "{dbg}");
         let copied = ht;
-        let cloned = ht.clone();
+        let cloned = ht;
         assert_eq!(copied, cloned);
 
         let earlier = HybridTime::new(Time::ZERO, 0);
@@ -1152,7 +1152,7 @@ mod tests {
         let dbg = format!("{k:?}");
         assert!(dbg.contains("Lamport"), "{dbg}");
         let copied = k;
-        let cloned = k.clone();
+        let cloned = k;
         assert_eq!(copied, cloned);
         assert_ne!(k, LogicalClockKind::Vector);
         assert_ne!(k, LogicalClockKind::Hybrid);
@@ -1172,7 +1172,7 @@ mod tests {
         let mode = LogicalClockMode::Lamport;
         let dbg = format!("{mode:?}");
         assert!(dbg.contains("Lamport"), "{dbg}");
-        let cloned = mode.clone();
+        let cloned = mode;
         let dbg2 = format!("{cloned:?}");
         assert_eq!(dbg, dbg2);
     }

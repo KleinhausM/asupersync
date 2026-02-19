@@ -487,13 +487,13 @@ mod tests {
         let dbg = format!("{layer:?}");
         assert!(dbg.contains("LoadShedLayer"));
 
-        let cloned = layer.clone();
+        let cloned = layer;
         let _ = format!("{cloned:?}");
 
         let copied = layer; // Copy
         let _ = format!("{copied:?}");
 
-        let default = LoadShedLayer::default();
+        let default = LoadShedLayer;
         let _ = format!("{default:?}");
     }
 
@@ -524,7 +524,7 @@ mod tests {
         let dbg = format!("{err:?}");
         assert!(dbg.contains("Overloaded"));
 
-        let cloned = err.clone();
+        let cloned = err;
         assert_eq!(err, cloned);
 
         let copied = err; // Copy
@@ -564,7 +564,7 @@ mod tests {
         assert!(err.source().is_some()); // Overloaded implements Error
 
         let inner: LoadShedError<io::Error> =
-            LoadShedError::Inner(io::Error::new(io::ErrorKind::Other, "test"));
+            LoadShedError::Inner(io::Error::other("test"));
         let err: &dyn std::error::Error = &inner;
         assert!(err.source().is_some());
     }

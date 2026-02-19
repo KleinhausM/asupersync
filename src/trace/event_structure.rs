@@ -412,7 +412,7 @@ mod tests {
         let id = EventId::new(5);
         let id2 = id;
         assert_eq!(id, id2);
-        assert!(format!("{id:?}").contains("5"));
+        assert!(format!("{id:?}").contains('5'));
 
         use std::collections::HashSet;
         let mut set = HashSet::new();
@@ -504,7 +504,7 @@ mod tests {
     fn trace_poset_debug_clone() {
         let trace = vec![TraceEvent::user_trace(1, Time::from_nanos(10), "a")];
         let poset = TracePoset::from_trace(&trace);
-        let poset2 = poset.clone();
+        let poset2 = poset;
         assert!(format!("{poset2:?}").contains("TracePoset"));
     }
 

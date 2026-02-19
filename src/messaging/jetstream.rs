@@ -1518,7 +1518,7 @@ mod tests {
         let dbg = format!("{r:?}");
         assert!(dbg.contains("Limits"), "{dbg}");
         let copied: RetentionPolicy = r;
-        let cloned = r.clone();
+        let cloned = r;
         assert_eq!(copied, cloned);
         assert_ne!(r, RetentionPolicy::WorkQueue);
     }
@@ -1530,7 +1530,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("File"), "{dbg}");
         let copied: StorageType = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         assert_ne!(s, StorageType::Memory);
     }
@@ -1542,7 +1542,7 @@ mod tests {
         let dbg = format!("{d:?}");
         assert!(dbg.contains("Old"), "{dbg}");
         let copied: DiscardPolicy = d;
-        let cloned = d.clone();
+        let cloned = d;
         assert_eq!(copied, cloned);
         assert_ne!(d, DiscardPolicy::New);
     }
@@ -1553,7 +1553,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("StreamState"), "{dbg}");
         assert_eq!(s.messages, 0);
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 }

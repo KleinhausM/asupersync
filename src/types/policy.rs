@@ -384,32 +384,32 @@ mod tests {
         let d1: AggregateDecision<crate::error::Error> = AggregateDecision::AllOk;
         let dbg = format!("{d1:?}");
         assert!(dbg.contains("AllOk"), "{dbg}");
-        let _cloned = d1.clone();
+        let _cloned = d1;
 
         let d2: AggregateDecision<crate::error::Error> =
             AggregateDecision::Cancelled(CancelReason::timeout());
         let dbg2 = format!("{d2:?}");
         assert!(dbg2.contains("Cancelled"), "{dbg2}");
-        let _cloned2 = d2.clone();
+        let _cloned2 = d2;
     }
 
     #[test]
     fn fail_fast_debug_clone_copy_default() {
-        let ff = FailFast::default();
+        let ff = FailFast;
         let dbg = format!("{ff:?}");
         assert_eq!(dbg, "FailFast");
         let copied = ff;
-        let cloned = ff.clone();
+        let cloned = ff;
         assert_eq!(format!("{copied:?}"), format!("{cloned:?}"));
     }
 
     #[test]
     fn collect_all_debug_clone_copy_default() {
-        let ca = CollectAll::default();
+        let ca = CollectAll;
         let dbg = format!("{ca:?}");
         assert_eq!(dbg, "CollectAll");
         let copied = ca;
-        let cloned = ca.clone();
+        let cloned = ca;
         assert_eq!(format!("{copied:?}"), format!("{cloned:?}"));
     }
 }

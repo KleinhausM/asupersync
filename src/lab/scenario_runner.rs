@@ -952,7 +952,7 @@ mod tests {
             trace_fingerprint: 444,
         };
         let cert2 = cert; // Copy
-        let cert3 = cert.clone();
+        let cert3 = cert;
         assert_eq!(cert, cert2);
         assert_eq!(cert2, cert3);
         let dbg = format!("{cert:?}");
@@ -969,7 +969,7 @@ mod tests {
             fingerprint: 999,
             failures: vec![],
         };
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s2.seed, 42);
         assert!(s2.passed);
         assert_eq!(s2.steps, 100);
@@ -996,7 +996,7 @@ mod tests {
             }],
             first_failure_seed: Some(5),
         };
-        let r2 = r.clone();
+        let r2 = r;
         assert_eq!(r2.scenario_id, "test-explore");
         assert_eq!(r2.seeds_explored, 10);
         assert_eq!(r2.first_failure_seed, Some(5));

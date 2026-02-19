@@ -575,7 +575,7 @@ mod tests {
         let dbg = format!("{m:?}");
         assert!(dbg.contains("Adaptive"), "{dbg}");
         let copied: MigrationMode = m;
-        let cloned = m.clone();
+        let cloned = m;
         assert_eq!(copied, cloned);
         assert_eq!(MigrationMode::default(), MigrationMode::PreferTraditional);
         assert_ne!(m, MigrationMode::TraditionalOnly);
@@ -588,7 +588,7 @@ mod tests {
         let dbg = format!("{f:?}");
         assert!(dbg.contains("JoinEncoding"), "{dbg}");
         let copied: MigrationFeature = f;
-        let cloned = f.clone();
+        let cloned = f;
         assert_eq!(copied, cloned);
 
         let mut set = HashSet::new();
@@ -603,7 +603,7 @@ mod tests {
         let c = MigrationConfig::default();
         let dbg = format!("{c:?}");
         assert!(dbg.contains("MigrationConfig"), "{dbg}");
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 }

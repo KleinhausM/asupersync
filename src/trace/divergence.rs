@@ -1688,7 +1688,7 @@ mod tests {
         let cfg = DiagnosticConfig::default();
         let dbg = format!("{cfg:?}");
         assert!(dbg.contains("DiagnosticConfig"), "{dbg}");
-        let cloned = cfg.clone();
+        let cloned = cfg;
         assert_eq!(cloned.context_before, 10);
     }
 
@@ -1697,7 +1697,7 @@ mod tests {
         let ae = AffectedEntities::default();
         let dbg = format!("{ae:?}");
         assert!(dbg.contains("AffectedEntities"), "{dbg}");
-        let cloned = ae.clone();
+        let cloned = ae;
         assert!(cloned.tasks.is_empty());
     }
 }

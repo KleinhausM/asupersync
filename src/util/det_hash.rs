@@ -329,8 +329,8 @@ mod tests {
     #[test]
     fn det_build_hasher_clone_default() {
         let b1 = DetBuildHasher;
-        let b2 = b1.clone();
-        let b3 = DetBuildHasher::default();
+        let b2 = b1;
+        let b3 = DetBuildHasher;
         let mut x = b2.build_hasher();
         let mut y = b3.build_hasher();
         x.write(b"same");

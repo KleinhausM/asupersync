@@ -853,7 +853,7 @@ mod tests {
         let dbg = format!("{p:?}");
         assert!(dbg.contains("Draining"), "{dbg}");
         let copied: ShutdownPhase = p;
-        let cloned = p.clone();
+        let cloned = p;
         assert_eq!(copied, cloned);
         assert_ne!(p, ShutdownPhase::Running);
     }
@@ -867,7 +867,7 @@ mod tests {
         };
         let dbg = format!("{s:?}");
         assert!(dbg.contains("ShutdownStats"), "{dbg}");
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 }

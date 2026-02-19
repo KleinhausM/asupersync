@@ -456,7 +456,7 @@ mod tests {
         let dbg = format!("{layer:?}");
         assert!(dbg.contains("TimeoutLayer"), "{dbg}");
         let copied = layer;
-        let cloned = layer.clone();
+        let cloned = layer;
         assert_eq!(copied.timeout(), cloned.timeout());
     }
 

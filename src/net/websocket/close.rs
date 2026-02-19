@@ -749,7 +749,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Open"), "{dbg}");
         let copied = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         assert_ne!(s, CloseState::CloseSent);
     }

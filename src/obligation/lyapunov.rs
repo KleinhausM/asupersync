@@ -2238,10 +2238,10 @@ mod tests {
     #[test]
     fn potential_weights_debug_clone_copy_default() {
         let w = PotentialWeights::default();
-        let dbg = format!("{:?}", w);
+        let dbg = format!("{w:?}");
         assert!(dbg.contains("PotentialWeights"));
 
-        let w2 = w.clone();
+        let w2 = w;
         assert!((w2.w_tasks - 1.0).abs() < f64::EPSILON);
 
         // Copy
@@ -2252,10 +2252,10 @@ mod tests {
     #[test]
     fn scheduling_suggestion_debug_clone_copy_eq() {
         let s = SchedulingSuggestion::DrainObligations;
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("DrainObligations"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s, s2);
 
         let s3 = s;
@@ -2293,10 +2293,10 @@ mod tests {
             region_component: 0.0,
             deadline_component: 0.0,
         };
-        let dbg = format!("{:?}", rec);
+        let dbg = format!("{rec:?}");
         assert!(dbg.contains("PotentialRecord"));
 
-        let rec2 = rec.clone();
+        let rec2 = rec;
         assert!(rec2.is_zero());
     }
 }

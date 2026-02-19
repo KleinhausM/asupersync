@@ -274,7 +274,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Interrupt"), "{dbg}");
         let copied = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         let mut set = HashSet::new();
         set.insert(s);

@@ -1819,10 +1819,10 @@ mod tests {
         dag.set_root(a);
         let h = PlanHash::of(&dag);
 
-        let dbg = format!("{:?}", h);
+        let dbg = format!("{h:?}");
         assert!(dbg.contains("PlanHash"));
 
-        let h2 = h.clone();
+        let h2 = h;
         assert_eq!(h, h2);
 
         // Copy
@@ -1839,10 +1839,10 @@ mod tests {
     #[test]
     fn certificate_version_debug_clone_copy_eq() {
         let v = CertificateVersion::CURRENT;
-        let dbg = format!("{:?}", v);
+        let dbg = format!("{v:?}");
         assert!(dbg.contains("CertificateVersion"));
 
-        let v2 = v.clone();
+        let v2 = v;
         assert_eq!(v, v2);
 
         let v3 = v;
@@ -1856,10 +1856,10 @@ mod tests {
             before: 10,
             after: 20,
         };
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("CompactStep"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s, s2);
 
         let s3 = s;

@@ -235,7 +235,7 @@ mod tests {
         let dbg = format!("{m:?}");
         assert!(dbg.contains("Strict"), "{dbg}");
         let copied = m;
-        let cloned = m.clone();
+        let cloned = m;
         assert_eq!(copied, cloned);
         assert_ne!(AuthMode::Strict, AuthMode::Permissive);
         assert_ne!(AuthMode::Permissive, AuthMode::Disabled);
@@ -256,7 +256,7 @@ mod tests {
         let ctx = SecurityContext::for_testing(42);
         let dbg = format!("{ctx:?}");
         assert!(dbg.contains("SecurityContext"), "{dbg}");
-        let cloned = ctx.clone();
+        let cloned = ctx;
         let dbg2 = format!("{cloned:?}");
         assert!(dbg2.contains("SecurityContext"), "{dbg2}");
     }

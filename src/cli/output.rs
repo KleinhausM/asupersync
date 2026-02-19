@@ -439,10 +439,10 @@ mod tests {
         let f = OutputFormat::default();
         assert_eq!(f, OutputFormat::Human);
 
-        let dbg = format!("{:?}", f);
+        let dbg = format!("{f:?}");
         assert!(dbg.contains("Human"));
 
-        let f2 = f.clone();
+        let f2 = f;
         assert_eq!(f, f2);
 
         // Copy
@@ -457,10 +457,10 @@ mod tests {
         let c = ColorChoice::default();
         assert_eq!(c, ColorChoice::Auto);
 
-        let dbg = format!("{:?}", c);
+        let dbg = format!("{c:?}");
         assert!(dbg.contains("Auto"));
 
-        let c2 = c.clone();
+        let c2 = c;
         assert_eq!(c, c2);
 
         // Copy

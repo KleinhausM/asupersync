@@ -579,7 +579,7 @@ mod tests {
         let a = AutoOffsetReset::default();
         assert_eq!(a, AutoOffsetReset::Latest);
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, AutoOffsetReset::Earliest);
@@ -593,7 +593,7 @@ mod tests {
         let a = IsolationLevel::default();
         assert_eq!(a, IsolationLevel::ReadUncommitted);
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, IsolationLevel::ReadCommitted);

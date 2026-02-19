@@ -755,7 +755,7 @@ mod tests {
         assert!(dbg.contains("example.com"));
         assert!(dbg.contains("443"));
         let mut set = HashSet::new();
-        set.insert(a.clone());
+        set.insert(a);
         assert!(set.contains(&b));
     }
 
@@ -763,7 +763,7 @@ mod tests {
     fn pooled_connection_state_debug_clone_copy_eq() {
         let a = PooledConnectionState::Idle;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, PooledConnectionState::InUse);

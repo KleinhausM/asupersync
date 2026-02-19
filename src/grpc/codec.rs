@@ -425,13 +425,13 @@ mod tests {
         let dbg = format!("{msg:?}");
         assert!(dbg.contains("GrpcMessage"), "{dbg}");
         assert!(!msg.compressed);
-        let cloned = msg.clone();
-        assert_eq!(cloned.compressed, false);
+        let cloned = msg;
+        assert!(!cloned.compressed);
         assert_eq!(cloned.data, Bytes::from_static(b"hello"));
 
         let compressed = GrpcMessage::compressed(Bytes::from_static(b"zz"));
         assert!(compressed.compressed);
-        let cloned2 = compressed.clone();
+        let cloned2 = compressed;
         assert!(cloned2.compressed);
     }
 
@@ -455,9 +455,9 @@ mod tests {
         let dbg = format!("{ic:?}");
         assert!(dbg.contains("IdentityCodec"), "{dbg}");
         let copied = ic;
-        let cloned = ic.clone();
+        let cloned = ic;
         assert_eq!(format!("{copied:?}"), format!("{cloned:?}"));
-        let def = IdentityCodec::default();
+        let def = IdentityCodec;
         assert_eq!(format!("{def:?}"), dbg);
     }
 }

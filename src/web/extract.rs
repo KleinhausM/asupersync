@@ -553,7 +553,7 @@ mod tests {
         assert!(dbg.contains("Request"));
         assert!(dbg.contains("GET"));
 
-        let r2 = r.clone();
+        let r2 = r;
         assert_eq!(r2.method, "GET");
         assert_eq!(r2.path, "/api/v1");
     }
@@ -564,7 +564,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Extensions"));
 
-        let e2 = e.clone();
+        let e2 = e;
         assert!(e2.get("missing").is_none());
     }
 
@@ -575,7 +575,7 @@ mod tests {
         assert!(dbg.contains("ExtractionError"));
         assert!(dbg.contains("missing field"));
 
-        let e2 = e.clone();
+        let e2 = e;
         assert_eq!(e2.message, "missing field");
     }
 }

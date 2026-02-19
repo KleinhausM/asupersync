@@ -1225,10 +1225,10 @@ mod tests {
     #[test]
     fn saga_op_kind_debug_clone_copy_eq_hash() {
         let op = SagaOpKind::Reserve;
-        let dbg = format!("{:?}", op);
+        let dbg = format!("{op:?}");
         assert!(dbg.contains("Reserve"));
 
-        let op2 = op.clone();
+        let op2 = op;
         assert_eq!(op, op2);
 
         let op3 = op;
@@ -1246,10 +1246,10 @@ mod tests {
     #[test]
     fn saga_step_debug_clone() {
         let s = SagaStep::new(SagaOpKind::Acquire, "lease");
-        let dbg = format!("{:?}", s);
+        let dbg = format!("{s:?}");
         assert!(dbg.contains("SagaStep"));
 
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s2.label, "lease");
         assert_eq!(s2.op, SagaOpKind::Acquire);
     }
@@ -1261,7 +1261,7 @@ mod tests {
             op: SagaOpKind::Reserve,
             state: LatticeState::Reserved,
         };
-        let dbg = format!("{:?}", r);
+        let dbg = format!("{r:?}");
         assert!(dbg.contains("StepResult"));
 
         let r2 = r.clone();

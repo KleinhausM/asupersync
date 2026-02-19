@@ -1164,7 +1164,7 @@ mod tests {
         assert_eq!(caps2.height, 40);
 
         // Clone
-        let caps3 = caps.clone();
+        let caps3 = caps;
         assert_eq!(caps, caps3);
     }
 
@@ -1251,7 +1251,7 @@ mod tests {
         assert_eq!(styled, styled2);
 
         // Clone
-        let styled3 = styled.clone();
+        let styled3 = styled;
         assert_eq!(styled, styled3);
     }
 

@@ -1476,7 +1476,7 @@ mod tests {
         let dbg = format!("{op:?}");
         assert!(dbg.contains("Text"), "{dbg}");
         let copied = op;
-        let cloned = op.clone();
+        let cloned = op;
         assert_eq!(copied, cloned);
 
         let mut set = HashSet::new();
@@ -1491,7 +1491,7 @@ mod tests {
         let f = Frame::text("hello");
         let dbg = format!("{f:?}");
         assert!(dbg.contains("Frame"), "{dbg}");
-        let cloned = f.clone();
+        let cloned = f;
         assert_eq!(cloned.opcode, Opcode::Text);
     }
 
@@ -1501,7 +1501,7 @@ mod tests {
         let dbg = format!("{r:?}");
         assert!(dbg.contains("Client"), "{dbg}");
         let copied = r;
-        let cloned = r.clone();
+        let cloned = r;
         assert_eq!(copied, cloned);
         assert_ne!(r, Role::Server);
     }
@@ -1512,7 +1512,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("Normal"), "{dbg}");
         let copied = c;
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(copied, cloned);
         assert_ne!(c, CloseCode::GoingAway);
     }

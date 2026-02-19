@@ -1231,7 +1231,7 @@ mod tests {
         let dbg = format!("{fmt:?}");
         assert!(dbg.contains("Json"), "{dbg}");
         let copied = fmt;
-        let cloned = fmt.clone();
+        let cloned = fmt;
         assert_eq!(copied, cloned);
         assert_ne!(fmt, SerializationFormat::Bincode);
     }

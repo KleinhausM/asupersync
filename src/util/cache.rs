@@ -146,7 +146,7 @@ mod tests {
         assert!(dbg.contains("42"), "{dbg}");
 
         let copied: CachePadded<u64> = p;
-        let cloned = p.clone();
+        let cloned = p;
         assert_eq!(*copied, 42);
         assert_eq!(*cloned, 42);
     }

@@ -2409,7 +2409,7 @@ mod tests {
     #[test]
     fn header_debug_clone_eq() {
         let h = Header::new("content-type", "application/json");
-        let dbg = format!("{:?}", h);
+        let dbg = format!("{h:?}");
         assert!(dbg.contains("content-type"));
         assert!(dbg.contains("application/json"));
 

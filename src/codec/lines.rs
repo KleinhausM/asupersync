@@ -172,7 +172,7 @@ mod tests {
         assert!(format!("{e2}").contains("not valid UTF-8"));
 
         let copied = e1;
-        let cloned = e1.clone();
+        let cloned = e1;
         assert_eq!(copied, cloned);
         assert_ne!(e1, e2);
 
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn lines_codec_error_from_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         let codec_err: LinesCodecError = io_err.into();
         assert_eq!(codec_err, LinesCodecError::InvalidUtf8);
     }

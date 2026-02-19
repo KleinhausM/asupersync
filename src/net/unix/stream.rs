@@ -1017,7 +1017,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("1000"), "{dbg}");
         let copied: UCred = c;
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(copied, cloned);
         assert_ne!(
             c,

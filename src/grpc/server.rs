@@ -592,7 +592,7 @@ mod tests {
             max_send_message_size: 2048,
             ..Default::default()
         };
-        let config2 = config.clone();
+        let config2 = config;
         assert_eq!(config2.max_recv_message_size, 1024);
         assert_eq!(config2.max_send_message_size, 2048);
     }
@@ -654,13 +654,13 @@ mod tests {
         let dbg = format!("{interceptor:?}");
         assert!(dbg.contains("NoopInterceptor"));
 
-        let cloned = interceptor.clone();
+        let cloned = interceptor;
         let _ = format!("{cloned:?}");
 
         let copied = interceptor; // Copy
         let _ = format!("{copied:?}");
 
-        let default = NoopInterceptor::default();
+        let default = NoopInterceptor;
         let _ = format!("{default:?}");
     }
 

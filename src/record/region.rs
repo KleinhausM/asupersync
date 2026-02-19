@@ -2183,7 +2183,7 @@ mod tests {
         let dbg = format!("{k:?}");
         assert!(dbg.contains("Task"), "{dbg}");
         let copied: AdmissionKind = k;
-        let cloned = k.clone();
+        let cloned = k;
         assert_eq!(copied, cloned);
         assert_ne!(k, AdmissionKind::Child);
     }
@@ -2194,7 +2194,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Closed"), "{dbg}");
         let copied: AdmissionError = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
 
         let e2 = AdmissionError::LimitReached {

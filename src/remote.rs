@@ -3609,7 +3609,7 @@ mod tests {
         use std::collections::HashSet;
         let a = RemoteTaskId::from_raw(42);
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(a, RemoteTaskId::from_raw(99));
@@ -3626,7 +3626,7 @@ mod tests {
         use std::collections::HashSet;
         let k = IdempotencyKey::from_raw(12345);
         let k2 = k; // Copy
-        let k3 = k.clone();
+        let k3 = k;
         assert_eq!(k, k2);
         assert_eq!(k, k3);
         assert_ne!(k, IdempotencyKey::from_raw(99999));
@@ -3641,7 +3641,7 @@ mod tests {
     fn lease_state_debug_clone_copy_eq() {
         let s = LeaseState::Active;
         let s2 = s; // Copy
-        let s3 = s.clone();
+        let s3 = s;
         assert_eq!(s, s2);
         assert_eq!(s, s3);
         assert_ne!(s, LeaseState::Released);
@@ -3654,7 +3654,7 @@ mod tests {
     fn saga_state_debug_clone_copy_eq() {
         let s = SagaState::Running;
         let s2 = s; // Copy
-        let s3 = s.clone();
+        let s3 = s;
         assert_eq!(s, s2);
         assert_eq!(s, s3);
         assert_ne!(s, SagaState::Completed);

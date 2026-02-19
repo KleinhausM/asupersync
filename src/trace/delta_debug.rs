@@ -1050,7 +1050,7 @@ mod tests {
             hierarchical: false,
             initial_chunk_size: 8,
         };
-        let config2 = config.clone();
+        let config2 = config;
         assert_eq!(config2.max_evaluations, 42);
         assert!(!config2.verify_minimality);
         assert!(!config2.hierarchical);
@@ -1086,7 +1086,7 @@ mod tests {
             budget_exhausted: true,
             minimality_verified: false,
         };
-        let stats2 = stats.clone();
+        let stats2 = stats;
         assert_eq!(stats2.oracle_calls, 10);
         assert_eq!(stats2.regions_pruned, 3);
         assert_eq!(stats2.events_pruned_top_down, 20);

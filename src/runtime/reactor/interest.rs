@@ -698,7 +698,7 @@ mod tests {
         let dbg = format!("{i:?}");
         assert!(dbg.contains("Interest"), "{dbg}");
         let copied: Interest = i;
-        let cloned = i.clone();
+        let cloned = i;
         assert_eq!(copied, cloned);
         assert_eq!(Interest::default(), Interest(0));
 

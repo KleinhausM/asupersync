@@ -186,7 +186,7 @@ mod tests {
         let t1 = AuthenticationTag::zero();
         let t2 = AuthenticationTag::from_bytes([1u8; TAG_SIZE]);
         let copied = t1;
-        let cloned = t1.clone();
+        let cloned = t1;
         assert_eq!(copied, cloned);
         assert_ne!(t1, t2);
 

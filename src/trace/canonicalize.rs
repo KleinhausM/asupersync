@@ -1203,7 +1203,7 @@ mod tests {
         use std::collections::HashSet;
         let k = TraceEventKey::new(1, 2, 3, 4);
         let k2 = k; // Copy
-        let k3 = k.clone();
+        let k3 = k;
         assert_eq!(k, k2);
         assert_eq!(k, k3);
         assert_ne!(k, TraceEventKey::new(1, 2, 3, 5));

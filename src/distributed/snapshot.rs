@@ -929,7 +929,7 @@ mod tests {
             let copied = state;
             assert_eq!(copied, state);
 
-            let cloned = state.clone();
+            let cloned = state;
             assert_eq!(cloned, state);
         }
         assert_ne!(TaskState::Pending, TaskState::Running);
@@ -945,7 +945,7 @@ mod tests {
         let dbg = format!("{snap:?}");
         assert!(dbg.contains("TaskSnapshot"));
 
-        let cloned = snap.clone();
+        let cloned = snap;
         assert_eq!(cloned.priority, 5);
         assert_eq!(cloned.state, TaskState::Running);
     }
@@ -960,7 +960,7 @@ mod tests {
         let dbg = format!("{snap:?}");
         assert!(dbg.contains("BudgetSnapshot"));
 
-        let cloned = snap.clone();
+        let cloned = snap;
         assert_eq!(cloned.deadline_nanos, Some(1_000_000_000));
         assert_eq!(cloned.polls_remaining, Some(100));
         assert!(cloned.cost_remaining.is_none());
@@ -972,7 +972,7 @@ mod tests {
         let dbg = format!("{snap:?}");
         assert!(dbg.contains("RegionSnapshot"));
 
-        let cloned = snap.clone();
+        let cloned = snap;
         assert_eq!(cloned.sequence, 0);
         assert!(cloned.tasks.is_empty());
     }

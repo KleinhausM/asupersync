@@ -658,7 +658,7 @@ mod tests {
         use std::collections::HashSet;
         let src = SymbolKind::Source;
         let rep = SymbolKind::Repair;
-        let _cloned = src.clone();
+        let _cloned = src;
         let _copied = src; // Copy
         assert_eq!(format!("{src}"), "source");
         assert_eq!(format!("{rep}"), "repair");
@@ -707,7 +707,7 @@ mod tests {
     #[test]
     fn object_params_clone_copy_display() {
         let params = ObjectParams::new_for_test(1, 5000);
-        let cloned = params.clone();
+        let cloned = params;
         let copied = params; // Copy
         assert_eq!(cloned, copied);
         let display = format!("{params}");

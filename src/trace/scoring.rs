@@ -432,7 +432,7 @@ mod tests {
         assert!(dbg.contains("TopologicalScore"), "{dbg}");
         assert!(dbg.contains("42"), "{dbg}");
         let copied = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         assert_eq!(s, s);
     }
@@ -447,7 +447,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("ClassId"), "{dbg}");
         let copied = c;
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(copied, cloned);
         let mut set = HashSet::new();
         set.insert(c);
@@ -463,7 +463,7 @@ mod tests {
         };
         let dbg = format!("{e:?}");
         assert!(dbg.contains("EvidenceEntry"), "{dbg}");
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -475,7 +475,7 @@ mod tests {
         };
         let dbg = format!("{ledger:?}");
         assert!(dbg.contains("EvidenceLedger"), "{dbg}");
-        let cloned = ledger.clone();
+        let cloned = ledger;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 }

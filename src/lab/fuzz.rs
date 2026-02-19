@@ -400,7 +400,7 @@ mod tests {
         };
         let dbg = format!("{finding:?}");
         assert!(dbg.contains("FuzzFinding"), "{dbg}");
-        let cloned = finding.clone();
+        let cloned = finding;
         assert_eq!(cloned.seed, 99);
         assert_eq!(cloned.steps, 500);
         assert_eq!(cloned.certificate_hash, 12345);

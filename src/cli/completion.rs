@@ -628,7 +628,7 @@ mod tests {
         let item = CompletionItem::new("test").description("A test");
         let dbg = format!("{item:?}");
         assert!(dbg.contains("CompletionItem"));
-        let item2 = item.clone();
+        let item2 = item;
         assert_eq!(item2.value, "test");
         assert_eq!(item2.description, Some("A test".to_string()));
         crate::test_complete!("completion_item_debug_clone");

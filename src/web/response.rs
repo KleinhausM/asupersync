@@ -437,7 +437,7 @@ mod tests {
         let resp = Response::new(StatusCode::OK, Bytes::from_static(b"hi"));
         let dbg = format!("{resp:?}");
         assert!(dbg.contains("Response"), "{dbg}");
-        let cloned = resp.clone();
+        let cloned = resp;
         assert_eq!(cloned.status, StatusCode::OK);
     }
 
@@ -446,7 +446,7 @@ mod tests {
         let r = Redirect::to("/home");
         let dbg = format!("{r:?}");
         assert!(dbg.contains("Redirect"), "{dbg}");
-        let cloned = r.clone();
+        let cloned = r;
         let dbg2 = format!("{cloned:?}");
         assert_eq!(dbg, dbg2);
     }
@@ -456,7 +456,7 @@ mod tests {
         let j = Json(42);
         let dbg = format!("{j:?}");
         assert!(dbg.contains("Json"), "{dbg}");
-        let jc = j.clone();
+        let jc = j;
         assert_eq!(format!("{jc:?}"), dbg);
 
         let h = Html("hello");

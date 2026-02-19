@@ -1872,7 +1872,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Closed"), "{dbg}");
         let copied: State = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
 
         let open = State::Open { since_millis: 999 };
@@ -1887,7 +1887,7 @@ mod tests {
         let dbg = format!("{m:?}");
         assert!(dbg.contains("CircuitBreakerMetrics"), "{dbg}");
         assert_eq!(m.total_success, 0);
-        let cloned = m.clone();
+        let cloned = m;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1897,7 +1897,7 @@ mod tests {
         let dbg = format!("{p:?}");
         assert!(dbg.contains("Normal"), "{dbg}");
         let copied: Permit = p;
-        let cloned = p.clone();
+        let cloned = p;
         assert_eq!(copied, cloned);
         assert_ne!(p, Permit::Probe);
     }

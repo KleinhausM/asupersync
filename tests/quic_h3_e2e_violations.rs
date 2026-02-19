@@ -227,8 +227,7 @@ fn begin_handshake_on_established_connection_returns_error() {
     // The transport layer should reject Established -> Handshaking.
     assert!(
         matches!(err, NativeQuicConnectionError::Transport(_)),
-        "expected Transport error, got: {:?}",
-        err
+        "expected Transport error, got: {err:?}"
     );
 }
 
@@ -256,8 +255,7 @@ fn write_to_nonexistent_stream_returns_error() {
     // Should be a StreamTable error (UnknownStream).
     assert!(
         matches!(err, NativeQuicConnectionError::StreamTable(_)),
-        "expected StreamTable error, got: {:?}",
-        err
+        "expected StreamTable error, got: {err:?}"
     );
 }
 
@@ -277,7 +275,7 @@ fn h3_invalid_frame_on_control_stream() {
         .on_control_frame(&data_frame)
         .expect_err("DATA before SETTINGS must fail");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: first remote control frame must be SETTINGS"
     );
 
@@ -288,7 +286,7 @@ fn h3_invalid_frame_on_control_stream() {
         .on_control_frame(&headers_frame)
         .expect_err("HEADERS before SETTINGS must fail");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: first remote control frame must be SETTINGS"
     );
 
@@ -298,7 +296,7 @@ fn h3_invalid_frame_on_control_stream() {
         .on_control_frame(&H3Frame::Goaway(0))
         .expect_err("GOAWAY before SETTINGS must fail");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: first remote control frame must be SETTINGS"
     );
 }
@@ -322,7 +320,7 @@ fn h3_duplicate_settings_on_control_stream() {
         .on_control_frame(&H3Frame::Settings(H3Settings::default()))
         .expect_err("duplicate SETTINGS must fail");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: duplicate SETTINGS on remote control stream"
     );
 
@@ -334,7 +332,7 @@ fn h3_duplicate_settings_on_control_stream() {
         .build_local_settings(H3Settings::default())
         .expect_err("duplicate local SETTINGS must fail");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: SETTINGS already sent on local control stream"
     );
 }
@@ -349,11 +347,11 @@ fn h3_frame_decode_truncated_data() {
 
     // Empty buffer.
     let err = H3Frame::decode(&[]).expect_err("empty buffer must fail");
-    assert_eq!(format!("{}", err), "invalid frame: frame type varint");
+    assert_eq!(format!("{err}"), "invalid frame: frame type varint");
 
     // Single byte: frame type varint ok but no length varint.
     let err = H3Frame::decode(&[0x00]).expect_err("no length must fail");
-    assert_eq!(format!("{}", err), "invalid frame: frame length varint");
+    assert_eq!(format!("{err}"), "invalid frame: frame length varint");
 
     // DATA frame (type=0x00) with length=10 but only 3 payload bytes.
     let frame = H3Frame::Data(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -363,7 +361,7 @@ fn h3_frame_decode_truncated_data() {
     let header_len = wire.len() - 10;
     let truncated = &wire[..header_len + 3];
     let err = H3Frame::decode(truncated).expect_err("truncated payload must fail");
-    assert_eq!(format!("{}", err), "unexpected EOF");
+    assert_eq!(format!("{err}"), "unexpected EOF");
 
     // GOAWAY frame with just the frame type and length but no stream ID payload.
     let goaway = H3Frame::Goaway(42);
@@ -373,7 +371,7 @@ fn h3_frame_decode_truncated_data() {
     let payload_start = goaway_wire.len() - 1; // GOAWAY payload is 1 varint byte for value 42
     let truncated_goaway = &goaway_wire[..payload_start];
     let err = H3Frame::decode(truncated_goaway).expect_err("truncated GOAWAY must fail");
-    assert_eq!(format!("{}", err), "unexpected EOF");
+    assert_eq!(format!("{err}"), "unexpected EOF");
 }
 
 // ===========================================================================
@@ -409,7 +407,7 @@ fn h3_goaway_increasing_stream_id_rejected() {
         .on_control_frame(&H3Frame::Goaway(80))
         .expect_err("increasing GOAWAY must fail");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: GOAWAY id must not increase"
     );
 
@@ -594,7 +592,7 @@ fn h3_disallowed_frames_on_control_stream_after_settings() {
         .on_control_frame(&H3Frame::Data(vec![1, 2, 3]))
         .expect_err("DATA on control stream must fail");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: frame type not allowed on control stream"
     );
 
@@ -603,7 +601,7 @@ fn h3_disallowed_frames_on_control_stream_after_settings() {
         .on_control_frame(&H3Frame::Headers(vec![0x80]))
         .expect_err("HEADERS on control stream must fail");
     assert_eq!(
-        format!("{}", err),
+        format!("{err}"),
         "control stream protocol violation: frame type not allowed on control stream"
     );
 

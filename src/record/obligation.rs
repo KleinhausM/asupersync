@@ -819,7 +819,7 @@ mod tests {
         let dbg = format!("{loc:?}");
         assert!(dbg.contains("SourceLocation"), "{dbg}");
         let copied: SourceLocation = loc;
-        let cloned = loc.clone();
+        let cloned = loc;
         assert_eq!(copied, cloned);
     }
 
@@ -830,7 +830,7 @@ mod tests {
         let dbg = format!("{k:?}");
         assert!(dbg.contains("Lease"), "{dbg}");
         let copied: ObligationKind = k;
-        let cloned = k.clone();
+        let cloned = k;
         assert_eq!(copied, cloned);
         assert!(k < ObligationKind::IoOp);
 
@@ -848,7 +848,7 @@ mod tests {
         let dbg = format!("{r:?}");
         assert!(dbg.contains("Cancel"), "{dbg}");
         let copied: ObligationAbortReason = r;
-        let cloned = r.clone();
+        let cloned = r;
         assert_eq!(copied, cloned);
         assert_ne!(r, ObligationAbortReason::Explicit);
     }

@@ -1831,7 +1831,7 @@ mod tests {
     fn reject_reason_debug_clone_copy_eq() {
         let r = RejectReason::WrongObjectId;
         let r2 = r; // Copy
-        let r3 = r.clone();
+        let r3 = r;
         assert_eq!(r, r2);
         assert_eq!(r, r3);
         assert_ne!(r, RejectReason::AuthenticationFailed);
@@ -1865,7 +1865,7 @@ mod tests {
     fn block_state_kind_debug_clone_copy_eq() {
         let s = BlockStateKind::Collecting;
         let s2 = s; // Copy
-        let s3 = s.clone();
+        let s3 = s;
         assert_eq!(s, s2);
         assert_eq!(s, s3);
         assert_ne!(s, BlockStateKind::Decoding);

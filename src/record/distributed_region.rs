@@ -974,7 +974,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Active"), "{dbg}");
         let copied: DistributedRegionState = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         assert_ne!(s, DistributedRegionState::Closed);
 
@@ -991,7 +991,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("Quorum"), "{dbg}");
         let copied: ConsistencyLevel = c;
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(copied, cloned);
         assert_ne!(c, ConsistencyLevel::All);
     }
@@ -1002,7 +1002,7 @@ mod tests {
         let dbg = format!("{c:?}");
         assert!(dbg.contains("DistributedRegionConfig"), "{dbg}");
         assert_eq!(c.min_quorum, 2);
-        let cloned = c.clone();
+        let cloned = c;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1012,7 +1012,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("Healthy"), "{dbg}");
         let copied: ReplicaStatus = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
         assert_ne!(s, ReplicaStatus::Unavailable);
     }

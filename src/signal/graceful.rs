@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn graceful_outcome_clone_copy() {
         let outcome: GracefulOutcome<i32> = GracefulOutcome::Completed(7);
-        let cloned = outcome.clone();
+        let cloned = outcome;
         let copied = outcome; // Copy
         assert_eq!(cloned, copied);
         assert_eq!(cloned, GracefulOutcome::Completed(7));
@@ -449,7 +449,7 @@ mod tests {
         let config = GracefulConfig::default()
             .with_grace_period(Duration::from_secs(5))
             .with_logging(false);
-        let config2 = config.clone();
+        let config2 = config;
         assert_eq!(config2.grace_period, Duration::from_secs(5));
         assert!(!config2.log_events);
     }
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn grace_period_guard_debug() {
-        let guard = GracePeriodGuard::new(Duration::from_secs(60));
+        let guard = GracePeriodGuard::new(Duration::from_mins(1));
         let dbg = format!("{guard:?}");
         assert!(dbg.contains("GracePeriodGuard"));
         assert!(dbg.contains("duration"));

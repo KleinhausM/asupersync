@@ -1738,7 +1738,7 @@ mod tests {
     fn budget_clone_copy() {
         let b = Budget::new().with_poll_quota(42);
         let b2 = b; // Copy
-        let b3 = b.clone();
+        let b3 = b;
         assert_eq!(b, b2);
         assert_eq!(b2, b3);
     }
@@ -1775,8 +1775,8 @@ mod tests {
         let arrival = MinPlusCurve::new(vec![0, 2, 4], 2).unwrap();
         let service = MinPlusCurve::new(vec![0, 3, 6], 3).unwrap();
         let cb = CurveBudget {
-            arrival: arrival.clone(),
-            service: service.clone(),
+            arrival: arrival,
+            service: service,
         };
         let cb2 = cb.clone();
         assert_eq!(cb, cb2);

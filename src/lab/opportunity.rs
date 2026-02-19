@@ -424,7 +424,7 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("OpportunityScore"), "{dbg}");
         let copied: OpportunityScore = s;
-        let cloned = s.clone();
+        let cloned = s;
         assert_eq!(copied, cloned);
     }
 
@@ -434,7 +434,7 @@ mod tests {
         let dbg = format!("{d:?}");
         assert!(dbg.contains("Implement"), "{dbg}");
         let copied: GateDecision = d;
-        let cloned = d.clone();
+        let cloned = d;
         assert_eq!(copied, cloned);
         assert_ne!(d, GateDecision::Reject);
     }
@@ -455,7 +455,7 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(dbg.contains("ImpactOutOfRange"), "{dbg}");
         let copied: ScoreError = e;
-        let cloned = e.clone();
+        let cloned = e;
         assert_eq!(copied, cloned);
         assert_ne!(e, ScoreError::ZeroEffort);
     }

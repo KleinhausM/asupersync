@@ -848,7 +848,7 @@ mod tests {
             total_resolves: 1,
             witnesses: BTreeMap::new(),
         };
-        let v2 = v.clone();
+        let v2 = v;
         assert_eq!(v2.total_acquires, 2);
         let dbg = format!("{v2:?}");
         assert!(dbg.contains("LinearityViolation"));
@@ -865,7 +865,7 @@ mod tests {
             conflicts: 1,
             linearity_violations: 0,
         };
-        let s2 = s.clone();
+        let s2 = s;
         assert_eq!(s2.total, 10);
         assert_eq!(s2.pending, 3);
         let dbg = format!("{s2:?}");

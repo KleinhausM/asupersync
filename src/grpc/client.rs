@@ -676,7 +676,7 @@ mod tests {
     #[test]
     fn metadata_interceptor_clone() {
         let interceptor = MetadataInterceptor::new().with_metadata("x-key", "val");
-        let cloned = interceptor.clone();
+        let cloned = interceptor;
         let mut request = Request::new(Bytes::new());
         cloned.intercept(&mut request).unwrap();
         assert!(request.metadata().get("x-key").is_some());

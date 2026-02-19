@@ -1824,7 +1824,7 @@ mod tests {
         let w = WaitStrategy::default();
         let dbg = format!("{w:?}");
         assert!(dbg.contains("Block"), "{dbg}");
-        let cloned = w.clone();
+        let cloned = w;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1833,7 +1833,7 @@ mod tests {
         let a = RateLimitAlgorithm::default();
         let dbg = format!("{a:?}");
         assert!(dbg.contains("TokenBucket"), "{dbg}");
-        let cloned = a.clone();
+        let cloned = a;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
@@ -1843,7 +1843,7 @@ mod tests {
         let dbg = format!("{m:?}");
         assert!(dbg.contains("RateLimitMetrics"), "{dbg}");
         assert_eq!(m.total_allowed, 0);
-        let cloned = m.clone();
+        let cloned = m;
         assert_eq!(format!("{cloned:?}"), dbg);
     }
 
