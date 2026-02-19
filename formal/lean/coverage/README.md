@@ -14,6 +14,8 @@ This directory contains the canonical machine-readable artifacts for Lean proof 
 - `gap_risk_sequencing_plan.json` - deterministic gap classification, risk scoring, and execution sequencing plan
 - `baseline_report_v1.json` - reproducible Track-1 baseline snapshot (counts, blockers, ownership, cadence)
 - `baseline_report_v1.md` - human-readable baseline report synchronized with JSON snapshot
+- `testing_matrix_diff_v1.json` - machine-readable diff between `TESTING.md` coverage matrix rows and Lean coverage artifacts, including unresolved deltas
+- `no_mock_inventory_v1.json` - machine-readable classification of every mock/fake/stub scan hit into allowlist, active waiver, or remediation-required buckets
 - `ci_verification_profiles.json` - deterministic smoke/frontier/full CI profile definitions and comparability keys
 - `lean_full_repro_bundle_manifest.schema.json` - JSON Schema for `lean-full/repro_bundle_manifest.json` emitted by the full CI profile
 - `lean_frontier_buckets_v1.json` - deterministic frontier error buckets with failure-mode + bead linkage

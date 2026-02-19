@@ -34,6 +34,20 @@ jobs:
           python3 scripts/check_no_mock_policy.py \
             --policy .github/no_mock_policy.json
 
+      - name: No-mock policy snapshot (D5 input)
+        run: |
+          mkdir -p ci-summaries
+          python3 scripts/ci_summary_report.py no-mock-snapshot \
+            --policy .github/no_mock_policy.json \
+            --output ci-summaries/no_mock_policy_report.json
+
+      - name: Upload no-mock policy report (D5 input)
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-mock-policy-report
+          path: ci-summaries/no_mock_policy_report.json
+          retention-days: 30
+
       - name: Clippy lints
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -987,6 +1001,50 @@ jobs:
         with:
           name: phase6-e2e-artifacts
           path: phase6-artifacts/
+          retention-days: 30
+
+  ci-summary-d5:
+    name: CI Summary Reports (D5)
+    needs: [check, coverage, phase6-e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download no-mock policy report (D5 input)
+        uses: actions/download-artifact@v4
+        with:
+          name: no-mock-policy-report
+          path: ci-summary-inputs/no-mock
+
+      - name: Download coverage report (D5 input)
+        uses: actions/download-artifact@v4
+        with:
+          name: llvm-cov-report
+          path: ci-summary-inputs/coverage
+
+      - name: Download Phase 6 E2E artifacts (D5 input)
+        uses: actions/download-artifact@v4
+        with:
+          name: phase6-e2e-artifacts
+          path: ci-summary-inputs/phase6
+
+      - name: Compose CI summary reports (D5)
+        run: |
+          mkdir -p ci-summary
+          python3 scripts/ci_summary_report.py compose \
+            --coverage-report ci-summary-inputs/coverage/coverage_ratchet_report.json \
+            --no-mock-report ci-summary-inputs/no-mock/no_mock_policy_report.json \
+            --e2e-matrix-report ci-summary-inputs/phase6/e2e-scenario-matrix/scenario_matrix_validation.json \
+            --forensics-report ci-summary-inputs/phase6/raptorq-forensics/summary.json \
+            --output-json ci-summary/ci_summary_report.json \
+            --output-markdown ci-summary/ci_summary_report.md \
+            --fail-on-nonpass
+
+      - name: Upload CI summary reports (D5)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-summary-report
+          path: ci-summary/
           retention-days: 30
 
   proof-checks:

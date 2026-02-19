@@ -5,7 +5,7 @@ Machine-readable source: `formal/lean/coverage/baseline_report_v1.json`.
 
 ## Snapshot
 
-- Theorem surface: `136` total theorems (`removeObligationId_not_mem` .. `cancelChild_preserves_wellformed_constructor`)
+- Theorem surface: `146` total theorems (`removeObligationId_not_mem` .. `obligation_leaked_canonical_form`)
 - Step constructor coverage: `22` total, `22` covered, `0` partial, `0` missing
 - Invariant status: `1` fully proven, `3` partially proven, `2` unproven
 - Invariant witness linkage: `6` invariants mapped, `5` with theorem witnesses, `6` with executable checks

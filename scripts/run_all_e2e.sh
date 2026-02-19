@@ -122,6 +122,29 @@ latest_match_dir() {
     return 1
 }
 
+is_json_file() {
+    local path="$1"
+    [[ "$path" == *.json ]]
+}
+
+validate_suite_summary_contract() {
+    local summary_file="$1"
+    jq -e '
+        (.schema_version | type == "string" and . == "e2e-suite-summary-v3") and
+        (.suite_id | type == "string" and length > 0) and
+        (.scenario_id | type == "string" and length > 0) and
+        (
+            (.seed | type == "string" and length > 0) or
+            (.seed | type == "number")
+        ) and
+        (.started_ts | type == "string" and length > 0) and
+        (.ended_ts | type == "string" and length > 0) and
+        (.status | type == "string" and (. == "passed" or . == "failed")) and
+        (.repro_command | type == "string" and length > 0) and
+        (.artifact_path | type == "string" and length > 0)
+    ' "$summary_file" >/dev/null 2>&1
+}
+
 # Suite definitions: name -> script path
 declare -A SUITES=(
     [websocket]="test_websocket_e2e.sh"
@@ -479,6 +502,8 @@ for name in "${SUITE_ORDER[@]}"; do
     script="${SUITES[$name]}"
     script_path="${SCRIPT_DIR}/${script}"
     suite_log="${REPORT_DIR}/${name}.log"
+    suite_id="${name}_e2e"
+    scenario_id="${SUITE_CANONICAL_SCENARIO_ID[$name]:-}"
     replay_command="TEST_LOG_LEVEL=${TEST_LOG_LEVEL} RUST_LOG=${RUST_LOG} TEST_SEED=${TEST_SEED} E2E_TIMEOUT=${E2E_TIMEOUT} bash ${SCRIPT_DIR}/run_all_e2e.sh --suite ${name}"
     suite_start_s="$(date +%s)"
     suite_exit_code=0
@@ -496,8 +521,10 @@ for name in "${SUITE_ORDER[@]}"; do
 
         artifact_root_rel="${SUITE_ARTIFACT_ROOTS[$name]:-}"
         artifact_root_abs="$(normalize_path "$artifact_root_rel")"
-        printf -v manifest_json '{"schema_version":"e2e-orchestrator-artifact-entry-v1","suite":"%s","script":"%s","result":"%s","exit_code":%d,"duration_ms":%d,"suite_log":"%s","artifact_root":"%s","artifact_dir":"","summary_file":"","suite_log_found":false,"suite_log_nonempty":false,"artifact_dir_found":false,"summary_found":false,"artifact_complete":false,"replay_command":"%s","replay_script_exists":false,"replay_script_executable":false,"replay_script_syntax_ok":false,"replay_verified":false,"failure_contract_ok":true}' \
+        printf -v manifest_json '{"schema_version":"e2e-orchestrator-artifact-entry-v1","suite":"%s","suite_id":"%s","scenario_id":"%s","script":"%s","result":"%s","exit_code":%d,"duration_ms":%d,"suite_log":"%s","artifact_root":"%s","artifact_dir":"","summary_file":"","suite_log_found":false,"suite_log_nonempty":false,"artifact_dir_found":false,"summary_found":false,"summary_schema_required":true,"summary_schema_ok":false,"summary_schema_reason":"script_not_executable","artifact_complete":false,"replay_command":"%s","replay_script_exists":false,"replay_script_executable":false,"replay_script_syntax_ok":false,"replay_verified":false,"failure_contract_ok":false}' \
             "$(json_escape "$name")" \
+            "$(json_escape "$suite_id")" \
+            "$(json_escape "$scenario_id")" \
             "$(json_escape "$script_path")" \
             "SKIP" \
             127 \
@@ -589,6 +616,9 @@ for name in "${SUITE_ORDER[@]}"; do
     replay_script_syntax_ok=0
     replay_verified=0
     artifact_complete=0
+    summary_schema_required=1
+    summary_schema_ok=0
+    summary_schema_reason="missing_summary"
     failure_contract_ok=1
 
     if [[ -f "$suite_log" ]]; then
@@ -626,12 +656,32 @@ for name in "${SUITE_ORDER[@]}"; do
         artifact_complete=1
     fi
 
+    if [[ "$summary_found" -eq 1 ]]; then
+        if is_json_file "$summary_path"; then
+            if validate_suite_summary_contract "$summary_path"; then
+                summary_schema_ok=1
+                summary_schema_reason="ok"
+            else
+                summary_schema_reason="schema_drift"
+            fi
+        else
+            summary_schema_reason="non_json_summary"
+        fi
+    fi
+
+    contract_violation=0
+    if [[ "$summary_schema_ok" -eq 0 ]]; then
+        contract_violation=1
+    fi
     if [[ "$RESULTS[$name]" == "FAIL" || "$RESULTS[$name]" == "TIMEOUT" ]]; then
         if [[ "$replay_verified" -eq 0 || "$artifact_complete" -eq 0 ]]; then
-            failure_contract_ok=0
-            FAILURE_CONTRACT_VIOLATIONS=$((FAILURE_CONTRACT_VIOLATIONS + 1))
-            FAILURE_VIOLATION_LINES+=("$name")
+            contract_violation=1
         fi
+    fi
+    if [[ "$contract_violation" -eq 1 ]]; then
+        failure_contract_ok=0
+        FAILURE_CONTRACT_VIOLATIONS=$((FAILURE_CONTRACT_VIOLATIONS + 1))
+        FAILURE_VIOLATION_LINES+=("$name")
     fi
 
     if [[ "$replay_verified" -eq 0 ]]; then
@@ -641,8 +691,10 @@ for name in "${SUITE_ORDER[@]}"; do
         ARTIFACT_INCOMPLETE=$((ARTIFACT_INCOMPLETE + 1))
     fi
 
-    printf -v manifest_json '{"schema_version":"e2e-orchestrator-artifact-entry-v1","suite":"%s","script":"%s","result":"%s","exit_code":%d,"duration_ms":%d,"suite_log":"%s","artifact_root":"%s","artifact_dir":"%s","summary_file":"%s","suite_log_found":%s,"suite_log_nonempty":%s,"artifact_dir_found":%s,"summary_found":%s,"artifact_complete":%s,"replay_command":"%s","replay_script_exists":%s,"replay_script_executable":%s,"replay_script_syntax_ok":%s,"replay_verified":%s,"failure_contract_ok":%s}' \
+    printf -v manifest_json '{"schema_version":"e2e-orchestrator-artifact-entry-v1","suite":"%s","suite_id":"%s","scenario_id":"%s","script":"%s","result":"%s","exit_code":%d,"duration_ms":%d,"suite_log":"%s","artifact_root":"%s","artifact_dir":"%s","summary_file":"%s","suite_log_found":%s,"suite_log_nonempty":%s,"artifact_dir_found":%s,"summary_found":%s,"summary_schema_required":%s,"summary_schema_ok":%s,"summary_schema_reason":"%s","artifact_complete":%s,"replay_command":"%s","replay_script_exists":%s,"replay_script_executable":%s,"replay_script_syntax_ok":%s,"replay_verified":%s,"failure_contract_ok":%s}' \
         "$(json_escape "$name")" \
+        "$(json_escape "$suite_id")" \
+        "$(json_escape "$scenario_id")" \
         "$(json_escape "$script_path")" \
         "$(json_escape "${RESULTS[$name]}")" \
         "$suite_exit_code" \
@@ -655,6 +707,9 @@ for name in "${SUITE_ORDER[@]}"; do
         "$(json_bool "$suite_log_nonempty")" \
         "$(json_bool "$artifact_dir_found")" \
         "$(json_bool "$summary_found")" \
+        "$(json_bool "$summary_schema_required")" \
+        "$(json_bool "$summary_schema_ok")" \
+        "$(json_escape "$summary_schema_reason")" \
         "$(json_bool "$artifact_complete")" \
         "$(json_escape "$replay_command")" \
         "$(json_bool "$replay_script_exists")" \
