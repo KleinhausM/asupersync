@@ -1827,3 +1827,527 @@ mod edge_cases {
         assert_eq!(result.source, source);
     }
 }
+
+// =========================================================================
+// Failure-mode + invariant closure tests (br-3narc.2.7)
+// =========================================================================
+
+#[allow(clippy::similar_names, clippy::cast_sign_loss)]
+mod failure_modes {
+    use crate::raptorq::decoder::{DecodeError, InactivationDecoder, ReceivedSymbol};
+    use crate::raptorq::gf256::Gf256;
+    use crate::raptorq::systematic::SystematicEncoder;
+    use crate::raptorq::test_log_schema::UnitLogEntry;
+    use crate::types::symbol::ObjectId;
+
+    fn failure_context(
+        scenario_id: &str,
+        seed: u64,
+        parameter_set: &str,
+        replay_ref: &str,
+    ) -> String {
+        UnitLogEntry::new(scenario_id, seed, parameter_set, replay_ref, "pending")
+            .with_repro_command(
+                "rch exec -- cargo test --lib raptorq::tests::failure_modes -- --nocapture",
+            )
+            .to_context_string()
+    }
+
+    /// Corruption injection: flip a bit in a source symbol after encoding,
+    /// verify the decoder detects corruption via verify_decoded_output.
+    #[test]
+    fn bit_flip_corruption_detected_as_corrupt_decoded_output() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+        let replay_ref = "replay:rq-u-corruption-bitflip-v1";
+        let context = failure_context(
+            "RQ-U-CORRUPTION-BITFLIP",
+            seed,
+            &format!("k={k},symbol_size={symbol_size}"),
+            replay_ref,
+        );
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 37 + j * 13 + 7) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+
+        // Add source symbols, but corrupt symbol 3
+        for (i, data) in source.iter().enumerate() {
+            let mut sym_data = data.clone();
+            if i == 3 {
+                sym_data[0] ^= 0xFF; // Flip all bits of first byte
+            }
+            received.push(ReceivedSymbol::source(i as u32, sym_data));
+        }
+
+        // Add repair symbols (correct)
+        for esi in (k as u32)..(l as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        let result = decoder.decode(&received);
+        match result {
+            Err(DecodeError::CorruptDecodedOutput { esi, .. }) => {
+                // The corruption should be detected. The exact ESI reported
+                // depends on which equation fires first during verification.
+                let _ = (esi, &context);
+            }
+            Err(DecodeError::SingularMatrix { .. }) => {
+                // Also acceptable: the corruption may make the system inconsistent
+                // before we even reach the verification step.
+            }
+            Ok(_) => {
+                panic!("{context} decoder should NOT silently return success with corrupted input");
+            }
+            Err(other) => {
+                panic!("{context} unexpected error type: {other:?}");
+            }
+        }
+    }
+
+    /// Contiguous burst loss: drop the first K source symbols,
+    /// rely entirely on repair symbols for recovery.
+    #[test]
+    fn contiguous_burst_loss_all_source_symbols_dropped() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+        let replay_ref = "replay:rq-u-burst-loss-all-source-v1";
+        let context = failure_context(
+            "RQ-U-ADVERSARIAL-BURST",
+            seed,
+            &format!("k={k},symbol_size={symbol_size},drop=all_source"),
+            replay_ref,
+        );
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 37 + j * 13 + 7) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        // Start with constraints, then ONLY repair symbols (no source)
+        let mut received = decoder.constraint_symbols();
+
+        // Add enough repair symbols (use a large ESI range for diversity)
+        for esi in (k as u32)..((k + l * 2) as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        let result = decoder.decode(&received);
+        match result {
+            Ok(outcome) => {
+                assert_eq!(
+                    outcome.source, source,
+                    "{context} burst-loss decode should recover original source"
+                );
+            }
+            Err(DecodeError::SingularMatrix { .. }) => {
+                // Acceptable: some parameter combos are rank-deficient under full source loss.
+                // But we should not panic.
+            }
+            Err(other) => {
+                panic!("{context} unexpected error on burst loss: {other:?}");
+            }
+        }
+    }
+
+    /// Contiguous burst: drop a specific consecutive range of ESIs.
+    #[test]
+    fn contiguous_burst_drop_first_half_of_source() {
+        let k = 16;
+        let symbol_size = 32;
+        let seed = 42u64;
+        let replay_ref = "replay:rq-u-burst-loss-first-half-v1";
+        let context = failure_context(
+            "RQ-U-ADVERSARIAL-BURST",
+            seed,
+            &format!("k={k},symbol_size={symbol_size},drop=first_half"),
+            replay_ref,
+        );
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 41 + j * 17 + 11) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+
+        // Keep only second half of source symbols
+        #[allow(clippy::needless_range_loop)]
+        for i in (k / 2)..k {
+            received.push(ReceivedSymbol::source(i as u32, source[i].clone()));
+        }
+
+        // Fill rest with repair symbols to reach >= L equations
+        for esi in (k as u32)..((k + l * 2) as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        let result = decoder.decode(&received);
+        match result {
+            Ok(outcome) => {
+                assert_eq!(
+                    outcome.source, source,
+                    "{context} first-half burst loss should still recover"
+                );
+            }
+            Err(DecodeError::SingularMatrix { .. }) => {
+                // Acceptable for some parameter configurations
+            }
+            Err(other) => {
+                panic!("{context} unexpected error: {other:?}");
+            }
+        }
+    }
+
+    /// Proof replay after a SingularMatrix failure: verify that the proof
+    /// from an error path can be replayed and matches.
+    #[test]
+    fn proof_replay_on_singular_matrix_failure() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+        let replay_ref = "replay:rq-u-proof-singular-replay-v1";
+        let context = failure_context(
+            "RQ-U-PROOF-SINGULAR-REPLAY",
+            seed,
+            &format!("k={k},symbol_size={symbol_size}"),
+            replay_ref,
+        );
+
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        // Construct a rank-deficient system: duplicate the same equation L times
+        // to guarantee SingularMatrix.
+        let mut received: Vec<ReceivedSymbol> = Vec::new();
+        for idx in 0..l {
+            // All equations map to column 0 only → rank 1 → singular for K > 1
+            received.push(ReceivedSymbol {
+                esi: idx as u32,
+                is_source: false,
+                columns: vec![0],
+                coefficients: vec![Gf256::ONE],
+                data: vec![0u8; symbol_size],
+            });
+        }
+
+        let object_id = ObjectId::new_for_test(999);
+        let result = decoder.decode_with_proof(&received, object_id, 0);
+
+        match result {
+            Err((DecodeError::SingularMatrix { .. }, proof)) => {
+                // Proof from error path: replay should produce the same failure trace
+                let replay_result = proof.replay_and_verify(&received);
+                match replay_result {
+                    Ok(()) => {
+                        // Replay matched the original trace — deterministic failure
+                    }
+                    Err(e) => {
+                        panic!(
+                            "{context} proof replay should match original failure trace; got {e}"
+                        );
+                    }
+                }
+            }
+            Err((other_err, _)) => {
+                // Other error types from rank-deficient input are acceptable as long
+                // as we don't panic. InsufficientSymbols is possible if the validator
+                // rejects before reaching inactivation.
+                let _ = (other_err, &context);
+            }
+            Ok(_) => {
+                panic!("{context} expected SingularMatrix from rank-deficient input");
+            }
+        }
+    }
+
+    /// Repair symbol bit-flip: corrupt a single repair symbol and verify detection.
+    #[test]
+    fn repair_symbol_corruption_detected() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+        let replay_ref = "replay:rq-u-corruption-repair-v1";
+        let context = failure_context(
+            "RQ-U-CORRUPTION-REPAIR",
+            seed,
+            &format!("k={k},symbol_size={symbol_size}"),
+            replay_ref,
+        );
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 37 + j * 13 + 7) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+
+        // Add all source symbols (correct)
+        for (i, data) in source.iter().enumerate() {
+            received.push(ReceivedSymbol::source(i as u32, data.clone()));
+        }
+
+        // Add repair symbols, but corrupt the first one
+        for esi in (k as u32)..(l as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let mut repair_data = encoder.repair_symbol(esi);
+            if esi == k as u32 {
+                repair_data[0] ^= 0x01; // Single bit flip
+            }
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        let result = decoder.decode(&received);
+        // Must not silently succeed with wrong data
+        match result {
+            Ok(outcome) => {
+                // If the system is overdetermined enough that the corruption
+                // doesn't affect the solution, source should still match.
+                // Otherwise this should have been caught.
+                assert_eq!(
+                    outcome.source, source,
+                    "{context} if decode succeeds, source must be correct"
+                );
+            }
+            Err(DecodeError::CorruptDecodedOutput { .. } | DecodeError::SingularMatrix { .. }) => {
+                // Expected: corruption detected either during solve or verification
+            }
+            Err(other) => {
+                panic!("{context} unexpected error: {other:?}");
+            }
+        }
+    }
+}
+
+// =========================================================================
+// Systematic encoder invariant tests (br-3narc.2.7)
+// =========================================================================
+
+#[allow(clippy::similar_names, clippy::cast_sign_loss)]
+mod encoder_invariants {
+    use crate::raptorq::gf256::gf256_addmul_slice;
+    use crate::raptorq::systematic::SystematicEncoder;
+    use crate::raptorq::test_log_schema::UnitLogEntry;
+
+    fn failure_context(
+        scenario_id: &str,
+        seed: u64,
+        parameter_set: &str,
+        replay_ref: &str,
+    ) -> String {
+        UnitLogEntry::new(scenario_id, seed, parameter_set, replay_ref, "pending")
+            .with_repro_command(
+                "rch exec -- cargo test --lib raptorq::tests::encoder_invariants -- --nocapture",
+            )
+            .to_context_string()
+    }
+
+    /// repair_symbol_into produces identical output to repair_symbol.
+    #[test]
+    fn repair_symbol_into_matches_repair_symbol() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+        let replay_ref = "replay:rq-u-encoder-repair-into-v1";
+        let context = failure_context(
+            "RQ-U-ENCODER-REPAIR-INTO",
+            seed,
+            &format!("k={k},symbol_size={symbol_size},esi_range=[{k},{}]", k + 20),
+            replay_ref,
+        );
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 37 + j * 13 + 7) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed)
+            .unwrap_or_else(|| panic!("{context} encoder creation should succeed"));
+
+        let mut buf = vec![0u8; symbol_size];
+        for esi in (k as u32)..((k + 20) as u32) {
+            let from_fn = encoder.repair_symbol(esi);
+            buf.fill(0);
+            encoder.repair_symbol_into(esi, &mut buf);
+            assert_eq!(
+                from_fn, buf,
+                "{context} repair_symbol_into must match repair_symbol for esi={esi}"
+            );
+        }
+    }
+
+    /// repair_symbol_into with a larger buffer writes into the prefix.
+    #[test]
+    fn repair_symbol_into_with_oversized_buffer() {
+        let k = 4;
+        let symbol_size = 16;
+        let seed = 99u64;
+        let replay_ref = "replay:rq-u-encoder-repair-into-oversize-v1";
+        let context = failure_context(
+            "RQ-U-ENCODER-REPAIR-INTO-OVERSIZE",
+            seed,
+            &format!("k={k},symbol_size={symbol_size}"),
+            replay_ref,
+        );
+
+        let source: Vec<Vec<u8>> = (0..k).map(|i| vec![(i * 7) as u8; symbol_size]).collect();
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed)
+            .unwrap_or_else(|| panic!("{context} encoder creation should succeed"));
+
+        let mut buf = vec![0xFFu8; symbol_size + 16]; // Larger than needed
+        encoder.repair_symbol_into(k as u32, &mut buf);
+
+        let expected = encoder.repair_symbol(k as u32);
+        assert_eq!(
+            &buf[..symbol_size],
+            &expected[..],
+            "{context} repair_symbol_into should write to prefix of oversized buffer"
+        );
+    }
+
+    /// Emit ESI ranges do not overlap: systematic ESIs [0..K), repair ESIs [K..).
+    #[test]
+    fn emit_systematic_and_repair_esi_ranges_disjoint() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+        let replay_ref = "replay:rq-u-encoder-emit-disjoint-v1";
+        let context = failure_context(
+            "RQ-U-ENCODER-EMIT-DISJOINT",
+            seed,
+            &format!("k={k},symbol_size={symbol_size}"),
+            replay_ref,
+        );
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 37 + j * 13 + 7) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let mut encoder = SystematicEncoder::new(&source, symbol_size, seed)
+            .unwrap_or_else(|| panic!("{context} encoder creation should succeed"));
+
+        let systematic = encoder.emit_systematic();
+        let repair = encoder.emit_repair(10);
+
+        // Verify systematic ESIs are [0, K)
+        for sym in &systematic {
+            assert!(
+                sym.esi < k as u32,
+                "{context} systematic ESI {} must be < K={k}",
+                sym.esi
+            );
+            assert!(
+                sym.is_source,
+                "{context} systematic symbol must be flagged is_source"
+            );
+        }
+
+        // Verify repair ESIs are >= K
+        for sym in &repair {
+            assert!(
+                sym.esi >= k as u32,
+                "{context} repair ESI {} must be >= K={k}",
+                sym.esi
+            );
+            assert!(
+                !sym.is_source,
+                "{context} repair symbol must not be flagged is_source"
+            );
+        }
+
+        // Verify no ESI collision
+        let sys_esis: std::collections::HashSet<u32> = systematic.iter().map(|s| s.esi).collect();
+        let rep_esis: std::collections::HashSet<u32> = repair.iter().map(|s| s.esi).collect();
+        assert!(
+            sys_esis.is_disjoint(&rep_esis),
+            "{context} systematic and repair ESI sets must be disjoint"
+        );
+    }
+
+    /// Repair symbol cross-check: repair_symbol matches RFC equation projection.
+    #[test]
+    fn repair_symbol_cross_check_gf256_projection() {
+        let k = 16;
+        let symbol_size = 48;
+        let seed = 123u64;
+        let replay_ref = "replay:rq-u-encoder-repair-crosscheck-v1";
+        let context = failure_context(
+            "RQ-U-ENCODER-REPAIR-CROSSCHECK",
+            seed,
+            &format!("k={k},symbol_size={symbol_size},esi_range=[{k},{}]", k + 10),
+            replay_ref,
+        );
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 17 + j * 29 + 5) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed)
+            .unwrap_or_else(|| panic!("{context} encoder creation should succeed"));
+
+        for esi in (k as u32)..((k + 10) as u32) {
+            let repair = encoder.repair_symbol(esi);
+            let (columns, coefficients) = encoder.params().rfc_repair_equation(esi);
+            let mut expected = vec![0u8; symbol_size];
+
+            for (&col, &coef) in columns.iter().zip(coefficients.iter()) {
+                gf256_addmul_slice(&mut expected, encoder.intermediate_symbol(col), coef);
+            }
+
+            assert_eq!(
+                repair, expected,
+                "{context} repair symbol esi={esi} must match GF(256) projection"
+            );
+        }
+    }
+}

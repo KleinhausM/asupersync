@@ -2593,6 +2593,125 @@ mod tests {
     }
 
     #[test]
+    fn decode_burst_loss_payload_recovers_with_repair_overhead() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 2026u64;
+
+        let source = make_source_data(k, symbol_size);
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut payload = make_received_source(&decoder, &source);
+        for esi in (k as u32)..((k + l + 8) as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            payload.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        // Deterministic contiguous burst drop in payload symbols.
+        payload.drain(3..7);
+
+        let mut received = decoder.constraint_symbols();
+        received.extend(payload);
+        assert!(
+            received.len() >= l,
+            "burst-loss scenario must still provide at least L equations"
+        );
+
+        let first = decoder
+            .decode(&received)
+            .expect("burst-loss decode should recover source symbols");
+        let second = InactivationDecoder::new(k, symbol_size, seed)
+            .decode(&received)
+            .expect("burst-loss replay decode should recover source symbols");
+
+        assert_eq!(first.source, source);
+        assert_eq!(second.source, source);
+        assert_eq!(
+            first.source, second.source,
+            "replay should be deterministic"
+        );
+        assert_eq!(first.stats.peeled, second.stats.peeled);
+        assert_eq!(first.stats.inactivated, second.stats.inactivated);
+    }
+
+    #[test]
+    fn decode_corrupted_repair_symbol_reports_corrupt_output() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 2027u64;
+
+        let source = make_source_data(k, symbol_size);
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+        received.extend(make_received_source(&decoder, &source));
+        let repair_start_idx = received.len();
+        for esi in (k as u32)..(l as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        // Tamper the first actual repair symbol (not a constraint).
+        // Constraint symbols come first and their ESIs can overlap with
+        // repair ESIs, so index directly into the repair portion.
+        received[repair_start_idx].data[0] ^= 0x5A;
+
+        let err = decoder
+            .decode(&received)
+            .expect_err("corrupted repair symbol must fail output verification");
+        // Verification reports the FIRST mismatch in iteration order.
+        // Corrupting a repair symbol produces wrong intermediate symbols,
+        // so the first detected mismatch is typically at an earlier
+        // constraint or source symbol, not at the tampered repair ESI.
+        assert!(
+            matches!(err, DecodeError::CorruptDecodedOutput { .. }),
+            "expected CorruptDecodedOutput, got {err:?}"
+        );
+        assert!(err.is_unrecoverable());
+    }
+
+    #[test]
+    fn decode_with_proof_corrupted_repair_symbol_reports_failure_reason() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 2028u64;
+
+        let source = make_source_data(k, symbol_size);
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+        received.extend(make_received_source(&decoder, &source));
+        let repair_start_idx = received.len();
+        for esi in (k as u32)..(l as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        // Tamper the first actual repair symbol (index past constraints + source).
+        received[repair_start_idx].data[0] ^= 0xA5;
+
+        let (err, proof) = decoder
+            .decode_with_proof(&received, ObjectId::new_for_test(9090), 0)
+            .expect_err("corrupted repair symbol should fail with proof witness");
+        assert!(matches!(err, DecodeError::CorruptDecodedOutput { .. }));
+        assert!(matches!(
+            proof.outcome,
+            crate::raptorq::proof::ProofOutcome::Failure {
+                reason: FailureReason::CorruptDecodedOutput { .. }
+            }
+        ));
+    }
+
+    #[test]
     fn decode_insufficient_symbols_fails() {
         let k = 8;
         let symbol_size = 32;
@@ -3757,5 +3876,220 @@ mod tests {
         assert_eq!(one, two, "policy decision should be deterministic");
         assert_eq!(one.mode, DecoderPolicyMode::ConservativeBaseline);
         assert_eq!(one.reason, "expected_loss_conservative_gate");
+    }
+
+    // ── all_source_equations / source_equation coverage (br-3narc.2.7) ──
+
+    #[test]
+    fn all_source_equations_returns_identity_map() {
+        let k = 8;
+        let decoder = InactivationDecoder::new(k, 32, 42);
+        let equations = decoder.all_source_equations();
+
+        assert_eq!(equations.len(), k, "should return exactly K equations");
+        for (i, (cols, coefs)) in equations.iter().enumerate() {
+            assert_eq!(cols, &[i], "source equation {i} should map to column {i}");
+            assert_eq!(
+                coefs,
+                &[Gf256::ONE],
+                "source equation {i} should have unit coefficient"
+            );
+        }
+    }
+
+    #[test]
+    fn source_equation_matches_all_source_equations() {
+        let k = 12;
+        let decoder = InactivationDecoder::new(k, 16, 99);
+        let all = decoder.all_source_equations();
+
+        for esi in 0..k as u32 {
+            let single = decoder.source_equation(esi);
+            assert_eq!(
+                single, all[esi as usize],
+                "source_equation({esi}) must match all_source_equations()[{esi}]"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "source ESI must be < K")]
+    fn source_equation_panics_on_esi_ge_k() {
+        let k = 4;
+        let decoder = InactivationDecoder::new(k, 16, 42);
+        let _ = decoder.source_equation(k as u32); // ESI == K should panic
+    }
+
+    // ── Duplicate ESI handling (br-3narc.2.7) ──
+
+    #[test]
+    #[allow(clippy::similar_names)]
+    fn decode_with_duplicate_source_esi_produces_defined_outcome() {
+        // Feeding the same ESI twice gives the decoder redundant equations.
+        // It should either succeed (if the extra equation is linearly dependent)
+        // or fail with SingularMatrix (if it introduces inconsistency).
+        // It must NOT panic.
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 37 + j * 13 + 7) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+        // Add all source symbols
+        for (i, data) in source.iter().enumerate() {
+            received.push(ReceivedSymbol::source(i as u32, data.clone()));
+        }
+        // Duplicate: add source symbol 0 again
+        received.push(ReceivedSymbol::source(0, source[0].clone()));
+
+        // Add repair to reach L
+        for esi in (k as u32)..(l as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        // Must not panic; outcome is either Ok or a well-formed error
+        let result = decoder.decode(&received);
+        match result {
+            Ok(outcome) => {
+                assert_eq!(
+                    outcome.source, source,
+                    "decode with duplicate ESI should recover correct source"
+                );
+            }
+            Err(e) => {
+                // SingularMatrix is acceptable if duplicate introduces linear dependence
+                // that prevents pivot selection. But it must be a recognized error type.
+                assert!(
+                    matches!(
+                        e,
+                        DecodeError::SingularMatrix { .. }
+                            | DecodeError::InsufficientSymbols { .. }
+                    ),
+                    "unexpected error type with duplicate ESI: {e:?}"
+                );
+            }
+        }
+    }
+
+    // ── Zero-data source symbols (br-3narc.2.7) ──
+
+    #[test]
+    fn decode_all_zeros_source_data() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+
+        let source: Vec<Vec<u8>> = (0..k).map(|_| vec![0u8; symbol_size]).collect();
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+        for (i, data) in source.iter().enumerate() {
+            received.push(ReceivedSymbol::source(i as u32, data.clone()));
+        }
+        for esi in (k as u32)..(l as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        let result = decoder
+            .decode(&received)
+            .expect("all-zeros source should decode");
+        assert_eq!(result.source, source, "decoded all-zeros must match");
+    }
+
+    // ── Intermediate symbol reconstruction invariant (br-3narc.2.7) ──
+
+    #[test]
+    fn intermediate_symbols_match_encoder_after_decode() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 37 + j * 13 + 7) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+        for (i, data) in source.iter().enumerate() {
+            received.push(ReceivedSymbol::source(i as u32, data.clone()));
+        }
+        for esi in (k as u32)..(l as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        let result = decoder.decode(&received).expect("decode should succeed");
+
+        // Every intermediate symbol from decode must match the encoder's
+        assert_eq!(result.intermediate.len(), l);
+        for i in 0..l {
+            assert_eq!(
+                result.intermediate[i],
+                encoder.intermediate_symbol(i),
+                "intermediate symbol {i}/{l} must match encoder"
+            );
+        }
+    }
+
+    // ── Peeling + Gaussian coverage invariant (br-3narc.2.7) ──
+
+    #[test]
+    fn stats_peeled_plus_inactivated_covers_all_columns() {
+        let k = 8;
+        let symbol_size = 32;
+        let seed = 42u64;
+
+        let source: Vec<Vec<u8>> = (0..k)
+            .map(|i| {
+                (0..symbol_size)
+                    .map(|j| ((i * 37 + j * 13 + 7) % 256) as u8)
+                    .collect()
+            })
+            .collect();
+
+        let encoder = SystematicEncoder::new(&source, symbol_size, seed).unwrap();
+        let decoder = InactivationDecoder::new(k, symbol_size, seed);
+        let l = decoder.params().l;
+
+        let mut received = decoder.constraint_symbols();
+        for (i, data) in source.iter().enumerate() {
+            received.push(ReceivedSymbol::source(i as u32, data.clone()));
+        }
+        for esi in (k as u32)..(l as u32) {
+            let (cols, coefs) = decoder.repair_equation(esi);
+            let repair_data = encoder.repair_symbol(esi);
+            received.push(ReceivedSymbol::repair(esi, cols, coefs, repair_data));
+        }
+
+        let result = decoder.decode(&received).expect("decode should succeed");
+        assert_eq!(
+            result.stats.peeled + result.stats.inactivated,
+            l,
+            "peeled + inactivated must equal L ({l})"
+        );
     }
 }

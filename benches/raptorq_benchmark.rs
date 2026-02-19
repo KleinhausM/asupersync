@@ -9,20 +9,24 @@
 
 #![allow(missing_docs)]
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use asupersync::raptorq::decoder::{InactivationDecoder, ReceivedSymbol};
 use asupersync::raptorq::gf256::{
-    Gf256, dual_addmul_kernel_decision, dual_kernel_policy_snapshot, dual_mul_kernel_decision,
+    dual_addmul_kernel_decision, dual_kernel_policy_snapshot, dual_mul_kernel_decision,
     gf256_add_slice, gf256_addmul_slice, gf256_addmul_slices2, gf256_mul_slice, gf256_mul_slices2,
+    Gf256,
 };
-use asupersync::raptorq::linalg::{DenseRow, GaussianSolver, row_scale_add, row_xor};
+use asupersync::raptorq::linalg::{row_scale_add, row_xor, DenseRow, GaussianSolver};
 use asupersync::raptorq::systematic::SystematicEncoder;
 
 const TRACK_E_ARTIFACT_PATH: &str = "artifacts/raptorq_track_e_gf256_bench_v1.json";
 const TRACK_E_REPRO_CMD: &str =
     "rch exec -- cargo bench --bench raptorq_benchmark -- gf256_primitives";
 const TRACK_E_POLICY_SCHEMA_VERSION: &str = "raptorq-track-e-dual-policy-v1";
+const TRACK_E_POLICY_PROBE_SCHEMA_VERSION: &str = "raptorq-track-e-dual-policy-probe-v1";
+const TRACK_E_POLICY_PROBE_REPRO_CMD: &str =
+    "rch exec -- cargo bench --bench raptorq_benchmark -- gf256_dual_policy";
 
 #[derive(Clone, Copy)]
 struct Gf256BenchScenario {
@@ -32,6 +36,15 @@ struct Gf256BenchScenario {
     symbol_size: usize,
     loss_pattern: &'static str,
     len: usize,
+    mul_const: u8,
+}
+
+#[derive(Clone, Copy)]
+struct Gf256DualPolicyScenario {
+    scenario_id: &'static str,
+    seed: u64,
+    lane_a_len: usize,
+    lane_b_len: usize,
     mul_const: u8,
 }
 
@@ -86,6 +99,48 @@ fn emit_track_e_policy_log(scenario: &Gf256BenchScenario) {
         addmul_decision,
         TRACK_E_ARTIFACT_PATH,
         TRACK_E_REPRO_CMD,
+    );
+}
+
+fn lane_ratio_string(len_a: usize, len_b: usize) -> String {
+    let lo = len_a.min(len_b);
+    let hi = len_a.max(len_b);
+    if lo == 0 {
+        return "inf".to_owned();
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let ratio = hi as f64 / lo as f64;
+    format!("{ratio:.4}")
+}
+
+fn emit_track_e_policy_probe_log(
+    scenario: &Gf256DualPolicyScenario,
+    mul_decision: &str,
+    addmul_decision: &str,
+) {
+    let policy = dual_kernel_policy_snapshot();
+    let total = scenario.lane_a_len.saturating_add(scenario.lane_b_len);
+    let lane_ratio = lane_ratio_string(scenario.lane_a_len, scenario.lane_b_len);
+    eprintln!(
+        "{{\"schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"mode\":\"{:?}\",\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"lane_ratio\":\"{}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"max_lane_ratio\":{},\"mul_decision\":\"{}\",\"addmul_decision\":\"{}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
+        TRACK_E_POLICY_PROBE_SCHEMA_VERSION,
+        scenario.scenario_id,
+        scenario.seed,
+        policy.kernel,
+        policy.mode,
+        scenario.lane_a_len,
+        scenario.lane_b_len,
+        total,
+        lane_ratio,
+        policy.mul_min_total,
+        policy.mul_max_total,
+        policy.addmul_min_total,
+        policy.addmul_max_total,
+        policy.max_lane_ratio,
+        mul_decision,
+        addmul_decision,
+        TRACK_E_ARTIFACT_PATH,
+        TRACK_E_POLICY_PROBE_REPRO_CMD,
     );
 }
 
@@ -223,6 +278,111 @@ fn gf256_scenarios() -> [Gf256BenchScenario; 5] {
     ]
 }
 
+fn gf256_dual_policy_scenarios() -> [Gf256DualPolicyScenario; 6] {
+    [
+        Gf256DualPolicyScenario {
+            scenario_id: "RQ-E-GF256-DUAL-001",
+            seed: 0x2001,
+            lane_a_len: 4096,
+            lane_b_len: 4096,
+            mul_const: 61,
+        },
+        Gf256DualPolicyScenario {
+            scenario_id: "RQ-E-GF256-DUAL-002",
+            seed: 0x2002,
+            lane_a_len: 7168,
+            lane_b_len: 1024,
+            mul_const: 73,
+        },
+        Gf256DualPolicyScenario {
+            scenario_id: "RQ-E-GF256-DUAL-003",
+            seed: 0x2003,
+            lane_a_len: 7424,
+            lane_b_len: 768,
+            mul_const: 99,
+        },
+        Gf256DualPolicyScenario {
+            scenario_id: "RQ-E-GF256-DUAL-004",
+            seed: 0x2004,
+            lane_a_len: 12288,
+            lane_b_len: 12288,
+            mul_const: 131,
+        },
+        Gf256DualPolicyScenario {
+            scenario_id: "RQ-E-GF256-DUAL-005",
+            seed: 0x2005,
+            lane_a_len: 15360,
+            lane_b_len: 15360,
+            mul_const: 149,
+        },
+        Gf256DualPolicyScenario {
+            scenario_id: "RQ-E-GF256-DUAL-006",
+            seed: 0x2006,
+            lane_a_len: 16384,
+            lane_b_len: 16384,
+            mul_const: 187,
+        },
+    ]
+}
+
+#[allow(clippy::similar_names)]
+fn validate_dual_policy_bit_exactness(scenario: &Gf256DualPolicyScenario, c_val: Gf256) {
+    let src_a = deterministic_bytes(scenario.lane_a_len, scenario.seed ^ 0xAAAA_1111);
+    let src_b = deterministic_bytes(scenario.lane_b_len, scenario.seed ^ 0xBBBB_2222);
+
+    let mut mul_a_actual = deterministic_bytes(scenario.lane_a_len, scenario.seed ^ 0x1001_0001);
+    let mut mul_b_actual = deterministic_bytes(scenario.lane_b_len, scenario.seed ^ 0x2002_0002);
+    let mut mul_a_expected = mul_a_actual.clone();
+    let mut mul_b_expected = mul_b_actual.clone();
+    gf256_mul_slices2(&mut mul_a_actual, &mut mul_b_actual, c_val);
+    gf256_mul_slice(&mut mul_a_expected, c_val);
+    gf256_mul_slice(&mut mul_b_expected, c_val);
+    let mul_ctx = format!(
+        "dual_policy_mul scenario={} seed={} lane_a={} lane_b={} c={} artifact_path={} repro_cmd='{}'",
+        scenario.scenario_id,
+        scenario.seed,
+        scenario.lane_a_len,
+        scenario.lane_b_len,
+        scenario.mul_const,
+        TRACK_E_ARTIFACT_PATH,
+        TRACK_E_POLICY_PROBE_REPRO_CMD
+    );
+    assert_eq!(mul_a_actual, mul_a_expected, "{mul_ctx} mismatch on lane_a");
+    assert_eq!(mul_b_actual, mul_b_expected, "{mul_ctx} mismatch on lane_b");
+
+    let mut addmul_a_actual = deterministic_bytes(scenario.lane_a_len, scenario.seed ^ 0x3003_0003);
+    let mut addmul_b_actual = deterministic_bytes(scenario.lane_b_len, scenario.seed ^ 0x4004_0004);
+    let mut addmul_a_expected = addmul_a_actual.clone();
+    let mut addmul_b_expected = addmul_b_actual.clone();
+    gf256_addmul_slices2(
+        &mut addmul_a_actual,
+        &src_a,
+        &mut addmul_b_actual,
+        &src_b,
+        c_val,
+    );
+    gf256_addmul_slice(&mut addmul_a_expected, &src_a, c_val);
+    gf256_addmul_slice(&mut addmul_b_expected, &src_b, c_val);
+    let addmul_ctx = format!(
+        "dual_policy_addmul scenario={} seed={} lane_a={} lane_b={} c={} artifact_path={} repro_cmd='{}'",
+        scenario.scenario_id,
+        scenario.seed,
+        scenario.lane_a_len,
+        scenario.lane_b_len,
+        scenario.mul_const,
+        TRACK_E_ARTIFACT_PATH,
+        TRACK_E_POLICY_PROBE_REPRO_CMD
+    );
+    assert_eq!(
+        addmul_a_actual, addmul_a_expected,
+        "{addmul_ctx} mismatch on lane_a"
+    );
+    assert_eq!(
+        addmul_b_actual, addmul_b_expected,
+        "{addmul_ctx} mismatch on lane_b"
+    );
+}
+
 // ============================================================================
 // GF(256) primitive benchmarks
 // ============================================================================
@@ -353,6 +513,122 @@ fn bench_gf256_primitives(c: &mut Criterion) {
         );
     }
 
+    group.finish();
+}
+
+#[allow(clippy::too_many_lines)]
+fn bench_gf256_dual_policy(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gf256_dual_policy");
+    for scenario in gf256_dual_policy_scenarios() {
+        let c_val = Gf256::new(scenario.mul_const);
+        validate_dual_policy_bit_exactness(&scenario, c_val);
+        let mul_decision =
+            if dual_mul_kernel_decision(scenario.lane_a_len, scenario.lane_b_len).is_fused() {
+                "fused"
+            } else {
+                "sequential"
+            };
+        let addmul_decision =
+            if dual_addmul_kernel_decision(scenario.lane_a_len, scenario.lane_b_len).is_fused() {
+                "fused"
+            } else {
+                "sequential"
+            };
+        emit_track_e_policy_probe_log(&scenario, mul_decision, addmul_decision);
+
+        let label = format!(
+            "{}_a{}_b{}_seed{}",
+            scenario.scenario_id, scenario.lane_a_len, scenario.lane_b_len, scenario.seed
+        );
+        group.throughput(Throughput::Bytes(
+            scenario.lane_a_len.saturating_add(scenario.lane_b_len) as u64,
+        ));
+
+        let src_a = deterministic_bytes(scenario.lane_a_len, scenario.seed ^ 0xAAAA_1111);
+        let src_b = deterministic_bytes(scenario.lane_b_len, scenario.seed ^ 0xBBBB_2222);
+
+        group.bench_with_input(
+            BenchmarkId::new("mul_slices2_auto", &label),
+            &scenario,
+            |b, _| {
+                let mut dst_a =
+                    deterministic_bytes(scenario.lane_a_len, scenario.seed ^ 0x1001_0001);
+                let mut dst_b =
+                    deterministic_bytes(scenario.lane_b_len, scenario.seed ^ 0x2002_0002);
+                b.iter(|| {
+                    gf256_mul_slices2(
+                        std::hint::black_box(&mut dst_a),
+                        std::hint::black_box(&mut dst_b),
+                        std::hint::black_box(c_val),
+                    );
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("mul_slices2_sequential_baseline", &label),
+            &scenario,
+            |b, _| {
+                let mut dst_a =
+                    deterministic_bytes(scenario.lane_a_len, scenario.seed ^ 0x1001_0001);
+                let mut dst_b =
+                    deterministic_bytes(scenario.lane_b_len, scenario.seed ^ 0x2002_0002);
+                b.iter(|| {
+                    gf256_mul_slice(
+                        std::hint::black_box(&mut dst_a),
+                        std::hint::black_box(c_val),
+                    );
+                    gf256_mul_slice(
+                        std::hint::black_box(&mut dst_b),
+                        std::hint::black_box(c_val),
+                    );
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("addmul_slices2_auto", &label),
+            &scenario,
+            |b, _| {
+                let mut dst_a =
+                    deterministic_bytes(scenario.lane_a_len, scenario.seed ^ 0x3003_0003);
+                let mut dst_b =
+                    deterministic_bytes(scenario.lane_b_len, scenario.seed ^ 0x4004_0004);
+                b.iter(|| {
+                    gf256_addmul_slices2(
+                        std::hint::black_box(&mut dst_a),
+                        std::hint::black_box(&src_a),
+                        std::hint::black_box(&mut dst_b),
+                        std::hint::black_box(&src_b),
+                        std::hint::black_box(c_val),
+                    );
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("addmul_slices2_sequential_baseline", &label),
+            &scenario,
+            |b, _| {
+                let mut dst_a =
+                    deterministic_bytes(scenario.lane_a_len, scenario.seed ^ 0x3003_0003);
+                let mut dst_b =
+                    deterministic_bytes(scenario.lane_b_len, scenario.seed ^ 0x4004_0004);
+                b.iter(|| {
+                    gf256_addmul_slice(
+                        std::hint::black_box(&mut dst_a),
+                        std::hint::black_box(&src_a),
+                        std::hint::black_box(c_val),
+                    );
+                    gf256_addmul_slice(
+                        std::hint::black_box(&mut dst_b),
+                        std::hint::black_box(&src_b),
+                        std::hint::black_box(c_val),
+                    );
+                });
+            },
+        );
+    }
     group.finish();
 }
 
@@ -612,6 +888,7 @@ fn bench_encode_decode(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_gf256_primitives,
+    bench_gf256_dual_policy,
     bench_linalg_operations,
     bench_gaussian_elimination,
     bench_encode_decode,

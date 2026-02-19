@@ -138,6 +138,32 @@ Artifact path conventions by profile:
 | `full` | `target/perf-results/full/<timestamp>/report.json` | full benchmark report + baseline snapshot |
 | `forensics` | `target/perf-results/forensics/<timestamp>/` | callgrind output + annotated hotspot report |
 
+### E4 Dual-Policy Probe Logging (`asupersync-348uw`)
+
+Track-E dual-lane policy probes are emitted from `benches/raptorq_benchmark.rs` under benchmark group `gf256_dual_policy`:
+
+```bash
+rch exec -- cargo bench --bench raptorq_benchmark -- gf256_dual_policy
+```
+
+Probe log schema:
+
+- `schema_version = raptorq-track-e-dual-policy-probe-v1`
+- `scenario_id`, `seed`
+- `kernel`, `mode`
+- `lane_len_a`, `lane_len_b`, `total_len`, `lane_ratio`
+- `mul_window_min`, `mul_window_max`
+- `addmul_window_min`, `addmul_window_max`
+- `max_lane_ratio`
+- `mul_decision`, `addmul_decision`
+- `artifact_path`, `repro_command`
+
+Coverage intent:
+
+- balanced lanes below/at/above fused windows
+- asymmetric lanes near and beyond ratio threshold
+- deterministic evidence for when auto policy selects fused vs sequential dual kernels
+
 ## Calibration Checklist for Closure
 
 Before closing `bd-3v1cs`, run this checklist and record evidence paths in bead comments:

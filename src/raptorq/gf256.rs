@@ -2103,4 +2103,107 @@ mod tests {
             );
         }
     }
+
+    fn expected_decision_from_snapshot(
+        mode: DualKernelMode,
+        min_total: usize,
+        max_total: usize,
+        max_lane_ratio: usize,
+        len_a: usize,
+        len_b: usize,
+    ) -> bool {
+        match mode {
+            DualKernelMode::Sequential => false,
+            DualKernelMode::Fused => true,
+            DualKernelMode::Auto => {
+                let total = len_a.saturating_add(len_b);
+                in_window(total, min_total, max_total)
+                    && lane_ratio_within(len_a, len_b, max_lane_ratio)
+            }
+        }
+    }
+
+    #[test]
+    fn dual_policy_decision_matrix_matches_snapshot_contract() {
+        let seed = 0u64;
+        let replay_ref = "replay:rq-u-gf256-dual-policy-v2";
+        let context = failure_context(
+            "RQ-U-GF256-DUAL-POLICY",
+            seed,
+            "dual_policy_decision_matrix_matches_snapshot_contract",
+            replay_ref,
+        );
+        let snapshot = dual_kernel_policy_snapshot();
+
+        // Mirrors the benchmark policy-probe matrix used in benches/raptorq_benchmark.rs.
+        let scenarios = [
+            ("RQ-E-GF256-DUAL-001", 4096usize, 4096usize),
+            ("RQ-E-GF256-DUAL-002", 7168usize, 1024usize),
+            ("RQ-E-GF256-DUAL-003", 7424usize, 768usize),
+            ("RQ-E-GF256-DUAL-004", 12288usize, 12288usize),
+            ("RQ-E-GF256-DUAL-005", 15360usize, 15360usize),
+            ("RQ-E-GF256-DUAL-006", 16384usize, 16384usize),
+        ];
+
+        for (scenario_id, len_a, len_b) in scenarios {
+            let expected_mul = expected_decision_from_snapshot(
+                snapshot.mode,
+                snapshot.mul_min_total,
+                snapshot.mul_max_total,
+                snapshot.max_lane_ratio,
+                len_a,
+                len_b,
+            );
+            let expected_addmul = expected_decision_from_snapshot(
+                snapshot.mode,
+                snapshot.addmul_min_total,
+                snapshot.addmul_max_total,
+                snapshot.max_lane_ratio,
+                len_a,
+                len_b,
+            );
+            let mul_actual = dual_mul_kernel_decision(len_a, len_b).is_fused();
+            let addmul_actual = dual_addmul_kernel_decision(len_a, len_b).is_fused();
+            assert_eq!(
+                mul_actual, expected_mul,
+                "{context}; scenario_id={scenario_id}; mul mismatch for lane_a={len_a}, lane_b={len_b}"
+            );
+            assert_eq!(
+                addmul_actual, expected_addmul,
+                "{context}; scenario_id={scenario_id}; addmul mismatch for lane_a={len_a}, lane_b={len_b}"
+            );
+        }
+    }
+
+    #[test]
+    fn dual_policy_decisions_are_symmetric_under_lane_swap() {
+        let seed = 0u64;
+        let replay_ref = "replay:rq-u-gf256-dual-policy-v2";
+        let context = failure_context(
+            "RQ-U-GF256-DUAL-POLICY",
+            seed,
+            "dual_policy_decisions_are_symmetric_under_lane_swap",
+            replay_ref,
+        );
+
+        for (len_a, len_b) in [
+            (1usize, 1usize),
+            (1024usize, 1024usize),
+            (7168usize, 1024usize),
+            (7424usize, 768usize),
+            (12288usize, 12288usize),
+            (16384usize, 16384usize),
+        ] {
+            assert_eq!(
+                dual_mul_kernel_decision(len_a, len_b),
+                dual_mul_kernel_decision(len_b, len_a),
+                "{context}; mul decision was not symmetric for lane_a={len_a}, lane_b={len_b}"
+            );
+            assert_eq!(
+                dual_addmul_kernel_decision(len_a, len_b),
+                dual_addmul_kernel_decision(len_b, len_a),
+                "{context}; addmul decision was not symmetric for lane_a={len_a}, lane_b={len_b}"
+            );
+        }
+    }
 }
