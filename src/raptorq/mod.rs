@@ -27,6 +27,7 @@ pub mod gf256;
 pub mod linalg;
 pub mod pipeline;
 pub mod proof;
+pub mod regression;
 pub mod rfc6330;
 pub mod systematic;
 
