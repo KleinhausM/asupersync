@@ -386,53 +386,54 @@ impl Cx {
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              EXECUTION TIERS                                 │
+│                               EXECUTION TIERS                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   FIBERS    │  │    TASKS    │  │   ACTORS    │  │   REMOTE    │        │
-│  │             │  │             │  │             │  │             │        │
-│  │ • Borrow-   │  │ • Parallel  │  │ • Long-     │  │ • Named     │        │
-│  │   friendly  │  │ • Send      │  │   lived     │  │   compute   │        │
-│  │ • Same-     │  │ • Work-     │  │ • Super-    │  │ • Leases    │        │
-│  │   thread    │  │   stealing  │  │   vised     │  │ • Idempotent│        │
-│  │ • Region-   │  │ • Region    │  │ • Region-   │  │ • Saga      │        │
-│  │   pinned    │  │   heap      │  │   owned     │  │   cleanup   │        │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
-│         │                │                │                │                │
-│         └────────────────┴────────────────┴────────────────┘                │
-│                                   │                                         │
-│                                   ▼                                         │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐ │
+│  │    FIBERS     │  │     TASKS     │  │    ACTORS     │  │    REMOTE     │ │
+│  │               │  │               │  │               │  │               │ │
+│  │• Borrow-safe  │  │• Parallel     │  │• Long-lived   │  │• Named compute│ │
+│  │• Same-thread  │  │• Send         │  │• Supervised   │  │• Leases       │ │
+│  │• Region-pinned│  │• Work-stealing│  │• Region-owned │  │• Idempotent   │ │
+│  │• Cancel-safe  │  │• Region-heap  │  │• Mailbox      │  │• Saga cleanup │ │
+│  └───────────────┘  └───────────────┘  └───────────────┘  └───────────────┘ │
+│          │                  │                  │                  │         │
+│          └──────────────────┴────────┬─────────┴──────────────────┘         │
+│                                      │                                      │
+│                                      ▼                                      │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         REGION TREE                                  │   │
-│  │                                                                      │   │
+│  │                             REGION TREE                             │   │
+│  │                                                                     │   │
 │  │    Root Region ──┬── Child Region ──┬── Task                        │   │
 │  │                  │                  ├── Task                        │   │
 │  │                  │                  └── Subregion ── Task           │   │
 │  │                  └── Child Region ── Actor                          │   │
-│  │                                                                      │   │
+│  │                                                                     │   │
 │  │    Invariant: close(region) → quiescence(all descendants)           │   │
+│  │                                                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
-│                                   │                                         │
-│                                   ▼                                         │
+│                                      │                                      │
+│                                      ▼                                      │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                      OBLIGATION REGISTRY                             │   │
-│  │                                                                      │   │
+│  │                         OBLIGATION REGISTRY                         │   │
+│  │                                                                     │   │
 │  │    SendPermit ──→ send() or abort()                                 │   │
 │  │    Ack        ──→ commit() or nack()                                │   │
 │  │    Lease      ──→ renew() or expire()                               │   │
 │  │    IoOp       ──→ complete() or cancel()                            │   │
-│  │                                                                      │   │
+│  │                                                                     │   │
 │  │    Invariant: region_close requires all obligations resolved        │   │
+│  │                                                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
-│                                   │                                         │
-│                                   ▼                                         │
+│                                      │                                      │
+│                                      ▼                                      │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         SCHEDULER                                    │   │
-│  │                                                                      │   │
+│  │                              SCHEDULER                              │   │
+│  │                                                                     │   │
 │  │    Cancel Lane ──→ Timed Lane (EDF) ──→ Ready Lane                  │   │
-│  │         ↑                                                            │   │
+│  │         ↑                                                           │   │
 │  │    (priority)     Lyapunov-guided: V(Σ) must decrease               │   │
+│  │                                                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
