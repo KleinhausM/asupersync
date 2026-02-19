@@ -170,4 +170,48 @@ mod tests {
         crate::assert_with_log!(ok, "size hint", (2, Some(2)), hint);
         crate::test_complete!("zip_size_hint_min");
     }
+
+    /// Invariant: zipping two empty streams immediately yields None.
+    #[test]
+    fn zip_both_empty_returns_none() {
+        init_test("zip_both_empty_returns_none");
+        let mut stream = Zip::new(iter(Vec::<i32>::new()), iter(Vec::<i32>::new()));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let poll = Pin::new(&mut stream).poll_next(&mut cx);
+        let is_none = matches!(poll, Poll::Ready(None));
+        crate::assert_with_log!(is_none, "both empty yields None", true, is_none);
+        crate::test_complete!("zip_both_empty_returns_none");
+    }
+
+    /// Invariant: accessors (first_ref, second_ref, get_mut, into_inner) work correctly.
+    #[test]
+    fn zip_accessors() {
+        init_test("zip_accessors");
+        let mut stream = Zip::new(iter(vec![1, 2]), iter(vec![3, 4]));
+
+        // first_ref and second_ref return references.
+        let _first = stream.first_ref();
+        let _second = stream.second_ref();
+
+        // get_mut returns mutable references to both streams.
+        let (_s1, _s2) = stream.get_mut();
+
+        // into_inner consumes and returns both streams.
+        let (s1, s2) = stream.into_inner();
+        // Verify we can still poll the recovered streams.
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut s1 = s1;
+        let poll = Pin::new(&mut s1).poll_next(&mut cx);
+        let got_1 = matches!(poll, Poll::Ready(Some(1)));
+        crate::assert_with_log!(got_1, "s1 still has items", true, got_1);
+        let mut s2 = s2;
+        let poll = Pin::new(&mut s2).poll_next(&mut cx);
+        let got_3 = matches!(poll, Poll::Ready(Some(3)));
+        crate::assert_with_log!(got_3, "s2 still has items", true, got_3);
+
+        crate::test_complete!("zip_accessors");
+    }
 }

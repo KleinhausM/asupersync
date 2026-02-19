@@ -199,4 +199,28 @@ mod tests {
         );
         crate::test_complete!("watch_stream_from_changes_skips_current_value");
     }
+
+    /// Invariant: stream terminates after sender is dropped.
+    #[test]
+    fn watch_stream_terminates_after_sender_drop() {
+        init_test("watch_stream_terminates_after_sender_drop");
+        let cx: Cx = Cx::for_testing();
+        let (tx, rx) = watch::channel(42);
+        let mut stream = WatchStream::new(cx, rx);
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+
+        // First poll: returns initial snapshot.
+        let poll = Pin::new(&mut stream).poll_next(&mut task_cx);
+        let got_42 = matches!(poll, Poll::Ready(Some(42)));
+        crate::assert_with_log!(got_42, "initial snapshot", true, got_42);
+
+        // Drop sender, then poll — should terminate.
+        drop(tx);
+        let poll = Pin::new(&mut stream).poll_next(&mut task_cx);
+        let is_none = matches!(poll, Poll::Ready(None));
+        crate::assert_with_log!(is_none, "terminated after sender drop", true, is_none);
+
+        crate::test_complete!("watch_stream_terminates_after_sender_drop");
+    }
 }

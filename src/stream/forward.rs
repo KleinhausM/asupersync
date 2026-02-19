@@ -69,3 +69,86 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stream::iter;
+    use std::sync::Arc;
+    use std::task::{Context, Wake, Waker};
+
+    struct NoopWaker;
+
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn noop_waker() -> Waker {
+        Waker::from(Arc::new(NoopWaker))
+    }
+
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
+    /// Invariant: `into_sink` wraps an mpsc::Sender in a SinkStream.
+    #[test]
+    fn into_sink_creates_sink_stream() {
+        init_test("into_sink_creates_sink_stream");
+        let (_tx, _rx) = mpsc::channel::<i32>(4);
+        let _sink = into_sink(_tx);
+        // Construction succeeded — SinkStream wraps the sender.
+        crate::test_complete!("into_sink_creates_sink_stream");
+    }
+
+    /// Invariant: `forward` delivers all stream items to the channel.
+    #[test]
+    fn forward_sends_all_items() {
+        init_test("forward_sends_all_items");
+        let cx: Cx = Cx::for_testing();
+        let (tx, rx) = mpsc::channel::<i32>(8);
+        let stream = iter(vec![10, 20, 30]);
+
+        let mut future = std::pin::pin!(forward(&cx, stream, tx));
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+
+        // iter() yields synchronously, channel has capacity — should complete in one poll.
+        let poll = future.as_mut().poll(&mut task_cx);
+        let completed = matches!(poll, std::task::Poll::Ready(Ok(())));
+        crate::assert_with_log!(completed, "forward completes", true, completed);
+
+        // All items should be in the channel.
+        let v1 = rx.try_recv();
+        let ok1 = matches!(v1, Ok(10));
+        crate::assert_with_log!(ok1, "received 10", true, ok1);
+        let v2 = rx.try_recv();
+        let ok2 = matches!(v2, Ok(20));
+        crate::assert_with_log!(ok2, "received 20", true, ok2);
+        let v3 = rx.try_recv();
+        let ok3 = matches!(v3, Ok(30));
+        crate::assert_with_log!(ok3, "received 30", true, ok3);
+
+        crate::test_complete!("forward_sends_all_items");
+    }
+
+    /// Invariant: forwarding an empty stream completes immediately with Ok.
+    #[test]
+    fn forward_empty_stream_ok() {
+        init_test("forward_empty_stream_ok");
+        let cx: Cx = Cx::for_testing();
+        let (tx, _rx) = mpsc::channel::<i32>(4);
+        let stream = iter(Vec::<i32>::new());
+
+        let mut future = std::pin::pin!(forward(&cx, stream, tx));
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+
+        let poll = future.as_mut().poll(&mut task_cx);
+        let completed = matches!(poll, std::task::Poll::Ready(Ok(())));
+        crate::assert_with_log!(completed, "empty forward completes", true, completed);
+
+        crate::test_complete!("forward_empty_stream_ok");
+    }
+}
