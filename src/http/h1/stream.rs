@@ -1326,4 +1326,41 @@ mod tests {
         );
         assert_eq!(resp.body.kind(), BodyKind::ContentLength(100));
     }
+
+    #[test]
+    fn body_kind_debug_clone_copy_eq() {
+        let a = BodyKind::Chunked;
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, BodyKind::Empty);
+        assert_ne!(a, BodyKind::ContentLength(42));
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Chunked"));
+    }
+
+    #[test]
+    fn request_head_debug_clone() {
+        let head = RequestHead {
+            method: super::super::types::Method::Get,
+            uri: "/test".to_string(),
+            version: super::super::types::Version::Http11,
+            headers: vec![("Host".to_string(), "example.com".to_string())],
+        };
+        let cloned = head.clone();
+        assert_eq!(cloned.uri, "/test");
+        let dbg = format!("{head:?}");
+        assert!(dbg.contains("RequestHead"));
+    }
+
+    #[test]
+    fn response_head_debug_clone() {
+        let head = ResponseHead::new(200, "OK");
+        let cloned = head.clone();
+        assert_eq!(cloned.status, 200);
+        assert_eq!(cloned.reason, "OK");
+        let dbg = format!("{head:?}");
+        assert!(dbg.contains("ResponseHead"));
+    }
 }

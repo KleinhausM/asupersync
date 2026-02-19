@@ -959,4 +959,43 @@ mod tests {
         let policy = RedirectPolicy::default();
         assert!(matches!(policy, RedirectPolicy::Limited(10)));
     }
+
+    #[test]
+    fn scheme_debug_clone_copy_eq() {
+        let a = Scheme::Http;
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, Scheme::Https);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Http"));
+    }
+
+    #[test]
+    fn redirect_policy_debug_clone() {
+        let a = RedirectPolicy::Limited(5);
+        let b = a.clone();
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Limited"));
+        assert!(dbg.contains("5"));
+        let dbg2 = format!("{b:?}");
+        assert_eq!(dbg, dbg2);
+    }
+
+    #[test]
+    fn parsed_url_debug_clone() {
+        let url = ParsedUrl {
+            scheme: Scheme::Https,
+            host: "example.com".to_string(),
+            port: 443,
+            path: "/api/v1".to_string(),
+        };
+        let cloned = url.clone();
+        assert_eq!(cloned.host, "example.com");
+        assert_eq!(cloned.port, 443);
+        let dbg = format!("{url:?}");
+        assert!(dbg.contains("ParsedUrl"));
+        assert!(dbg.contains("example.com"));
+    }
 }

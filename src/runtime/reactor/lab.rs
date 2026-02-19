@@ -2345,5 +2345,17 @@ mod tests {
 
             crate::test_complete!("partition_unregistered_token_fails");
         }
+
+        #[test]
+        fn fault_config_debug_clone_default() {
+            let cfg = FaultConfig::default();
+            assert!(cfg.pending_error.is_none());
+            assert!(!cfg.closed);
+            assert!(!cfg.partitioned);
+            let cloned = cfg.clone();
+            assert_eq!(cloned.error_probability, 0.0);
+            let dbg = format!("{cfg:?}");
+            assert!(dbg.contains("FaultConfig"));
+        }
     }
 }
