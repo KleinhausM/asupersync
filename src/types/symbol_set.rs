@@ -509,6 +509,81 @@ mod tests {
         assert!(set.symbols_for_block(1).next().is_some());
     }
 
+    /// Invariant: remove decrements counts and frees memory.
+    #[test]
+    fn remove_decrements_counts_and_memory() {
+        let mut set = SymbolSet::new();
+        let sym = test_symbol(0, 0, 16);
+        let id = sym.id();
+        let _ = set.insert(sym);
+        assert_eq!(set.len(), 1);
+        let mem_before = set.memory_usage();
+        assert!(mem_before > 0);
+
+        let removed = set.remove(&id);
+        assert!(removed.is_some());
+        assert_eq!(set.len(), 0);
+        assert!(set.is_empty());
+        assert_eq!(set.memory_usage(), 0);
+    }
+
+    /// Invariant: ConcurrentSymbolSet basic insert and threshold operations work.
+    #[test]
+    fn concurrent_symbol_set_insert_and_threshold() {
+        let css = ConcurrentSymbolSet::new();
+        let sym = test_symbol(0, 0, 4);
+        assert!(matches!(css.insert(sym), InsertResult::Inserted { .. }));
+        assert!(!css.threshold_reached(0));
+
+        css.set_block_k(0, 1);
+        assert!(css.threshold_reached(0));
+    }
+
+    /// Invariant: ready_blocks returns only blocks that have reached threshold.
+    #[test]
+    fn ready_blocks_returns_threshold_blocks() {
+        let config = ThresholdConfig::new(1.0, 0, 0);
+        let mut set = SymbolSet::with_config(config);
+        let _ = set.insert(test_symbol(0, 0, 4));
+        let _ = set.insert(test_symbol(1, 0, 4));
+        set.set_block_k(0, 1); // block 0 ready
+        // block 1 not ready (no K set)
+
+        let ready = set.ready_blocks();
+        assert_eq!(ready.len(), 1);
+        assert!(ready.contains(&0));
+    }
+
+    /// Invariant: clear resets all symbol state.
+    #[test]
+    fn clear_resets_all_state() {
+        let config = ThresholdConfig::new(1.0, 0, 0);
+        let mut set = SymbolSet::with_memory_budget(config, 4096);
+        let _ = set.insert(test_symbol(0, 0, 4));
+        let _ = set.insert(test_symbol(0, 1, 4));
+        set.set_block_k(0, 2);
+        assert_eq!(set.len(), 2);
+        assert!(set.memory_usage() > 0);
+
+        set.clear();
+        assert!(set.is_empty());
+        assert_eq!(set.len(), 0);
+        assert_eq!(set.memory_usage(), 0);
+        assert!(!set.threshold_reached(0));
+    }
+
+    /// Invariant: block_progress returns correct source/repair counts.
+    #[test]
+    fn block_progress_tracking() {
+        let mut set = SymbolSet::new();
+        assert!(set.block_progress(0).is_none());
+
+        let _ = set.insert(test_symbol(0, 0, 4)); // source (esi < K when K set)
+        let progress = set.block_progress(0).unwrap();
+        assert_eq!(progress.total(), progress.source_symbols + progress.repair_symbols);
+        assert_eq!(progress.sbn, 0);
+    }
+
     #[test]
     fn iter_and_drain_symbols() {
         let mut set = SymbolSet::new();

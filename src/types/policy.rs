@@ -252,6 +252,99 @@ mod tests {
         }
     }
 
+    /// Invariant: FailFast aggregate on all-Ok outcomes returns AllOk.
+    #[test]
+    fn fail_fast_aggregate_all_ok() {
+        let policy = FailFast;
+        let ok1 = Outcome::<(), crate::error::Error>::Ok(());
+        let ok2 = Outcome::<(), crate::error::Error>::Ok(());
+        assert!(matches!(
+            policy.aggregate_outcomes(&[ok1, ok2]),
+            AggregateDecision::AllOk
+        ));
+    }
+
+    /// Invariant: CollectAll always returns Continue regardless of outcome type.
+    #[test]
+    fn collect_all_always_continues() {
+        let policy = CollectAll;
+        let tid = test_task_id();
+
+        let ok = Outcome::<(), crate::error::Error>::Ok(());
+        assert_eq!(
+            policy.on_child_outcome(tid, &ok),
+            PolicyAction::Continue
+        );
+
+        let err = Outcome::<(), crate::error::Error>::Err(crate::error::Error::new(
+            crate::error::ErrorKind::User,
+        ));
+        assert_eq!(
+            policy.on_child_outcome(tid, &err),
+            PolicyAction::Continue
+        );
+
+        let panicked = Outcome::<(), crate::error::Error>::Panicked(PanicPayload::new("boom"));
+        assert_eq!(
+            policy.on_child_outcome(tid, &panicked),
+            PolicyAction::Continue
+        );
+
+        let cancelled = Outcome::<(), crate::error::Error>::Cancelled(CancelReason::timeout());
+        assert_eq!(
+            policy.on_child_outcome(tid, &cancelled),
+            PolicyAction::Continue
+        );
+    }
+
+    /// Invariant: PolicyAction Display renders all variants correctly.
+    #[test]
+    fn policy_action_display() {
+        assert_eq!(format!("{}", PolicyAction::Continue), "continue");
+        assert_eq!(format!("{}", PolicyAction::Escalate), "escalate");
+        let cancel = PolicyAction::CancelSiblings(CancelReason::sibling_failed());
+        let s = format!("{cancel}");
+        assert!(s.starts_with("cancel siblings:"), "{s}");
+    }
+
+    /// Invariant: FailFast aggregate follows Panicked > Cancelled > Err severity lattice.
+    #[test]
+    fn fail_fast_aggregate_severity_lattice() {
+        let policy = FailFast;
+        let ok = Outcome::<(), crate::error::Error>::Ok(());
+        let err = Outcome::<(), crate::error::Error>::Err(crate::error::Error::new(
+            crate::error::ErrorKind::User,
+        ));
+        let cancelled = Outcome::<(), crate::error::Error>::Cancelled(CancelReason::timeout());
+        let panicked = Outcome::<(), crate::error::Error>::Panicked(PanicPayload::new("boom"));
+
+        // Err > Ok
+        assert!(matches!(
+            policy.aggregate_outcomes(&[ok.clone(), err]),
+            AggregateDecision::FirstError(_)
+        ));
+        // Cancelled > Err
+        match policy.aggregate_outcomes(&[
+            Outcome::Err(crate::error::Error::new(crate::error::ErrorKind::User)),
+            cancelled,
+        ]) {
+            AggregateDecision::Cancelled(_) => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+        // Panicked > everything
+        match policy.aggregate_outcomes(&[
+            ok,
+            Outcome::Err(crate::error::Error::new(crate::error::ErrorKind::User)),
+            Outcome::Cancelled(CancelReason::timeout()),
+            panicked,
+        ]) {
+            AggregateDecision::Panicked { first_panic_index, .. } => {
+                assert_eq!(first_panic_index, 3);
+            }
+            other => panic!("expected Panicked, got {other:?}"),
+        }
+    }
+
     #[test]
     fn aggregate_strengthens_cancel_reasons_deterministically() {
         let policy = CollectAll;
