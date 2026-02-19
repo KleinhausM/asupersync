@@ -538,4 +538,133 @@ mod tests {
         assert_ne!(idx_new_a.generation(), idx1.generation());
         assert_ne!(idx_new_b.generation(), idx3.generation());
     }
+
+    #[test]
+    fn arena_index_debug() {
+        let idx = ArenaIndex::new(5, 3);
+        let dbg = format!("{idx:?}");
+        assert_eq!(dbg, "ArenaIndex(5:3)");
+    }
+
+    #[test]
+    fn arena_index_clone_copy() {
+        let idx = ArenaIndex::new(1, 0);
+        let idx2 = idx;
+        let idx3 = idx;
+        assert_eq!(idx2, idx3);
+    }
+
+    #[test]
+    fn arena_index_eq_ne() {
+        let a = ArenaIndex::new(1, 0);
+        let b = ArenaIndex::new(1, 0);
+        let c = ArenaIndex::new(1, 1);
+        let d = ArenaIndex::new(2, 0);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, d);
+    }
+
+    #[test]
+    fn arena_index_ord() {
+        let a = ArenaIndex::new(1, 0);
+        let b = ArenaIndex::new(2, 0);
+        let c = ArenaIndex::new(1, 1);
+        assert!(a < b);
+        assert!(a < c);
+    }
+
+    #[test]
+    fn arena_index_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(ArenaIndex::new(1, 0));
+        set.insert(ArenaIndex::new(2, 0));
+        set.insert(ArenaIndex::new(1, 0)); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn arena_index_accessors() {
+        let idx = ArenaIndex::new(42, 7);
+        assert_eq!(idx.index(), 42);
+        assert_eq!(idx.generation(), 7);
+    }
+
+    #[test]
+    fn arena_debug() {
+        let arena: Arena<i32> = Arena::new();
+        let dbg = format!("{arena:?}");
+        assert!(dbg.contains("Arena"));
+    }
+
+    #[test]
+    fn arena_default() {
+        let arena: Arena<i32> = Arena::default();
+        assert!(arena.is_empty());
+        assert_eq!(arena.len(), 0);
+    }
+
+    #[test]
+    fn arena_with_capacity() {
+        let arena: Arena<i32> = Arena::with_capacity(16);
+        assert!(arena.is_empty());
+        assert_eq!(arena.len(), 0);
+    }
+
+    #[test]
+    fn arena_get_mut() {
+        let mut arena = Arena::new();
+        let idx = arena.insert(10);
+        if let Some(val) = arena.get_mut(idx) {
+            *val = 20;
+        }
+        assert_eq!(arena.get(idx), Some(&20));
+    }
+
+    #[test]
+    fn arena_contains() {
+        let mut arena = Arena::new();
+        let idx = arena.insert(1);
+        assert!(arena.contains(idx));
+        arena.remove(idx);
+        assert!(!arena.contains(idx));
+    }
+
+    #[test]
+    fn arena_iter() {
+        let mut arena = Arena::new();
+        let idx1 = arena.insert(10);
+        let idx2 = arena.insert(20);
+        let items: Vec<_> = arena.iter().collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], (idx1, &10));
+        assert_eq!(items[1], (idx2, &20));
+    }
+
+    #[test]
+    fn arena_drain_values() {
+        let mut arena = Arena::new();
+        arena.insert(1);
+        arena.insert(2);
+        arena.insert(3);
+        assert_eq!(arena.len(), 3);
+        let drained: Vec<_> = arena.drain_values().collect();
+        assert_eq!(drained, vec![1, 2, 3]);
+        assert!(arena.is_empty());
+    }
+
+    #[test]
+    fn arena_drain_values_partial_drop() {
+        let mut arena = Arena::new();
+        arena.insert(1);
+        arena.insert(2);
+        arena.insert(3);
+        {
+            let mut drain = arena.drain_values();
+            let _ = drain.next(); // take one
+            // drop drain - should drain remaining
+        }
+        assert!(arena.is_empty());
+    }
 }

@@ -573,4 +573,91 @@ mod tests {
         crate::assert_with_log!(has_run, "has run", true, has_run);
         crate::test_complete!("generate_fish_completions_works");
     }
+
+    #[test]
+    fn shell_debug() {
+        init_test("shell_debug");
+        assert_eq!(format!("{:?}", Shell::Bash), "Bash");
+        assert_eq!(format!("{:?}", Shell::Zsh), "Zsh");
+        assert_eq!(format!("{:?}", Shell::Fish), "Fish");
+        assert_eq!(format!("{:?}", Shell::PowerShell), "PowerShell");
+        assert_eq!(format!("{:?}", Shell::Elvish), "Elvish");
+        crate::test_complete!("shell_debug");
+    }
+
+    #[test]
+    fn shell_clone_copy_eq() {
+        init_test("shell_clone_copy_eq");
+        let s = Shell::Zsh;
+        let s2 = s;
+        let s3 = s;
+        assert_eq!(s2, s3);
+        assert_ne!(Shell::Bash, Shell::Zsh);
+        crate::test_complete!("shell_clone_copy_eq");
+    }
+
+    #[test]
+    fn shell_parse_ps_alias() {
+        init_test("shell_parse_ps_alias");
+        let ps = Shell::parse("ps").unwrap();
+        assert_eq!(ps, Shell::PowerShell);
+        crate::test_complete!("shell_parse_ps_alias");
+    }
+
+    #[test]
+    fn install_instructions_all_shells() {
+        init_test("install_instructions_all_shells");
+        let shells = [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::PowerShell, Shell::Elvish];
+        for shell in &shells {
+            let instructions = shell.install_instructions("mycli");
+            let has_cmd = instructions.contains("mycli");
+            crate::assert_with_log!(has_cmd, "has command name", true, has_cmd);
+        }
+        crate::test_complete!("install_instructions_all_shells");
+    }
+
+    #[test]
+    fn completion_item_debug_clone() {
+        init_test("completion_item_debug_clone");
+        let item = CompletionItem::new("test").description("A test");
+        let dbg = format!("{item:?}");
+        assert!(dbg.contains("CompletionItem"));
+        let item2 = item.clone();
+        assert_eq!(item2.value, "test");
+        assert_eq!(item2.description, Some("A test".to_string()));
+        crate::test_complete!("completion_item_debug_clone");
+    }
+
+    #[test]
+    fn completion_item_without_description() {
+        init_test("completion_item_without_description");
+        let item = CompletionItem::new("--verbose");
+        assert_eq!(item.value, "--verbose");
+        assert!(item.description.is_none());
+        crate::test_complete!("completion_item_without_description");
+    }
+
+    #[test]
+    fn generate_powershell_completions_works() {
+        init_test("generate_powershell_completions_works");
+        let mut buf = Vec::new();
+        generate_completions(Shell::PowerShell, &TestCompletable, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let has_cmd = output.contains("testcmd");
+        crate::assert_with_log!(has_cmd, "has command name", true, has_cmd);
+        crate::test_complete!("generate_powershell_completions_works");
+    }
+
+    #[test]
+    fn generate_elvish_completions_works() {
+        init_test("generate_elvish_completions_works");
+        let mut buf = Vec::new();
+        generate_completions(Shell::Elvish, &TestCompletable, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let has_cmd = output.contains("testcmd");
+        crate::assert_with_log!(has_cmd, "has command name", true, has_cmd);
+        let has_completion = output.contains("arg-completer");
+        crate::assert_with_log!(has_completion, "has arg-completer", true, has_completion);
+        crate::test_complete!("generate_elvish_completions_works");
+    }
 }
