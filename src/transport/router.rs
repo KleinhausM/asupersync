@@ -1859,4 +1859,262 @@ mod tests {
         assert!(quorum.to_string().contains('2'));
         assert!(quorum.to_string().contains('3'));
     }
+
+    // Pure data-type tests (wave 17 – CyanBarn)
+
+    #[test]
+    fn endpoint_id_debug_display() {
+        let id = EndpointId::new(42);
+        assert!(format!("{id:?}").contains("42"));
+        assert_eq!(id.to_string(), "Endpoint(42)");
+    }
+
+    #[test]
+    fn endpoint_id_clone_copy_eq() {
+        let id = EndpointId::new(7);
+        let id2 = id;
+        assert_eq!(id, id2);
+    }
+
+    #[test]
+    fn endpoint_id_ord_hash() {
+        let a = EndpointId::new(1);
+        let b = EndpointId::new(2);
+        assert!(a < b);
+
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(a);
+        set.insert(b);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn endpoint_state_debug_clone_copy_eq() {
+        let s = EndpointState::Healthy;
+        let s2 = s;
+        assert_eq!(s, s2);
+        assert!(format!("{s:?}").contains("Healthy"));
+    }
+
+    #[test]
+    fn endpoint_state_as_u8_roundtrip() {
+        let states = [
+            EndpointState::Healthy,
+            EndpointState::Degraded,
+            EndpointState::Unhealthy,
+            EndpointState::Draining,
+            EndpointState::Removed,
+        ];
+        for &s in &states {
+            assert_eq!(EndpointState::from_u8(s.as_u8()), s);
+        }
+    }
+
+    #[test]
+    fn endpoint_state_from_u8_invalid() {
+        let s = EndpointState::from_u8(255);
+        assert_eq!(s, EndpointState::Removed);
+    }
+
+    #[test]
+    fn endpoint_debug() {
+        let ep = Endpoint::new(EndpointId::new(1), "addr:80");
+        let dbg = format!("{ep:?}");
+        assert!(dbg.contains("Endpoint"));
+    }
+
+    #[test]
+    fn endpoint_with_weight_region() {
+        let region = RegionId::new_for_test(1, 0);
+        let ep = Endpoint::new(EndpointId::new(5), "host:80")
+            .with_weight(200)
+            .with_region(region);
+        assert_eq!(ep.weight, 200);
+        assert_eq!(ep.region, Some(region));
+    }
+
+    #[test]
+    fn endpoint_with_state_setter() {
+        let ep = Endpoint::new(EndpointId::new(1), "h:80")
+            .with_state(EndpointState::Draining);
+        assert_eq!(ep.state(), EndpointState::Draining);
+        ep.set_state(EndpointState::Healthy);
+        assert_eq!(ep.state(), EndpointState::Healthy);
+    }
+
+    #[test]
+    fn endpoint_failure_rate_zero() {
+        let ep = Endpoint::new(EndpointId::new(1), "h:80");
+        assert!((ep.failure_rate() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn endpoint_connection_guard_drops() {
+        let ep = Endpoint::new(EndpointId::new(1), "h:80");
+        {
+            let _guard = ep.acquire_connection_guard();
+            assert_eq!(ep.connection_count(), 1);
+        }
+        assert_eq!(ep.connection_count(), 0);
+    }
+
+    #[test]
+    fn load_balance_strategy_debug_clone_copy_eq_default() {
+        let s = LoadBalanceStrategy::default();
+        assert_eq!(s, LoadBalanceStrategy::RoundRobin);
+        let s2 = s;
+        assert_eq!(s, s2);
+        assert!(format!("{s:?}").contains("RoundRobin"));
+    }
+
+    #[test]
+    fn route_key_debug_clone_eq_ord_hash() {
+        let oid = ObjectId::new_for_test(1);
+        let k1 = RouteKey::Object(oid);
+        let k2 = k1.clone();
+        assert_eq!(k1, k2);
+        assert!(format!("{k1:?}").contains("Object"));
+        assert!(k1 <= k2);
+
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(k1);
+        set.insert(RouteKey::Default);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn route_key_constructors() {
+        let oid = ObjectId::new_for_test(1);
+        let rid = RegionId::new_for_test(2, 0);
+        assert_eq!(RouteKey::object(oid), RouteKey::Object(oid));
+        assert_eq!(RouteKey::region(rid), RouteKey::Region(rid));
+    }
+
+    #[test]
+    fn dispatch_strategy_debug_clone_copy_eq_default() {
+        let s = DispatchStrategy::default();
+        assert_eq!(s, DispatchStrategy::Unicast);
+        let s2 = s;
+        assert_eq!(s, s2);
+        assert!(format!("{s:?}").contains("Unicast"));
+    }
+
+    #[test]
+    fn dispatch_config_debug_clone_default() {
+        let cfg = DispatchConfig::default();
+        let cfg2 = cfg.clone();
+        assert_eq!(cfg2.max_retries, 3);
+        assert!(format!("{cfg2:?}").contains("DispatchConfig"));
+    }
+
+    #[test]
+    fn dispatcher_stats_debug() {
+        let stats = DispatcherStats {
+            active_dispatches: 0,
+            total_dispatched: 100,
+            total_failures: 5,
+        };
+        let dbg = format!("{stats:?}");
+        assert!(dbg.contains("100"));
+    }
+
+    #[test]
+    fn routing_error_debug_clone() {
+        let err = RoutingError::EmptyTable;
+        let err2 = err.clone();
+        assert!(format!("{err2:?}").contains("EmptyTable"));
+    }
+
+    #[test]
+    fn routing_error_display_all_variants() {
+        let oid = ObjectId::new_for_test(1);
+        let e1 = RoutingError::NoRoute {
+            object_id: oid,
+            reason: "gone".into(),
+        };
+        assert!(e1.to_string().contains("no route"));
+        assert!(e1.to_string().contains("gone"));
+
+        let e2 = RoutingError::NoHealthyEndpoints { object_id: oid };
+        assert!(e2.to_string().contains("healthy"));
+
+        let e3 = RoutingError::EmptyTable;
+        assert!(e3.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn routing_error_trait() {
+        let err: Box<dyn std::error::Error> = Box::new(RoutingError::EmptyTable);
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn dispatch_error_debug_clone() {
+        let err = DispatchError::Timeout;
+        let err2 = err.clone();
+        assert!(format!("{err2:?}").contains("Timeout"));
+    }
+
+    #[test]
+    fn dispatch_error_display_all_variants() {
+        let e1 = DispatchError::RoutingFailed(RoutingError::EmptyTable);
+        assert!(e1.to_string().contains("routing failed"));
+
+        let e2 = DispatchError::SendFailed {
+            endpoint: EndpointId::new(3),
+            reason: "down".into(),
+        };
+        assert!(e2.to_string().contains("send"));
+
+        let e3 = DispatchError::NoEndpoints;
+        assert!(e3.to_string().contains("no endpoints"));
+
+        let e4 = DispatchError::InsufficientEndpoints {
+            available: 1,
+            required: 3,
+        };
+        assert!(e4.to_string().contains("insufficient"));
+
+        let e5 = DispatchError::Timeout;
+        assert!(e5.to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn dispatch_error_from_routing_error() {
+        let re = RoutingError::EmptyTable;
+        let de = DispatchError::from(re);
+        assert!(matches!(de, DispatchError::RoutingFailed(_)));
+    }
+
+    #[test]
+    fn dispatch_error_trait() {
+        let err: Box<dyn std::error::Error> = Box::new(DispatchError::Timeout);
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn routing_entry_with_priority() {
+        let entry = RoutingEntry::new(vec![], Time::ZERO).with_priority(10);
+        assert_eq!(entry.priority, 10);
+    }
+
+    #[test]
+    fn routing_entry_select_endpoint_empty() {
+        let entry = RoutingEntry::new(vec![], Time::ZERO);
+        assert!(entry.select_endpoint(None).is_none());
+    }
+
+    #[test]
+    fn load_balancer_debug() {
+        let lb = LoadBalancer::new(LoadBalanceStrategy::Random);
+        assert!(format!("{lb:?}").contains("Random"));
+    }
+
+    #[test]
+    fn routing_table_debug() {
+        let table = RoutingTable::new();
+        assert!(format!("{table:?}").contains("RoutingTable"));
+    }
 }

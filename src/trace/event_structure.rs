@@ -404,4 +404,116 @@ mod tests {
         assert_eq!(poset.owner(1), OwnerKey::Timer(7));
         assert_eq!(poset.owner(2), OwnerKey::Kind(TraceEventKind::UserTrace));
     }
+
+    // Pure data-type tests (wave 17 – CyanBarn)
+
+    #[test]
+    fn event_id_debug_clone_copy_eq_hash() {
+        let id = EventId::new(5);
+        let id2 = id;
+        assert_eq!(id, id2);
+        assert!(format!("{id:?}").contains("5"));
+
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(id);
+        set.insert(EventId::new(10));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn event_id_new_index() {
+        let id = EventId::new(42);
+        assert_eq!(id.index(), 42);
+    }
+
+    #[test]
+    fn event_debug_clone_label() {
+        let region = RegionId::new_for_test(1, 0);
+        let task = TaskId::new_for_test(1, 0);
+        let te = TraceEvent::spawn(1, Time::from_nanos(10), task, region);
+
+        let event = Event {
+            id: EventId::new(0),
+            trace: te,
+        };
+        let event2 = event.clone();
+        assert_eq!(event2.id, EventId::new(0));
+        assert!(format!("{event:?}").contains("Event"));
+
+        let label = event.label();
+        assert!(format!("{label:?}").contains("Spawn"));
+    }
+
+    #[test]
+    fn owner_key_debug_clone_copy_eq_hash_ord() {
+        let task = TaskId::new_for_test(1, 0);
+        let k1 = OwnerKey::Task(task);
+        let k2 = k1;
+        assert_eq!(k1, k2);
+        assert!(format!("{k1:?}").contains("Task"));
+
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(k1);
+        set.insert(OwnerKey::Timer(7));
+        assert_eq!(set.len(), 2);
+
+        // Ord
+        assert!(k1 <= k2);
+    }
+
+    #[test]
+    fn owner_key_all_variants() {
+        let task = TaskId::new_for_test(1, 0);
+        let region = RegionId::new_for_test(1, 0);
+        let variants = [
+            OwnerKey::Task(task),
+            OwnerKey::Region(region),
+            OwnerKey::Timer(0),
+            OwnerKey::IoToken(0),
+            OwnerKey::Kind(TraceEventKind::UserTrace),
+        ];
+        for v in &variants {
+            assert!(format!("{v:?}").len() > 0);
+        }
+    }
+
+    #[test]
+    fn owner_key_for_event_task() {
+        let region = RegionId::new_for_test(1, 0);
+        let task = TaskId::new_for_test(7, 0);
+        let te = TraceEvent::spawn(1, Time::from_nanos(10), task, region);
+        assert_eq!(OwnerKey::for_event(&te), OwnerKey::Task(task));
+    }
+
+    #[test]
+    fn owner_key_for_event_region() {
+        let region = RegionId::new_for_test(1, 0);
+        let te = TraceEvent::region_created(1, Time::from_nanos(10), region, None);
+        assert_eq!(OwnerKey::for_event(&te), OwnerKey::Region(region));
+    }
+
+    #[test]
+    fn owner_key_for_event_timer() {
+        let te = TraceEvent::timer_scheduled(1, Time::from_nanos(10), 42, Time::from_nanos(100));
+        assert_eq!(OwnerKey::for_event(&te), OwnerKey::Timer(42));
+    }
+
+    #[test]
+    fn trace_poset_debug_clone() {
+        let trace = vec![
+            TraceEvent::user_trace(1, Time::from_nanos(10), "a"),
+        ];
+        let poset = TracePoset::from_trace(&trace);
+        let poset2 = poset.clone();
+        assert!(format!("{poset2:?}").contains("TracePoset"));
+    }
+
+    #[test]
+    fn event_structure_empty_trace() {
+        let es = EventStructure::from_trace(&[]);
+        assert!(es.events().is_empty());
+        assert!(es.causality().is_empty());
+    }
 }

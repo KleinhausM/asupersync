@@ -492,4 +492,136 @@ mod tests {
         assert_eq!(summary.age_warnings, 0);
         assert!(summary.by_type.is_empty());
     }
+
+    // Pure data-type tests (wave 17 – CyanBarn)
+
+    #[test]
+    fn config_debug_clone() {
+        let cfg = ObligationTrackerConfig::default();
+        let cfg2 = cfg.clone();
+        assert!(format!("{cfg2:?}").contains("ObligationTrackerConfig"));
+    }
+
+    #[test]
+    fn config_with_leak_threshold() {
+        let cfg = ObligationTrackerConfig::default()
+            .with_leak_threshold(Duration::from_secs(120));
+        assert_eq!(cfg.leak_age_threshold, Duration::from_secs(120));
+        assert!(!cfg.periodic_checks);
+    }
+
+    #[test]
+    fn obligation_state_info_debug_clone_copy_eq() {
+        let s = ObligationStateInfo::Reserved;
+        let s2 = s;
+        assert_eq!(s, s2);
+        assert!(format!("{s:?}").contains("Reserved"));
+    }
+
+    #[test]
+    fn obligation_state_info_all_variants() {
+        assert!(ObligationStateInfo::Reserved.is_active());
+        assert!(!ObligationStateInfo::Committed.is_active());
+        assert!(!ObligationStateInfo::Aborted.is_active());
+        assert!(!ObligationStateInfo::Leaked.is_active());
+    }
+
+    #[test]
+    fn obligation_state_info_ne() {
+        assert_ne!(ObligationStateInfo::Reserved, ObligationStateInfo::Committed);
+        assert_ne!(ObligationStateInfo::Aborted, ObligationStateInfo::Leaked);
+    }
+
+    #[test]
+    fn obligation_state_info_from_obligation_state() {
+        let s = ObligationStateInfo::from(ObligationState::Reserved);
+        assert_eq!(s, ObligationStateInfo::Reserved);
+
+        let s = ObligationStateInfo::from(ObligationState::Committed);
+        assert_eq!(s, ObligationStateInfo::Committed);
+
+        let s = ObligationStateInfo::from(ObligationState::Aborted);
+        assert_eq!(s, ObligationStateInfo::Aborted);
+
+        let s = ObligationStateInfo::from(ObligationState::Leaked);
+        assert_eq!(s, ObligationStateInfo::Leaked);
+    }
+
+    #[test]
+    fn obligation_summary_debug_clone() {
+        let summary = ObligationSummary::default();
+        let summary2 = summary.clone();
+        assert!(format!("{summary2:?}").contains("ObligationSummary"));
+    }
+
+    #[test]
+    fn obligation_summary_with_entries() {
+        let mut summary = ObligationSummary::default();
+        summary.total_active = 5;
+        summary.potential_leaks = 2;
+        summary.age_warnings = 1;
+        summary.by_type.insert(
+            "Lease".to_string(),
+            TypeSummary {
+                count: 5,
+                oldest_age: Duration::from_secs(60),
+                primary_holder: Some("task-1".into()),
+            },
+        );
+        assert_eq!(summary.by_type.len(), 1);
+    }
+
+    #[test]
+    fn type_summary_debug_clone() {
+        let ts = TypeSummary {
+            count: 3,
+            oldest_age: Duration::from_secs(30),
+            primary_holder: None,
+        };
+        let ts2 = ts.clone();
+        assert_eq!(ts2.count, 3);
+        assert!(format!("{ts2:?}").contains("TypeSummary"));
+    }
+
+    #[test]
+    fn type_summary_with_primary_holder() {
+        let ts = TypeSummary {
+            count: 1,
+            oldest_age: Duration::ZERO,
+            primary_holder: Some("task-7".into()),
+        };
+        assert_eq!(ts.primary_holder.as_deref(), Some("task-7"));
+    }
+
+    #[test]
+    fn obligation_info_debug_clone() {
+        let info = ObligationInfo {
+            id: ObligationId::new_for_test(1, 0),
+            type_name: "SendPermit".into(),
+            holder_task: TaskId::new_for_test(1, 0),
+            holder_region: RegionId::new_for_test(1, 0),
+            created_at: Time::ZERO,
+            age: Duration::from_secs(5),
+            state: ObligationStateInfo::Reserved,
+            description: None,
+        };
+        let info2 = info.clone();
+        assert!(info2.is_active());
+        assert!(format!("{info2:?}").contains("ObligationInfo"));
+    }
+
+    #[test]
+    fn obligation_info_is_active_committed() {
+        let info = ObligationInfo {
+            id: ObligationId::new_for_test(2, 0),
+            type_name: "Ack".into(),
+            holder_task: TaskId::new_for_test(1, 0),
+            holder_region: RegionId::new_for_test(1, 0),
+            created_at: Time::ZERO,
+            age: Duration::from_secs(10),
+            state: ObligationStateInfo::Committed,
+            description: Some("test".into()),
+        };
+        assert!(!info.is_active());
+    }
 }
