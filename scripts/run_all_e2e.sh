@@ -26,6 +26,8 @@ REPORT_DIR="${PROJECT_ROOT}/target/e2e-results/orchestrator_${TIMESTAMP}"
 MANIFEST_NDJSON="${REPORT_DIR}/artifact_manifest.ndjson"
 MANIFEST_JSON="${REPORT_DIR}/artifact_manifest.json"
 REPLAY_VERIFICATION_FILE="${REPORT_DIR}/replay_verification.json"
+SCENARIO_COVERAGE_MAP_FILE="${REPORT_DIR}/scenario_coverage_map.json"
+CROSS_SUITE_MANIFEST_FILE="${REPORT_DIR}/cross_suite_manifest.json"
 REPORT_FILE="${REPORT_DIR}/report.json"
 
 export TEST_LOG_LEVEL="${TEST_LOG_LEVEL:-info}"
@@ -173,8 +175,8 @@ declare -A SUITE_ARTIFACT_ROOTS=(
     [h2-security]="target/e2e-results/h2_security"
     [net-hardening]="target/e2e-results/net_hardening"
     [redis]="target/e2e-results/redis"
-    [combinators]="test_logs"
-    [cancel-attribution]="target/test-results/cancel-attribution"
+    [combinators]="target/e2e-results/combinators"
+    [cancel-attribution]="target/e2e-results/cancel-attribution"
     [scheduler]="target/e2e-results/scheduler"
     [phase6]="target/phase6-e2e"
 )
@@ -188,12 +190,12 @@ declare -A SUITE_SUMMARY_GLOBS=(
     [database]="summary.json"
     [distributed]="summary.json"
     [h2-security]="summary.json"
-    [net-hardening]="summary.md"
+    [net-hardening]="summary.json"
     [redis]="summary.json"
-    [combinators]="summary.md"
-    [cancel-attribution]="summary_*.txt"
-    [scheduler]="summary.md"
-    [phase6]="report_*.txt"
+    [combinators]="summary.json"
+    [cancel-attribution]="summary.json"
+    [scheduler]="summary.json"
+    [phase6]="summary.json"
 )
 
 # Artifact directory patterns used when summary path is not emitted.
@@ -205,12 +207,12 @@ declare -A SUITE_ARTIFACT_DIR_GLOBS=(
     [database]="artifacts_*"
     [distributed]="artifacts_*"
     [h2-security]="artifacts_*"
-    [net-hardening]="20*"
+    [net-hardening]="artifacts_*"
     [redis]="artifacts_*"
-    [combinators]="combinators_*"
-    [cancel-attribution]=""
-    [scheduler]="20*"
-    [phase6]=""
+    [combinators]="artifacts_*"
+    [cancel-attribution]="artifacts_*"
+    [scheduler]="artifacts_*"
+    [phase6]="artifacts_*"
 )
 
 # Canonical scenario IDs (C1/D4) for suite-level completeness tracking.
@@ -737,6 +739,67 @@ done
     echo "]"
 } > "$MANIFEST_JSON"
 
+jq -s '
+    {
+        schema_version: "e2e-scenario-coverage-map-v1",
+        timestamp: "'"${TIMESTAMP}"'",
+        report_dir: "'"${REPORT_DIR}"'",
+        entries: (
+            map({
+                scenario_id,
+                suite,
+                result,
+                summary_file,
+                artifact_dir,
+                replay_command
+            })
+            | sort_by(.scenario_id, .suite)
+        )
+    }
+' "$MANIFEST_NDJSON" > "$SCENARIO_COVERAGE_MAP_FILE"
+
+jq -s '
+    {
+        schema_version: "e2e-cross-suite-manifest-v1",
+        timestamp: "'"${TIMESTAMP}"'",
+        report_dir: "'"${REPORT_DIR}"'",
+        manifest_ndjson: "'"${MANIFEST_NDJSON}"'",
+        manifest_json: "'"${MANIFEST_JSON}"'",
+        suite_artifacts: (
+            map({
+                suite,
+                suite_id,
+                scenario_id,
+                result,
+                exit_code,
+                summary_file,
+                artifact_dir,
+                suite_log
+            })
+            | sort_by(.suite)
+        ),
+        replay_pointers: (
+            map({
+                suite,
+                scenario_id,
+                replay_command
+            })
+            | sort_by(.suite)
+        ),
+        scenario_coverage_map: (
+            reduce .[] as $entry (
+                {};
+                .[$entry.scenario_id] = {
+                    suite: $entry.suite,
+                    result: $entry.result,
+                    summary_file: $entry.summary_file,
+                    replay_command: $entry.replay_command
+                }
+            )
+        )
+    }
+' "$MANIFEST_NDJSON" > "$CROSS_SUITE_MANIFEST_FILE"
+
 verification_status="pass"
 if [[ "$FAILURE_CONTRACT_VIOLATIONS" -gt 0 ]]; then
     verification_status="fail"
@@ -765,7 +828,9 @@ fi
     fi
     echo "  ],"
     echo "  \"manifest_ndjson\": \"$(json_escape "$MANIFEST_NDJSON")\","
-    echo "  \"manifest_json\": \"$(json_escape "$MANIFEST_JSON")\""
+    echo "  \"manifest_json\": \"$(json_escape "$MANIFEST_JSON")\","
+    echo "  \"scenario_coverage_map\": \"$(json_escape "$SCENARIO_COVERAGE_MAP_FILE")\","
+    echo "  \"cross_suite_manifest\": \"$(json_escape "$CROSS_SUITE_MANIFEST_FILE")\""
     echo "}"
 } > "$REPLAY_VERIFICATION_FILE"
 
@@ -781,6 +846,8 @@ fi
     echo "  \"skipped\": ${SKIP},"
     echo "  \"manifest_ndjson\": \"$(json_escape "$MANIFEST_NDJSON")\","
     echo "  \"manifest_json\": \"$(json_escape "$MANIFEST_JSON")\","
+    echo "  \"scenario_coverage_map\": \"$(json_escape "$SCENARIO_COVERAGE_MAP_FILE")\","
+    echo "  \"cross_suite_manifest\": \"$(json_escape "$CROSS_SUITE_MANIFEST_FILE")\","
     echo "  \"replay_verification\": \"$(json_escape "$REPLAY_VERIFICATION_FILE")\","
     echo "  \"suites\": {"
     first=true
@@ -826,6 +893,8 @@ echo ""
 echo "  Report:   ${REPORT_FILE}"
 echo "  Logs:     ${REPORT_DIR}/"
 echo "  Manifest: ${MANIFEST_JSON}"
+echo "  Coverage: ${SCENARIO_COVERAGE_MAP_FILE}"
+echo "  Cross-suite manifest: ${CROSS_SUITE_MANIFEST_FILE}"
 echo "  Replay:   ${REPLAY_VERIFICATION_FILE}"
 echo ""
 

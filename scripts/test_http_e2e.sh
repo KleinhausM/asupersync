@@ -12,6 +12,14 @@
 #   RUST_LOG       - tracing filter (default: asupersync=debug)
 #   RUST_BACKTRACE - 1 to enable backtraces (default: 1)
 #   TEST_SEED      - deterministic seed override (default: 0xDEADBEEF)
+#
+# Pass/Fail Semantics:
+#   PASS when cargo test exits 0 and no failure patterns are detected.
+#   FAIL when cargo test is non-zero or any failure pattern is detected.
+#
+# Artifact Bundle:
+#   summary.json + suite log + extracted seeds/traces under
+#   target/e2e-results/http/artifacts_<timestamp>/.
 
 set -euo pipefail
 
@@ -19,6 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="${PROJECT_ROOT}/target/e2e-results/http"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+RUN_STARTED_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LOG_FILE="${OUTPUT_DIR}/http_e2e_${TIMESTAMP}.log"
 ARTIFACT_DIR="${OUTPUT_DIR}/artifacts_${TIMESTAMP}"
 TEST_FILTER="${1:-}"
@@ -106,12 +115,34 @@ echo ">>> [4/4] Collecting artifacts..."
 
 PASSED=$(grep -c "^test .* ok$" "$LOG_FILE" 2>/dev/null || echo "0")
 FAILED=$(grep -c "^test .* FAILED$" "$LOG_FILE" 2>/dev/null || echo "0")
+SUITE_ID="http_e2e"
+SCENARIO_ID="E2E-SUITE-HTTP"
+SUMMARY_FILE="${ARTIFACT_DIR}/summary.json"
+REPRO_COMMAND="TEST_LOG_LEVEL=${TEST_LOG_LEVEL} RUST_LOG=${RUST_LOG} TEST_SEED=${TEST_SEED} bash ${SCRIPT_DIR}/$(basename "$0")"
+RUN_ENDED_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SUITE_STATUS="failed"
+if [ "$TEST_RESULT" -eq 0 ] && [ "$PATTERN_FAILURES" -eq 0 ]; then
+    SUITE_STATUS="passed"
+fi
+FAILURE_CLASS="test_or_pattern_failure"
+if [ "$SUITE_STATUS" = "passed" ]; then
+    FAILURE_CLASS="none"
+fi
 
-cat > "${ARTIFACT_DIR}/summary.json" << ENDJSON
+cat > "${SUMMARY_FILE}" << ENDJSON
 {
-  "suite": "http_e2e",
-  "timestamp": "${TIMESTAMP}",
+  "schema_version": "e2e-suite-summary-v3",
+  "suite_id": "${SUITE_ID}",
+  "scenario_id": "${SCENARIO_ID}",
   "seed": "${TEST_SEED}",
+  "started_ts": "${RUN_STARTED_TS}",
+  "ended_ts": "${RUN_ENDED_TS}",
+  "status": "${SUITE_STATUS}",
+  "failure_class": "${FAILURE_CLASS}",
+  "repro_command": "${REPRO_COMMAND}",
+  "artifact_path": "${SUMMARY_FILE}",
+  "suite": "${SUITE_ID}",
+  "timestamp": "${TIMESTAMP}",
   "test_log_level": "${TEST_LOG_LEVEL}",
   "tests_passed": ${PASSED},
   "tests_failed": ${FAILED},
@@ -125,7 +156,7 @@ ENDJSON
 grep -oE "seed[= ]+0x[0-9a-fA-F]+" "$LOG_FILE" > "${ARTIFACT_DIR}/seeds.txt" 2>/dev/null || true
 grep -oE "trace_fingerprint[= ]+[a-f0-9]+" "$LOG_FILE" > "${ARTIFACT_DIR}/traces.txt" 2>/dev/null || true
 
-echo "  Summary: ${ARTIFACT_DIR}/summary.json"
+echo "  Summary: ${SUMMARY_FILE}"
 
 # --- Summary ---
 echo ""

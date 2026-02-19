@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="${PROJECT_ROOT}/target/e2e-results/distributed"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+RUN_STARTED_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LOG_FILE="${OUTPUT_DIR}/distributed_e2e_${TIMESTAMP}.log"
 INVARIANT_LOG="${OUTPUT_DIR}/distributed_invariants_${TIMESTAMP}.log"
 ARTIFACT_DIR="${OUTPUT_DIR}/artifacts_${TIMESTAMP}"
@@ -131,12 +132,35 @@ INV_FAILED=$(grep -c "^test .* FAILED$" "$INVARIANT_LOG" 2>/dev/null || echo "0"
 
 TOTAL_PASSED=$((E2E_PASSED + INV_PASSED))
 TOTAL_FAILED=$((E2E_FAILED + INV_FAILED))
+SUITE_ID="distributed_e2e"
+SCENARIO_ID="E2E-SUITE-DISTRIBUTED"
+SUMMARY_FILE="${ARTIFACT_DIR}/summary.json"
+MANIFEST_FILE="${ARTIFACT_DIR}/artifact_manifest.json"
+REPRO_COMMAND="TEST_LOG_LEVEL=${TEST_LOG_LEVEL} RUST_LOG=${RUST_LOG} TEST_SEED=${TEST_SEED} bash ${SCRIPT_DIR}/$(basename "$0")"
+RUN_ENDED_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SUITE_STATUS="failed"
+if [ "$TEST_RESULT" -eq 0 ] && [ "$INVARIANT_RESULT" -eq 0 ] && [ "$PATTERN_FAILURES" -eq 0 ]; then
+    SUITE_STATUS="passed"
+fi
+FAILURE_CLASS="test_or_pattern_failure"
+if [ "$SUITE_STATUS" = "passed" ]; then
+    FAILURE_CLASS="none"
+fi
 
-cat > "${ARTIFACT_DIR}/summary.json" << ENDJSON
+cat > "${SUMMARY_FILE}" << ENDJSON
 {
-  "suite": "distributed_e2e",
-  "timestamp": "${TIMESTAMP}",
+  "schema_version": "e2e-suite-summary-v3",
+  "suite_id": "${SUITE_ID}",
+  "scenario_id": "${SCENARIO_ID}",
   "seed": "${TEST_SEED}",
+  "started_ts": "${RUN_STARTED_TS}",
+  "ended_ts": "${RUN_ENDED_TS}",
+  "status": "${SUITE_STATUS}",
+  "failure_class": "${FAILURE_CLASS}",
+  "repro_command": "${REPRO_COMMAND}",
+  "artifact_path": "${SUMMARY_FILE}",
+  "suite": "${SUITE_ID}",
+  "timestamp": "${TIMESTAMP}",
   "test_log_level": "${TEST_LOG_LEVEL}",
   "suites": {
     "e2e": { "passed": ${E2E_PASSED}, "failed": ${E2E_FAILED}, "exit_code": ${TEST_RESULT} },
@@ -157,7 +181,23 @@ for f in "$LOG_FILE" "$INVARIANT_LOG"; do
     grep -oE "content_hash[= ]+[a-f0-9]+" "$f" >> "${ARTIFACT_DIR}/hashes.txt" 2>/dev/null || true
 done
 
-echo "  Summary: ${ARTIFACT_DIR}/summary.json"
+cat > "${MANIFEST_FILE}" << ENDJSON
+{
+  "schema_version": "e2e-suite-artifact-manifest-v1",
+  "suite_id": "${SUITE_ID}",
+  "scenario_id": "${SCENARIO_ID}",
+  "summary_file": "${SUMMARY_FILE}",
+  "suite_log": "${LOG_FILE}",
+  "invariant_log": "${INVARIANT_LOG}",
+  "artifact_dir": "${ARTIFACT_DIR}",
+  "seed_file": "${ARTIFACT_DIR}/seeds.txt",
+  "trace_file": "${ARTIFACT_DIR}/traces.txt",
+  "hash_file": "${ARTIFACT_DIR}/hashes.txt"
+}
+ENDJSON
+
+echo "  Summary: ${SUMMARY_FILE}"
+echo "  Manifest: ${MANIFEST_FILE}"
 
 # --- Summary ---
 echo ""
