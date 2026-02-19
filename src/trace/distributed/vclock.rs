@@ -1121,4 +1121,59 @@ mod tests {
         assert!(b_clock.happens_before(td.current_clock()));
         assert!(c_clock.happens_before(td.current_clock()));
     }
+
+    // =========================================================================
+    // Wave 55 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn hybrid_time_debug_clone_copy_hash_ord() {
+        use std::collections::HashSet;
+        let ht = HybridTime::new(Time::from_nanos(1_000), 3);
+        let dbg = format!("{ht:?}");
+        assert!(dbg.contains("HybridTime"), "{dbg}");
+        let copied = ht;
+        let cloned = ht.clone();
+        assert_eq!(copied, cloned);
+
+        let earlier = HybridTime::new(Time::ZERO, 0);
+        assert!(earlier < ht);
+
+        let mut set = HashSet::new();
+        set.insert(ht);
+        set.insert(earlier);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&ht));
+    }
+
+    #[test]
+    fn logical_clock_kind_debug_clone_copy_eq() {
+        let k = LogicalClockKind::Lamport;
+        let dbg = format!("{k:?}");
+        assert!(dbg.contains("Lamport"), "{dbg}");
+        let copied = k;
+        let cloned = k.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(k, LogicalClockKind::Vector);
+        assert_ne!(k, LogicalClockKind::Hybrid);
+    }
+
+    #[test]
+    fn logical_time_debug_clone_eq() {
+        let lt = LogicalTime::Lamport(LamportTime::from_raw(5));
+        let dbg = format!("{lt:?}");
+        assert!(dbg.contains("Lamport"), "{dbg}");
+        let cloned = lt.clone();
+        assert_eq!(lt, cloned);
+    }
+
+    #[test]
+    fn logical_clock_mode_debug_clone() {
+        let mode = LogicalClockMode::Lamport;
+        let dbg = format!("{mode:?}");
+        assert!(dbg.contains("Lamport"), "{dbg}");
+        let cloned = mode.clone();
+        let dbg2 = format!("{cloned:?}");
+        assert_eq!(dbg, dbg2);
+    }
 }

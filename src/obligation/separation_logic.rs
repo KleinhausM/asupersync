@@ -2364,4 +2364,66 @@ mod tests {
         crate::assert_with_log!(has_events, "display has events", true, has_events);
         crate::test_complete!("verification_result_display");
     }
+
+    // =========================================================================
+    // Wave 55 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn operation_footprint_debug_clone_eq() {
+        let fp = OperationFootprint {
+            obligations_touched: vec![o(1)],
+            tasks_touched: vec![t(0)],
+            regions_touched: vec![r(0)],
+        };
+        let dbg = format!("{fp:?}");
+        assert!(dbg.contains("OperationFootprint"), "{dbg}");
+        let cloned = fp.clone();
+        assert_eq!(fp, cloned);
+    }
+
+    #[test]
+    fn judgment_op_debug_clone_eq() {
+        let op = JudgmentOp::Reserve {
+            kind: ObligationKind::SendPermit,
+            holder: t(1),
+            region: r(0),
+        };
+        let dbg = format!("{op:?}");
+        assert!(dbg.contains("Reserve"), "{dbg}");
+        let cloned = op.clone();
+        assert_eq!(op, cloned);
+
+        let op2 = JudgmentOp::Commit { obligation: o(1) };
+        assert_ne!(op, op2);
+    }
+
+    #[test]
+    fn sl_violation_debug_clone() {
+        let v = SLViolation {
+            property: SeparationProperty::NoAliasing { obligation: o(0) },
+            time: Time::ZERO,
+            description: "test violation".to_string(),
+        };
+        let dbg = format!("{v:?}");
+        assert!(dbg.contains("SLViolation"), "{dbg}");
+        let cloned = v.clone();
+        assert_eq!(cloned.description, "test violation");
+    }
+
+    #[test]
+    fn verification_result_debug_clone() {
+        let result = VerificationResult {
+            violations: vec![],
+            events_checked: 10,
+            judgments_verified: 5,
+            frame_checks: 3,
+            separation_checks: 2,
+        };
+        let dbg = format!("{result:?}");
+        assert!(dbg.contains("VerificationResult"), "{dbg}");
+        let cloned = result.clone();
+        assert!(cloned.is_sound());
+        assert_eq!(cloned.events_checked, 10);
+    }
 }

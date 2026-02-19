@@ -1030,4 +1030,29 @@ mod tests {
         );
         crate::test_complete!("abort_reason_preserved_in_record");
     }
+
+    // =========================================================================
+    // Wave 55 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn ledger_stats_debug_clone_copy_eq_default() {
+        let stats = LedgerStats::default();
+        let dbg = format!("{stats:?}");
+        assert!(dbg.contains("LedgerStats"), "{dbg}");
+        let copied = stats;
+        let cloned = stats.clone();
+        assert_eq!(copied, cloned);
+        assert_eq!(stats.total_acquired, 0);
+        assert!(stats.is_clean());
+    }
+
+    #[test]
+    fn leak_check_result_debug_clone() {
+        let result = LeakCheckResult { leaked: vec![] };
+        let dbg = format!("{result:?}");
+        assert!(dbg.contains("LeakCheckResult"), "{dbg}");
+        let cloned = result.clone();
+        assert!(cloned.is_clean());
+    }
 }
