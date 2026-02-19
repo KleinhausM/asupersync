@@ -6993,4 +6993,43 @@ mod tests {
         );
         crate::test_complete!("leak_count_exact_for_multiple_obligations");
     }
+
+    // =========================================================================
+    // Wave 58 – pure data-type trait coverage (snapshot types)
+    // =========================================================================
+
+    #[test]
+    fn budget_snapshot_debug_clone_copy() {
+        let s = BudgetSnapshot {
+            deadline: Some(1_000_000),
+            poll_quota: 128,
+            cost_quota: None,
+            priority: 5,
+        };
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("BudgetSnapshot"), "{dbg}");
+        let copied = s;
+        let cloned = s.clone();
+        assert_eq!(copied.priority, cloned.priority);
+    }
+
+    #[test]
+    fn cancel_kind_snapshot_debug_clone() {
+        let k = CancelKindSnapshot::User;
+        let dbg = format!("{k:?}");
+        assert!(dbg.contains("User"), "{dbg}");
+        let cloned = k.clone();
+        let dbg2 = format!("{cloned:?}");
+        assert_eq!(dbg, dbg2);
+    }
+
+    #[test]
+    fn region_state_snapshot_debug_clone() {
+        let s = RegionStateSnapshot::Open;
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Open"), "{dbg}");
+        let cloned = s.clone();
+        let dbg2 = format!("{cloned:?}");
+        assert_eq!(dbg, dbg2);
+    }
 }

@@ -1199,4 +1199,43 @@ mod tests {
         // The macro is currently a placeholder that returns `()`.
         let (): () = futures_lite::future::block_on(async { race!(f1, f2) });
     }
+
+    // =========================================================================
+    // Wave 58 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn polling_order_debug_clone_copy_eq_default() {
+        let order = PollingOrder::default();
+        let dbg = format!("{order:?}");
+        assert!(dbg.contains("Biased"), "{dbg}");
+        let copied = order;
+        let cloned = order.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(PollingOrder::Biased, PollingOrder::Unbiased);
+    }
+
+    #[test]
+    fn race3_debug_clone_eq() {
+        let r: Race3<i32, &str, bool> = Race3::First(42);
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("First"), "{dbg}");
+        let cloned = r.clone();
+        assert_eq!(r, cloned);
+        assert_eq!(r.winner_index(), 0);
+
+        let r2: Race3<i32, &str, bool> = Race3::Second("hi");
+        assert_ne!(r, r2);
+        assert_eq!(r2.winner_index(), 1);
+    }
+
+    #[test]
+    fn race4_debug_clone_eq() {
+        let r: Race4<i32, i32, i32, i32> = Race4::Fourth(4);
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("Fourth"), "{dbg}");
+        let cloned = r.clone();
+        assert_eq!(r, cloned);
+        assert_eq!(r.winner_index(), 3);
+    }
 }

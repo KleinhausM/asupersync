@@ -1691,4 +1691,41 @@ mod tests {
         assert_eq!(metrics.received, 2);
         assert_eq!(metrics.duplicates, 0);
     }
+
+    // =========================================================================
+    // Wave 58 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn cancel_broadcast_metrics_debug_clone_default() {
+        let m = CancelBroadcastMetrics::default();
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("CancelBroadcastMetrics"), "{dbg}");
+        let cloned = m.clone();
+        assert_eq!(cloned.initiated, 0);
+    }
+
+    #[test]
+    fn cleanup_stats_debug_clone_default() {
+        let s = CleanupStats::default();
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("CleanupStats"), "{dbg}");
+        let cloned = s.clone();
+        assert_eq!(cloned.pending_objects, 0);
+    }
+
+    #[test]
+    fn cleanup_result_debug_clone() {
+        let r = CleanupResult {
+            object_id: ObjectId::new_for_test(1),
+            symbols_cleaned: 5,
+            bytes_freed: 1024,
+            within_budget: true,
+            handlers_run: vec!["h1".to_string()],
+        };
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("CleanupResult"), "{dbg}");
+        let cloned = r.clone();
+        assert_eq!(cloned.symbols_cleaned, 5);
+    }
 }
