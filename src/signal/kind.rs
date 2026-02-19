@@ -262,4 +262,23 @@ mod tests {
         crate::assert_with_log!(alarm == libc::SIGALRM, "alarm", libc::SIGALRM, alarm);
         crate::test_complete!("signal_kind_raw_values");
     }
+
+    // =========================================================================
+    // Wave 51 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn signal_kind_debug_clone_copy_hash() {
+        use std::collections::HashSet;
+        let s = SignalKind::Interrupt;
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Interrupt"), "{dbg}");
+        let copied = s;
+        let cloned = s.clone();
+        assert_eq!(copied, cloned);
+        let mut set = HashSet::new();
+        set.insert(s);
+        assert!(set.contains(&SignalKind::Interrupt));
+        assert!(!set.contains(&SignalKind::Terminate));
+    }
 }

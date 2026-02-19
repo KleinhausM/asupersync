@@ -252,4 +252,28 @@ mod tests {
         );
         crate::test_complete!("finalizer_debug_impl");
     }
+
+    // =========================================================================
+    // Wave 51 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn finalizer_escalation_debug_clone_copy_eq_default() {
+        let e = FinalizerEscalation::BoundedLog;
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("BoundedLog"), "{dbg}");
+        let copied = e;
+        let cloned = e.clone();
+        assert_eq!(copied, cloned);
+        let def = FinalizerEscalation::default();
+        assert_eq!(def, FinalizerEscalation::BoundedLog);
+    }
+
+    #[test]
+    fn finalizer_stack_debug_default() {
+        let stack = FinalizerStack::default();
+        let dbg = format!("{stack:?}");
+        assert!(dbg.contains("FinalizerStack"), "{dbg}");
+        assert!(stack.is_empty());
+    }
 }

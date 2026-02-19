@@ -224,4 +224,40 @@ mod tests {
         assert_eq!(ctx.stats().signed.load(Ordering::Relaxed), 1);
         assert_eq!(auth.symbol(), &symbol);
     }
+
+    // =========================================================================
+    // Wave 51 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn auth_mode_debug_clone_copy_eq() {
+        let m = AuthMode::Strict;
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("Strict"), "{dbg}");
+        let copied = m;
+        let cloned = m.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(AuthMode::Strict, AuthMode::Permissive);
+        assert_ne!(AuthMode::Permissive, AuthMode::Disabled);
+    }
+
+    #[test]
+    fn auth_stats_debug_default() {
+        let stats = AuthStats::default();
+        let dbg = format!("{stats:?}");
+        assert!(dbg.contains("AuthStats"), "{dbg}");
+        assert_eq!(stats.signed.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.verified_ok.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.verified_fail.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn security_context_debug_clone() {
+        let ctx = SecurityContext::for_testing(42);
+        let dbg = format!("{ctx:?}");
+        assert!(dbg.contains("SecurityContext"), "{dbg}");
+        let cloned = ctx.clone();
+        let dbg2 = format!("{cloned:?}");
+        assert!(dbg2.contains("SecurityContext"), "{dbg2}");
+    }
 }
