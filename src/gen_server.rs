@@ -5116,7 +5116,7 @@ mod tests {
 
     #[test]
     fn cast_overflow_policy_default_is_reject() {
-        let policy: CastOverflowPolicy = Default::default();
+        let policy = CastOverflowPolicy::default();
         assert!(matches!(policy, CastOverflowPolicy::Reject));
     }
 

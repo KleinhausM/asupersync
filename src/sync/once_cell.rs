@@ -1194,11 +1194,12 @@ mod tests {
     // =========================================================================
 
     #[test]
+    #[allow(clippy::clone_on_copy)]
     fn once_cell_error_debug_clone_copy_eq_display() {
         let already = OnceCellError::AlreadyInitialized;
         let cancelled = OnceCellError::Cancelled;
         let copied = already;
-        let cloned = already.clone();
+        let cloned = already.clone(); // intentional: exercises Clone on Copy type
         assert_eq!(copied, cloned);
         assert_eq!(copied, OnceCellError::AlreadyInitialized);
         assert_ne!(already, cancelled);
