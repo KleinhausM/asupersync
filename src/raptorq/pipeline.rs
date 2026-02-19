@@ -760,4 +760,38 @@ mod tests {
             "duplicate symbols must not count as used-for-decoding"
         );
     }
+
+    #[test]
+    fn send_outcome_debug_clone() {
+        let o = SendOutcome {
+            object_id: ObjectId::new_for_test(1),
+            source_symbols: 10,
+            repair_symbols: 5,
+            symbols_sent: 15,
+        };
+        let dbg = format!("{o:?}");
+        assert!(dbg.contains("SendOutcome"), "{dbg}");
+        let cloned = o.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
+
+    #[test]
+    fn send_progress_debug_clone() {
+        let p = SendProgress { sent: 3, total: 10 };
+        let dbg = format!("{p:?}");
+        assert!(dbg.contains("SendProgress"), "{dbg}");
+        let cloned = p.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
+
+    #[test]
+    fn receive_outcome_debug() {
+        let r = ReceiveOutcome {
+            data: vec![0u8; 16],
+            symbols_received: 20,
+            authenticated: true,
+        };
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("ReceiveOutcome"), "{dbg}");
+    }
 }

@@ -378,4 +378,13 @@ mod tests {
         assert!(entry.get_field("span_id").is_some());
         assert_eq!(entry.get_field("request_id"), Some("abc123"));
     }
+
+    #[test]
+    fn log_entry_debug_clone() {
+        let e = LogEntry::info("hello world");
+        let dbg = format!("{e:?}");
+        assert!(!dbg.is_empty());
+        let cloned = e.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
 }

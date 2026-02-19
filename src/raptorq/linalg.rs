@@ -1313,4 +1313,44 @@ mod tests {
             "markowitz solver should report the same inconsistent row"
         );
     }
+
+    #[test]
+    fn dense_row_debug_clone_eq() {
+        let r = DenseRow::new(vec![1, 2, 3]);
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("DenseRow"), "{dbg}");
+        let cloned = r.clone();
+        assert_eq!(r, cloned);
+        assert_ne!(r, DenseRow::zeros(3));
+    }
+
+    #[test]
+    fn sparse_row_debug_clone_eq() {
+        let r = SparseRow::new(vec![(0, Gf256::new(1)), (2, Gf256::new(5))], 4);
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("SparseRow"), "{dbg}");
+        let cloned = r.clone();
+        assert_eq!(r, cloned);
+        assert_ne!(r, SparseRow::zeros(4));
+    }
+
+    #[test]
+    fn gaussian_result_debug_clone_eq() {
+        let s = GaussianResult::Singular { row: 3 };
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Singular"), "{dbg}");
+        let cloned = s.clone();
+        assert_eq!(s, cloned);
+        assert_ne!(s, GaussianResult::Inconsistent { row: 3 });
+    }
+
+    #[test]
+    fn gaussian_stats_debug_clone_default() {
+        let s = GaussianStats::default();
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("GaussianStats"), "{dbg}");
+        assert_eq!(s.swaps, 0);
+        let cloned = s.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
 }

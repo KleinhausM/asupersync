@@ -1910,4 +1910,26 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn systematic_params_debug_clone() {
+        let p = SystematicParams::for_source_block(10, 64);
+        let dbg = format!("{p:?}");
+        assert!(dbg.contains("SystematicParams"), "{dbg}");
+        let cloned = p.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
+
+    #[test]
+    fn systematic_param_error_debug_clone_copy_eq() {
+        let e = SystematicParamError::UnsupportedSourceBlockSize {
+            requested: 60000,
+            max_supported: 56403,
+        };
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("UnsupportedSourceBlockSize"), "{dbg}");
+        let copied: SystematicParamError = e;
+        let cloned = e.clone();
+        assert_eq!(copied, cloned);
+    }
 }
