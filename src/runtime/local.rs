@@ -88,10 +88,14 @@ mod tests {
     use super::*;
     use crate::types::Outcome;
 
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
     #[test]
     fn duplicate_store_replaces_entry_without_panicking() {
-        crate::test_utils::init_test_logging();
-        crate::test_phase!("duplicate_store_replaces_entry_without_panicking");
+        init_test("duplicate_store_replaces_entry_without_panicking");
 
         let task_id = TaskId::new_for_test(42_424, 0);
         let _ = remove_local_task(task_id);
@@ -103,5 +107,52 @@ mod tests {
         assert_eq!(local_task_count(), baseline + 1);
         assert!(remove_local_task(task_id).is_some());
         assert_eq!(local_task_count(), baseline);
+    }
+
+    /// Invariant: store + remove cycle leaves count unchanged.
+    #[test]
+    fn store_remove_cycle() {
+        init_test("store_remove_cycle");
+
+        let task_id = TaskId::new_for_test(42_425, 0);
+        let _ = remove_local_task(task_id);
+        let baseline = local_task_count();
+
+        store_local_task(task_id, LocalStoredTask::new(async { Outcome::Ok(()) }));
+        crate::assert_with_log!(
+            local_task_count() == baseline + 1,
+            "count after store",
+            baseline + 1,
+            local_task_count()
+        );
+
+        let removed = remove_local_task(task_id);
+        crate::assert_with_log!(removed.is_some(), "removed exists", true, removed.is_some());
+        crate::assert_with_log!(
+            local_task_count() == baseline,
+            "count after remove",
+            baseline,
+            local_task_count()
+        );
+        crate::test_complete!("store_remove_cycle");
+    }
+
+    /// Invariant: removing a non-existent task returns None.
+    #[test]
+    fn remove_nonexistent_returns_none() {
+        init_test("remove_nonexistent_returns_none");
+
+        let task_id = TaskId::new_for_test(99_999, 0);
+        // Ensure it doesn't exist
+        let _ = remove_local_task(task_id);
+
+        let result = remove_local_task(task_id);
+        crate::assert_with_log!(
+            result.is_none(),
+            "nonexistent returns None",
+            true,
+            result.is_none()
+        );
+        crate::test_complete!("remove_nonexistent_returns_none");
     }
 }

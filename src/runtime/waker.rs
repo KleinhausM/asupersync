@@ -243,6 +243,67 @@ mod tests {
         crate::test_complete!("waker_for_source_explicit");
     }
 
+    /// Invariant: has_woken returns false when empty, true after wake.
+    #[test]
+    fn has_woken_tracks_state() {
+        init_test("has_woken_tracks_state");
+        let state = Arc::new(WakerState::new());
+        let has_none = !state.has_woken();
+        crate::assert_with_log!(has_none, "no woken initially", true, has_none);
+
+        let waker = state.waker_for(task(1));
+        waker.wake_by_ref();
+        crate::assert_with_log!(
+            state.has_woken(),
+            "has woken after wake",
+            true,
+            state.has_woken()
+        );
+
+        state.drain_woken();
+        let drained = !state.has_woken();
+        crate::assert_with_log!(drained, "no woken after drain", true, drained);
+        crate::test_complete!("has_woken_tracks_state");
+    }
+
+    /// Invariant: multiple tasks wake independently.
+    #[test]
+    fn multi_task_waking() {
+        init_test("multi_task_waking");
+        let state = Arc::new(WakerState::new());
+
+        let w1 = state.waker_for(task(10));
+        let w2 = state.waker_for(task(20));
+        let w3 = state.waker_for(task(30));
+
+        w1.wake();
+        w2.wake();
+        w3.wake();
+
+        let mut woken = state.drain_woken();
+        woken.sort();
+        crate::assert_with_log!(woken.len() == 3, "3 tasks woken", 3, woken.len());
+        crate::assert_with_log!(
+            woken.contains(&task(10)),
+            "contains 10",
+            true,
+            woken.contains(&task(10))
+        );
+        crate::assert_with_log!(
+            woken.contains(&task(20)),
+            "contains 20",
+            true,
+            woken.contains(&task(20))
+        );
+        crate::assert_with_log!(
+            woken.contains(&task(30)),
+            "contains 30",
+            true,
+            woken.contains(&task(30))
+        );
+        crate::test_complete!("multi_task_waking");
+    }
+
     #[test]
     fn wake_source_equality() {
         init_test("wake_source_equality");

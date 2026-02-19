@@ -199,6 +199,36 @@ mod tests {
         crate::test_complete!("same_deadline_pops_in_insertion_order");
     }
 
+    /// Invariant: clear empties the heap.
+    #[test]
+    fn clear_empties_heap() {
+        init_test("clear_empties_heap");
+        let mut heap = TimerHeap::new();
+        heap.insert(task(1), Time::from_millis(100));
+        heap.insert(task(2), Time::from_millis(200));
+        crate::assert_with_log!(heap.len() == 2, "len before clear", 2, heap.len());
+
+        heap.clear();
+        crate::assert_with_log!(heap.is_empty(), "empty after clear", true, heap.is_empty());
+        crate::assert_with_log!(heap.len() == 0, "len after clear", 0, heap.len());
+        let none = heap.peek_deadline().is_none();
+        crate::assert_with_log!(none, "no deadline after clear", true, none);
+        crate::test_complete!("clear_empties_heap");
+    }
+
+    /// Invariant: pop_expired with no expired items returns empty vec.
+    #[test]
+    fn pop_expired_none_expired() {
+        init_test("pop_expired_none_expired");
+        let mut heap = TimerHeap::new();
+        heap.insert(task(1), Time::from_millis(500));
+
+        let expired = heap.pop_expired(Time::from_millis(100));
+        crate::assert_with_log!(expired.is_empty(), "no expired", true, expired.is_empty());
+        crate::assert_with_log!(heap.len() == 1, "heap unchanged", 1, heap.len());
+        crate::test_complete!("pop_expired_none_expired");
+    }
+
     #[test]
     fn pop_expired_includes_exact_deadline() {
         init_test("pop_expired_includes_exact_deadline");
