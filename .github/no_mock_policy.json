@@ -15,6 +15,18 @@
   "default_owner": "runtime-core",
   "owner_routes": [
     {
+      "pattern": "src/net/quic_core/**",
+      "owner": "quic-native"
+    },
+    {
+      "pattern": "src/net/quic_native/**",
+      "owner": "quic-native"
+    },
+    {
+      "pattern": "src/http/h3_native.rs",
+      "owner": "quic-native"
+    },
+    {
       "pattern": "src/messaging/**",
       "owner": "messaging-core"
     },
