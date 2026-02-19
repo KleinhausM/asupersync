@@ -15,7 +15,7 @@ use asupersync::net::quic_core::{
 };
 use asupersync::net::quic_native::{
     NativeQuicConnection, NativeQuicConnectionConfig, NativeQuicConnectionError,
-    PacketNumberSpace, QuicConnectionState, StreamDirection, StreamRole,
+    PacketNumberSpace, QuicConnectionState, StreamDirection, StreamId, StreamRole,
 };
 use asupersync::types::Time;
 use asupersync::util::DetRng;
@@ -952,4 +952,679 @@ fn deterministic_time_progression() {
 
     let rtt = pair.client.transport().rtt().smoothed_rtt_micros().unwrap();
     assert_eq!(rtt, 50_000, "50ms RTT expected from 100ms send to 150ms ack");
+}
+
+// ===========================================================================
+// QH3-E2: Handshake + bidi/uni data + graceful close
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test 13: Client opens uni stream, writes data, server receives
+// ---------------------------------------------------------------------------
+
+#[test]
+fn uni_stream_client_to_server() {
+    let mut rng = DetRng::new(0xE2_0001);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    // Client opens a unidirectional stream.
+    let uni = pair.client.open_local_uni(cx).expect("client open uni");
+    assert!(uni.is_local_for(StreamRole::Client));
+    assert_eq!(uni.direction(), StreamDirection::Unidirectional);
+
+    // Client writes 256 bytes on the uni stream.
+    pair.client
+        .write_stream(cx, uni, 256)
+        .expect("client write uni");
+
+    // Server accepts the remote uni stream and receives data.
+    pair.server
+        .accept_remote_stream(cx, uni)
+        .expect("server accept uni");
+    pair.server
+        .receive_stream(cx, uni, 256)
+        .expect("server receive uni");
+
+    // Verify offsets on both sides.
+    let client_view = pair.client.streams().stream(uni).expect("client stream");
+    assert_eq!(client_view.send_offset, 256);
+    // Client recv_offset stays at 0 since it's uni (send-only from client POV).
+    assert_eq!(client_view.recv_offset, 0);
+
+    let server_view = pair.server.streams().stream(uni).expect("server stream");
+    assert_eq!(server_view.recv_offset, 256);
+    assert_eq!(server_view.send_offset, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 14: Server opens uni stream, writes data, client receives
+// ---------------------------------------------------------------------------
+
+#[test]
+fn uni_stream_server_to_client() {
+    let mut rng = DetRng::new(0xE2_0002);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    // Server opens a unidirectional stream.
+    let uni = pair.server.open_local_uni(cx).expect("server open uni");
+    assert!(uni.is_local_for(StreamRole::Server));
+    assert_eq!(uni.direction(), StreamDirection::Unidirectional);
+
+    // Server writes 512 bytes.
+    pair.server
+        .write_stream(cx, uni, 512)
+        .expect("server write uni");
+
+    // Client accepts and receives.
+    pair.client
+        .accept_remote_stream(cx, uni)
+        .expect("client accept uni");
+    pair.client
+        .receive_stream(cx, uni, 512)
+        .expect("client receive uni");
+
+    // Verify offsets.
+    let server_view = pair.server.streams().stream(uni).expect("server stream");
+    assert_eq!(server_view.send_offset, 512);
+
+    let client_view = pair.client.streams().stream(uni).expect("client stream");
+    assert_eq!(client_view.recv_offset, 512);
+    assert_eq!(client_view.send_offset, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: Large data transfer (64KB) across bidi stream in multiple segments
+// ---------------------------------------------------------------------------
+
+#[test]
+fn large_data_transfer_multi_segment() {
+    let mut rng = DetRng::new(0xE2_0003);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    let stream = pair.client.open_local_bidi(cx).expect("open bidi");
+
+    // Send 64KB total in 16 segments of 4KB each.
+    let segment_size: u64 = 4096;
+    let segment_count: u64 = 16;
+    let total: u64 = segment_size * segment_count;
+
+    for _ in 0..segment_count {
+        pair.client
+            .write_stream(cx, stream, segment_size)
+            .expect("client write segment");
+    }
+
+    // Verify client send offset accumulated correctly.
+    let client_view = pair.client.streams().stream(stream).expect("client stream");
+    assert_eq!(client_view.send_offset, total, "client should have sent 64KB");
+
+    // Server accepts and receives all data in matching segments.
+    pair.server
+        .accept_remote_stream(cx, stream)
+        .expect("server accept");
+
+    for _ in 0..segment_count {
+        pair.server
+            .receive_stream(cx, stream, segment_size)
+            .expect("server receive segment");
+    }
+
+    // Verify server received the full 64KB.
+    let server_view = pair.server.streams().stream(stream).expect("server stream");
+    assert_eq!(
+        server_view.recv_offset, total,
+        "server should have received 64KB"
+    );
+
+    // Server responds with a 32KB payload in 8 segments.
+    let resp_segment_count: u64 = 8;
+    let resp_total: u64 = segment_size * resp_segment_count;
+    for _ in 0..resp_segment_count {
+        pair.server
+            .write_stream(cx, stream, segment_size)
+            .expect("server write segment");
+    }
+
+    for _ in 0..resp_segment_count {
+        pair.client
+            .receive_stream(cx, stream, segment_size)
+            .expect("client receive segment");
+    }
+
+    let client_view = pair.client.streams().stream(stream).expect("client stream");
+    assert_eq!(client_view.send_offset, total);
+    assert_eq!(client_view.recv_offset, resp_total);
+}
+
+// ---------------------------------------------------------------------------
+// Test 16: Multiple concurrent bidi streams (8 streams, independent data)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multiple_concurrent_bidi_streams() {
+    let mut rng = DetRng::new(0xE2_0004);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    // Open 8 bidirectional streams from the client.
+    let mut streams = Vec::new();
+    for _ in 0..8 {
+        let s = pair.client.open_local_bidi(cx).expect("open bidi");
+        streams.push(s);
+    }
+    assert_eq!(streams.len(), 8);
+
+    // Write different amounts on each stream: stream[i] gets (i+1)*100 bytes.
+    for (i, &s) in streams.iter().enumerate() {
+        let bytes = ((i as u64) + 1) * 100;
+        pair.client
+            .write_stream(cx, s, bytes)
+            .expect("client write");
+    }
+
+    // Server accepts all streams and receives data independently.
+    for (i, &s) in streams.iter().enumerate() {
+        pair.server
+            .accept_remote_stream(cx, s)
+            .expect("server accept");
+        let bytes = ((i as u64) + 1) * 100;
+        pair.server
+            .receive_stream(cx, s, bytes)
+            .expect("server receive");
+    }
+
+    // Verify independent offsets.
+    for (i, &s) in streams.iter().enumerate() {
+        let expected = ((i as u64) + 1) * 100;
+        let client_view = pair.client.streams().stream(s).expect("client stream");
+        assert_eq!(
+            client_view.send_offset, expected,
+            "stream {} send_offset mismatch",
+            i
+        );
+
+        let server_view = pair.server.streams().stream(s).expect("server stream");
+        assert_eq!(
+            server_view.recv_offset, expected,
+            "stream {} recv_offset mismatch",
+            i
+        );
+    }
+
+    // Server writes different responses back on each stream.
+    for (i, &s) in streams.iter().enumerate() {
+        let bytes = ((i as u64) + 1) * 50;
+        pair.server
+            .write_stream(cx, s, bytes)
+            .expect("server write back");
+    }
+
+    for (i, &s) in streams.iter().enumerate() {
+        let bytes = ((i as u64) + 1) * 50;
+        pair.client
+            .receive_stream(cx, s, bytes)
+            .expect("client receive back");
+    }
+
+    // Final verification of bidirectional offsets.
+    for (i, &s) in streams.iter().enumerate() {
+        let sent = ((i as u64) + 1) * 100;
+        let recv = ((i as u64) + 1) * 50;
+        let client_view = pair.client.streams().stream(s).expect("client stream");
+        assert_eq!(client_view.send_offset, sent);
+        assert_eq!(client_view.recv_offset, recv);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: Stream FIN handling — final_size is set correctly
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stream_fin_sets_final_size() {
+    let mut rng = DetRng::new(0xE2_0005);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    let stream = pair.client.open_local_bidi(cx).expect("open bidi");
+    pair.server
+        .accept_remote_stream(cx, stream)
+        .expect("server accept");
+
+    // Client writes 200 bytes, then we set the final size on the server side
+    // (simulating reception of data with FIN).
+    pair.client
+        .write_stream(cx, stream, 200)
+        .expect("client write");
+
+    // Server receives data with FIN using receive_stream_segment.
+    pair.server
+        .receive_stream_segment(cx, stream, 0, 200, true)
+        .expect("server receive with FIN");
+
+    let server_view = pair.server.streams().stream(stream).expect("server stream");
+    assert_eq!(server_view.recv_offset, 200);
+    assert_eq!(
+        server_view.final_size,
+        Some(200),
+        "final_size should match the FIN offset"
+    );
+
+    // Attempting to receive more data past the final_size must fail.
+    let err = pair
+        .server
+        .receive_stream_segment(cx, stream, 200, 1, false)
+        .expect_err("must fail past final_size");
+    assert!(
+        matches!(
+            err,
+            NativeQuicConnectionError::Stream(
+                asupersync::net::quic_native::streams::QuicStreamError::InvalidFinalSize { .. }
+            )
+        ),
+        "expected InvalidFinalSize, got {:?}",
+        err
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 18: FIN with zero-length final segment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stream_fin_zero_length_segment() {
+    let mut rng = DetRng::new(0xE2_0006);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    let stream = pair.client.open_local_bidi(cx).expect("open bidi");
+    pair.server
+        .accept_remote_stream(cx, stream)
+        .expect("server accept");
+
+    // Server receives 100 bytes of data first (no FIN).
+    pair.server
+        .receive_stream_segment(cx, stream, 0, 100, false)
+        .expect("server receive data");
+
+    // Then receives a zero-length segment with FIN at offset 100.
+    pair.server
+        .receive_stream_segment(cx, stream, 100, 0, true)
+        .expect("server receive FIN");
+
+    let server_view = pair.server.streams().stream(stream).expect("server stream");
+    assert_eq!(server_view.recv_offset, 100);
+    assert_eq!(
+        server_view.final_size,
+        Some(100),
+        "final_size from zero-length FIN segment"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 19: Graceful close with in-flight data
+// ---------------------------------------------------------------------------
+
+#[test]
+fn graceful_close_with_in_flight_data() {
+    let mut rng = DetRng::new(0xE2_0007);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    // Open two streams and write data on each.
+    let s0 = pair.client.open_local_bidi(cx).expect("open s0");
+    let s1 = pair.client.open_local_bidi(cx).expect("open s1");
+
+    pair.client
+        .write_stream(cx, s0, 500)
+        .expect("write s0");
+    pair.client
+        .write_stream(cx, s1, 300)
+        .expect("write s1");
+
+    pair.server
+        .accept_remote_stream(cx, s0)
+        .expect("server accept s0");
+    pair.server
+        .accept_remote_stream(cx, s1)
+        .expect("server accept s1");
+
+    // Begin graceful close while data is in-flight.
+    let now = pair.clock.now();
+    pair.client
+        .begin_close(cx, now, 0x0)
+        .expect("begin close");
+
+    assert_eq!(pair.client.state(), QuicConnectionState::Draining);
+
+    // Data is still accessible: the server can receive data on existing streams.
+    pair.server
+        .receive_stream(cx, s0, 500)
+        .expect("server receive s0 while draining");
+    pair.server
+        .receive_stream(cx, s1, 300)
+        .expect("server receive s1 while draining");
+
+    // Client can still receive on existing streams while draining.
+    pair.client
+        .receive_stream(cx, s0, 100)
+        .expect("client receive while draining");
+
+    // But cannot open new streams.
+    let err = pair.client.open_local_bidi(cx).expect_err("no new streams while draining");
+    assert_eq!(
+        err,
+        NativeQuicConnectionError::InvalidState("1-RTT traffic not yet enabled")
+    );
+
+    // Verify Draining -> Closed transition after timeout.
+    pair.clock.advance(1_999_999);
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("poll before deadline");
+    assert_eq!(
+        pair.client.state(),
+        QuicConnectionState::Draining,
+        "should still be draining before timeout"
+    );
+
+    pair.clock.advance(1);
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("poll at deadline");
+    assert_eq!(
+        pair.client.state(),
+        QuicConnectionState::Closed,
+        "should be closed after drain timeout"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: Connection flow control — send credit tracking
+// ---------------------------------------------------------------------------
+
+#[test]
+fn connection_flow_control_send_credit() {
+    let mut rng = DetRng::new(0xE2_0008);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    // Connection send limit is 4 << 20 = 4_194_304 bytes.
+    let initial_remaining = pair.client.streams().connection_send_remaining();
+    assert_eq!(initial_remaining, 4 << 20);
+
+    // Open a stream and write a large chunk.
+    let s0 = pair.client.open_local_bidi(cx).expect("open s0");
+    let write_amount: u64 = 100_000;
+    pair.client
+        .write_stream(cx, s0, write_amount)
+        .expect("write large");
+
+    let after_write = pair.client.streams().connection_send_remaining();
+    assert_eq!(
+        after_write,
+        initial_remaining - write_amount,
+        "connection send credit should decrease by written amount"
+    );
+
+    // Write on a second stream and verify cumulative tracking.
+    let s1 = pair.client.open_local_bidi(cx).expect("open s1");
+    let write_amount_2: u64 = 50_000;
+    pair.client
+        .write_stream(cx, s1, write_amount_2)
+        .expect("write s1");
+
+    let after_both = pair.client.streams().connection_send_remaining();
+    assert_eq!(
+        after_both,
+        initial_remaining - write_amount - write_amount_2,
+        "connection send credit tracks cumulative writes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 21: Connection flow control — recv credit tracking
+// ---------------------------------------------------------------------------
+
+#[test]
+fn connection_flow_control_recv_credit() {
+    let mut rng = DetRng::new(0xE2_0009);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    // Connection recv limit is 4 << 20 = 4_194_304 bytes.
+    let initial_remaining = pair.server.streams().connection_recv_remaining();
+    assert_eq!(initial_remaining, 4 << 20);
+
+    // Client opens a bidi stream, server accepts and receives data.
+    let stream = pair.client.open_local_bidi(cx).expect("open bidi");
+    pair.server
+        .accept_remote_stream(cx, stream)
+        .expect("server accept");
+
+    let recv_amount: u64 = 200_000;
+    pair.client
+        .write_stream(cx, stream, recv_amount)
+        .expect("client write");
+    pair.server
+        .receive_stream(cx, stream, recv_amount)
+        .expect("server receive");
+
+    let after_recv = pair.server.streams().connection_recv_remaining();
+    assert_eq!(
+        after_recv,
+        initial_remaining - recv_amount,
+        "connection recv credit should decrease by received amount"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 22: Multiple uni + bidi streams interleaved
+// ---------------------------------------------------------------------------
+
+#[test]
+fn interleaved_uni_and_bidi_streams() {
+    let mut rng = DetRng::new(0xE2_000A);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    // Client opens 3 bidi and 3 uni streams.
+    let bidi0 = pair.client.open_local_bidi(cx).expect("bidi0");
+    let uni0 = pair.client.open_local_uni(cx).expect("uni0");
+    let bidi1 = pair.client.open_local_bidi(cx).expect("bidi1");
+    let uni1 = pair.client.open_local_uni(cx).expect("uni1");
+    let bidi2 = pair.client.open_local_bidi(cx).expect("bidi2");
+    let uni2 = pair.client.open_local_uni(cx).expect("uni2");
+
+    // Verify directions.
+    assert_eq!(bidi0.direction(), StreamDirection::Bidirectional);
+    assert_eq!(uni0.direction(), StreamDirection::Unidirectional);
+    assert_eq!(bidi1.direction(), StreamDirection::Bidirectional);
+    assert_eq!(uni1.direction(), StreamDirection::Unidirectional);
+    assert_eq!(bidi2.direction(), StreamDirection::Bidirectional);
+    assert_eq!(uni2.direction(), StreamDirection::Unidirectional);
+
+    // Write on all streams in interleaved order.
+    pair.client.write_stream(cx, bidi0, 100).expect("write bidi0");
+    pair.client.write_stream(cx, uni0, 200).expect("write uni0");
+    pair.client.write_stream(cx, bidi1, 300).expect("write bidi1");
+    pair.client.write_stream(cx, uni1, 400).expect("write uni1");
+    pair.client.write_stream(cx, bidi2, 500).expect("write bidi2");
+    pair.client.write_stream(cx, uni2, 600).expect("write uni2");
+
+    // Server accepts and receives everything.
+    for &s in &[bidi0, uni0, bidi1, uni1, bidi2, uni2] {
+        pair.server
+            .accept_remote_stream(cx, s)
+            .expect("server accept");
+    }
+
+    pair.server.receive_stream(cx, bidi0, 100).expect("recv bidi0");
+    pair.server.receive_stream(cx, uni0, 200).expect("recv uni0");
+    pair.server.receive_stream(cx, bidi1, 300).expect("recv bidi1");
+    pair.server.receive_stream(cx, uni1, 400).expect("recv uni1");
+    pair.server.receive_stream(cx, bidi2, 500).expect("recv bidi2");
+    pair.server.receive_stream(cx, uni2, 600).expect("recv uni2");
+
+    // Verify all offsets.
+    let expected: [(StreamId, u64); 6] = [
+        (bidi0, 100),
+        (uni0, 200),
+        (bidi1, 300),
+        (uni1, 400),
+        (bidi2, 500),
+        (uni2, 600),
+    ];
+    for (s, expected_len) in expected {
+        let sv = pair.server.streams().stream(s).expect("stream");
+        assert_eq!(
+            sv.recv_offset, expected_len,
+            "stream {:?} recv_offset mismatch",
+            s
+        );
+    }
+
+    // Server writes back on bidi streams only.
+    pair.server.write_stream(cx, bidi0, 10).expect("srv write bidi0");
+    pair.server.write_stream(cx, bidi1, 30).expect("srv write bidi1");
+    pair.server.write_stream(cx, bidi2, 50).expect("srv write bidi2");
+
+    pair.client.receive_stream(cx, bidi0, 10).expect("cli recv bidi0");
+    pair.client.receive_stream(cx, bidi1, 30).expect("cli recv bidi1");
+    pair.client.receive_stream(cx, bidi2, 50).expect("cli recv bidi2");
+}
+
+// ---------------------------------------------------------------------------
+// Test 23: Out-of-order multi-segment reception with FIN on last segment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn out_of_order_segments_with_fin() {
+    let mut rng = DetRng::new(0xE2_000B);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    let stream = pair.client.open_local_bidi(cx).expect("open bidi");
+    pair.server
+        .accept_remote_stream(cx, stream)
+        .expect("server accept");
+
+    // Simulate out-of-order delivery: segments arrive as [20..30), [10..20), [30..40+FIN), [0..10).
+    pair.server
+        .receive_stream_segment(cx, stream, 20, 10, false)
+        .expect("seg [20..30)");
+    assert_eq!(
+        pair.server.streams().stream(stream).expect("s").recv_offset,
+        0,
+        "contiguous offset should not advance yet"
+    );
+
+    pair.server
+        .receive_stream_segment(cx, stream, 10, 10, false)
+        .expect("seg [10..20)");
+    assert_eq!(
+        pair.server.streams().stream(stream).expect("s").recv_offset,
+        0,
+        "still waiting for [0..10)"
+    );
+
+    pair.server
+        .receive_stream_segment(cx, stream, 30, 10, true)
+        .expect("seg [30..40) with FIN");
+    assert_eq!(
+        pair.server.streams().stream(stream).expect("s").recv_offset,
+        0,
+        "still waiting for [0..10)"
+    );
+    assert_eq!(
+        pair.server.streams().stream(stream).expect("s").final_size,
+        Some(40),
+        "final_size should be set from FIN"
+    );
+
+    // Fill the gap.
+    pair.server
+        .receive_stream_segment(cx, stream, 0, 10, false)
+        .expect("seg [0..10)");
+
+    let server_view = pair.server.streams().stream(stream).expect("server stream");
+    assert_eq!(
+        server_view.recv_offset, 40,
+        "all segments reassembled, contiguous offset should be 40"
+    );
+    assert_eq!(server_view.final_size, Some(40));
+}
+
+// ---------------------------------------------------------------------------
+// Test 24: Both sides drain simultaneously, both reach Closed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn both_sides_drain_to_closed() {
+    let mut rng = DetRng::new(0xE2_000C);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+
+    // Open a stream and exchange some data.
+    let stream = pair.client.open_local_bidi(cx).expect("open bidi");
+    pair.client
+        .write_stream(cx, stream, 1000)
+        .expect("client write");
+    pair.server
+        .accept_remote_stream(cx, stream)
+        .expect("server accept");
+    pair.server
+        .receive_stream(cx, stream, 1000)
+        .expect("server receive");
+
+    // Both sides initiate graceful close simultaneously.
+    let now = pair.clock.now();
+    pair.client
+        .begin_close(cx, now, 0x00)
+        .expect("client drain");
+    pair.server
+        .begin_close(cx, now, 0x00)
+        .expect("server drain");
+
+    assert_eq!(pair.client.state(), QuicConnectionState::Draining);
+    assert_eq!(pair.server.state(), QuicConnectionState::Draining);
+
+    // Advance time past drain timeout.
+    pair.clock.advance(2_000_000);
+    pair.client
+        .poll(cx, pair.clock.now())
+        .expect("client poll");
+    pair.server
+        .poll(cx, pair.clock.now())
+        .expect("server poll");
+
+    assert_eq!(pair.client.state(), QuicConnectionState::Closed);
+    assert_eq!(pair.server.state(), QuicConnectionState::Closed);
 }
