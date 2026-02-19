@@ -741,4 +741,33 @@ mod tests {
         assert!(ob.is_epoch_valid(EpochId(0)));
         assert!(ob.is_epoch_valid(EpochId(u64::MAX)));
     }
+
+    #[test]
+    fn epoch_id_debug_clone_copy_eq_ord_hash() {
+        use std::collections::HashSet;
+        let a = EpochId(42);
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, EpochId(99));
+        assert!(a < EpochId(100));
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("EpochId"));
+        let mut set = HashSet::new();
+        set.insert(a);
+        assert!(set.contains(&b));
+    }
+
+    #[test]
+    fn epoch_window_debug_clone_copy_eq() {
+        let a = EpochWindow { start: EpochId(10), end: EpochId(20) };
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, EpochWindow { start: EpochId(0), end: EpochId(5) });
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("EpochWindow"));
+    }
 }

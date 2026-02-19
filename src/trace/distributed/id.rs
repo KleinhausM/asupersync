@@ -274,4 +274,32 @@ mod tests {
         let parsed = TraceId::from_w3c_string(&w3c).unwrap();
         assert_eq!(parsed, id);
     }
+
+    #[test]
+    fn trace_id_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let a = TraceId::new(1, 2);
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, TraceId::new(3, 4));
+        let mut set = HashSet::new();
+        set.insert(a);
+        assert!(set.contains(&b));
+    }
+
+    #[test]
+    fn symbol_span_id_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let a = SymbolSpanId::new(42);
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, SymbolSpanId::new(99));
+        let mut set = HashSet::new();
+        set.insert(a);
+        assert!(set.contains(&b));
+    }
 }

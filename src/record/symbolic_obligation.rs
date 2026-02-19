@@ -1049,4 +1049,29 @@ mod tests {
 
         obligation.abort();
     }
+
+    #[test]
+    fn symbolic_obligation_kind_debug_clone_copy_eq() {
+        let a = SymbolicObligationKind::SendObject;
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, SymbolicObligationKind::DecodeObject);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("SendObject"));
+    }
+
+    #[test]
+    fn symbolic_obligation_state_debug_clone_copy_eq() {
+        let a = SymbolicObligationState::Committed;
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, SymbolicObligationState::Aborted);
+        assert_ne!(a, SymbolicObligationState::Leaked);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Committed"));
+    }
 }
