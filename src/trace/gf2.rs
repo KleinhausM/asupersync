@@ -790,4 +790,30 @@ mod tests {
         // Should not panic and results should be consistent.
         assert!(pairs.pairs.len() + pairs.unpaired.len() <= 5);
     }
+
+    #[test]
+    fn bitvec_clone_eq_hash() {
+        use std::collections::HashSet;
+        let mut a = BitVec::zeros(128);
+        a.set(0);
+        a.set(64);
+        let b = a.clone();
+        assert_eq!(a, b);
+        let mut set = HashSet::new();
+        set.insert(a.clone());
+        assert!(set.contains(&b));
+    }
+
+    #[test]
+    fn persistence_pairs_debug_clone() {
+        let pp = PersistencePairs {
+            pairs: vec![(0, 1), (2, 3)],
+            unpaired: vec![4],
+        };
+        let cloned = pp.clone();
+        assert_eq!(cloned.pairs.len(), 2);
+        assert_eq!(cloned.unpaired, vec![4]);
+        let dbg = format!("{pp:?}");
+        assert!(dbg.contains("PersistencePairs"));
+    }
 }

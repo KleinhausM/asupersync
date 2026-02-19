@@ -1255,4 +1255,38 @@ mod tests {
         assert!(outputs.contains_key("b"));
         assert!(!outputs.contains_key("ghost"));
     }
+
+    #[test]
+    fn generated_message_debug_clone_eq() {
+        let msg = GeneratedMessage {
+            name: "Ping".to_string(),
+            has_payload: true,
+            type_params: vec!["T".to_string()],
+        };
+        let cloned = msg.clone();
+        assert_eq!(msg, cloned);
+        assert_ne!(
+            msg,
+            GeneratedMessage {
+                name: "Pong".to_string(),
+                has_payload: false,
+                type_params: vec![],
+            }
+        );
+        let dbg = format!("{msg:?}");
+        assert!(dbg.contains("GeneratedMessage"));
+        assert!(dbg.contains("Ping"));
+    }
+
+    #[test]
+    fn compilation_error_debug_clone() {
+        let err = CompilationError::ParticipantNotFound {
+            name: "ghost".to_string(),
+        };
+        let cloned = err.clone();
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("ParticipantNotFound"));
+        let dbg2 = format!("{cloned:?}");
+        assert_eq!(dbg, dbg2);
+    }
 }

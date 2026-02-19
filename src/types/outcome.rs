@@ -967,4 +967,30 @@ mod tests {
         assert!(display.contains("panic"));
         assert!(display.contains("oops"));
     }
+
+    #[test]
+    fn severity_debug_clone_copy_hash() {
+        use std::collections::HashSet;
+        let a = Severity::Cancelled;
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Cancelled"));
+        let mut set = HashSet::new();
+        set.insert(a);
+        assert!(set.contains(&b));
+        assert!(!set.contains(&Severity::Ok));
+    }
+
+    #[test]
+    fn panic_payload_debug_clone_eq() {
+        let a = PanicPayload::new("boom");
+        let b = a.clone();
+        assert_eq!(a, b);
+        assert_ne!(a, PanicPayload::new("other"));
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("PanicPayload"));
+    }
 }

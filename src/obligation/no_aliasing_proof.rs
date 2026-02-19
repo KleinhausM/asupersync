@@ -1991,4 +1991,28 @@ mod tests {
         crate::assert_with_log!(r2_ok, "second check verified (reset)", true, r2_ok);
         crate::test_complete!("prover_reuse_resets");
     }
+
+    #[test]
+    fn lemma_debug_clone_copy_eq() {
+        let a = Lemma::AllocationFreshness;
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, Lemma::DropSafety);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("AllocationFreshness"));
+    }
+
+    #[test]
+    fn violation_kind_debug_clone_copy_eq() {
+        let a = ViolationKind::DoubleOwnership;
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, ViolationKind::SelfTransfer);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("DoubleOwnership"));
+    }
 }
