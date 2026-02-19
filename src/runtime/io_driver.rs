@@ -535,6 +535,11 @@ pub struct IoRegistration {
     /// Used for `Waker::will_wake` comparison to avoid unnecessary
     /// atomic ref-count bumps and mutex acquisitions on the hot path.
     cached_waker: Option<Waker>,
+    /// Tracks whether this registration has already been explicitly deregistered.
+    ///
+    /// This prevents duplicate best-effort deregistration in `Drop` without
+    /// leaking the registration object.
+    deregistered: bool,
 }
 
 impl IoRegistration {
@@ -544,6 +549,7 @@ impl IoRegistration {
             interest,
             driver,
             cached_waker: None,
+            deregistered: false,
         }
     }
 
@@ -633,7 +639,7 @@ impl IoRegistration {
     }
 
     /// Explicitly deregisters without waiting for drop.
-    pub fn deregister(self) -> io::Result<()> {
+    pub fn deregister(mut self) -> io::Result<()> {
         if let Some(driver) = self.driver.upgrade() {
             let first = {
                 let mut guard = driver.lock();
@@ -641,11 +647,11 @@ impl IoRegistration {
             };
             match first {
                 Ok(()) => {
-                    std::mem::forget(self);
+                    self.deregistered = true;
                     Ok(())
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    std::mem::forget(self);
+                    self.deregistered = true;
                     Ok(())
                 }
                 Err(first_err) => {
@@ -656,11 +662,11 @@ impl IoRegistration {
                     };
                     match second {
                         Ok(()) => {
-                            std::mem::forget(self);
+                            self.deregistered = true;
                             Ok(())
                         }
                         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                            std::mem::forget(self);
+                            self.deregistered = true;
                             Ok(())
                         }
                         Err(_second_err) => Err(first_err),
@@ -668,7 +674,7 @@ impl IoRegistration {
                 }
             }
         } else {
-            std::mem::forget(self);
+            self.deregistered = true;
             Ok(())
         }
     }
@@ -676,6 +682,9 @@ impl IoRegistration {
 
 impl Drop for IoRegistration {
     fn drop(&mut self) {
+        if self.deregistered {
+            return;
+        }
         if let Some(driver) = self.driver.upgrade() {
             let mut guard = driver.lock();
             let _ = guard.deregister(self.token);

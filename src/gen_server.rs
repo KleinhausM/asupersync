@@ -970,10 +970,10 @@ impl<S: GenServer> GenServerHandle<S> {
                         Ok(())
                     }
                     Ok(None) => Ok(()),
-                    Err(mpsc::SendError::Disconnected(_)) => Err(CastError::ServerStopped),
-                    Err(mpsc::SendError::Full(_) | mpsc::SendError::Cancelled(_)) => {
-                        unreachable!("send_evict_oldest never returns Full or Cancelled")
+                    Err(mpsc::SendError::Disconnected(_) | mpsc::SendError::Cancelled(_)) => {
+                        Err(CastError::ServerStopped)
                     }
+                    Err(mpsc::SendError::Full(_)) => Err(CastError::Full),
                 }
             }
         }
@@ -1230,10 +1230,10 @@ impl<S: GenServer> GenServerRef<S> {
                     Ok(())
                 }
                 Ok(None) => Ok(()),
-                Err(mpsc::SendError::Disconnected(_)) => Err(CastError::ServerStopped),
-                Err(mpsc::SendError::Full(_) | mpsc::SendError::Cancelled(_)) => {
-                    unreachable!("send_evict_oldest never returns Full or Cancelled")
+                Err(mpsc::SendError::Disconnected(_) | mpsc::SendError::Cancelled(_)) => {
+                    Err(CastError::ServerStopped)
                 }
+                Err(mpsc::SendError::Full(_)) => Err(CastError::Full),
             },
         }
     }
@@ -3111,6 +3111,55 @@ mod tests {
         server_ref.try_cast(TaggedCast::Set(3)).unwrap();
 
         crate::test_complete!("gen_server_drop_oldest_ref_also_evicts");
+    }
+
+    #[test]
+    fn gen_server_drop_oldest_reserved_slots_returns_full() {
+        init_test("gen_server_drop_oldest_reserved_slots_returns_full");
+
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let cx = Cx::for_testing();
+        let scope = crate::cx::Scope::<FailFast>::new(root, Budget::INFINITE);
+
+        let (handle, stored) = scope
+            .spawn_gen_server(&mut state, &cx, DropOldestCounter { count: 0 }, 1)
+            .unwrap();
+        state.store_spawned_task(handle.task_id(), stored);
+
+        // Reserve the only mailbox slot without committing a message.
+        let _permit = futures_lite::future::block_on(handle.sender.reserve(&cx)).unwrap();
+
+        // DropOldest cannot evict reserved slots, so this must be a recoverable Full.
+        let err = handle.try_cast(TaggedCast::Set(1)).unwrap_err();
+        assert!(matches!(err, CastError::Full), "expected Full, got {err:?}");
+
+        crate::test_complete!("gen_server_drop_oldest_reserved_slots_returns_full");
+    }
+
+    #[test]
+    fn gen_server_ref_drop_oldest_reserved_slots_returns_full() {
+        init_test("gen_server_ref_drop_oldest_reserved_slots_returns_full");
+
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let cx = Cx::for_testing();
+        let scope = crate::cx::Scope::<FailFast>::new(root, Budget::INFINITE);
+
+        let (handle, stored) = scope
+            .spawn_gen_server(&mut state, &cx, DropOldestCounter { count: 0 }, 1)
+            .unwrap();
+        state.store_spawned_task(handle.task_id(), stored);
+        let server_ref = handle.server_ref();
+
+        // Reserve the only mailbox slot without committing a message.
+        let _permit = futures_lite::future::block_on(handle.sender.reserve(&cx)).unwrap();
+
+        // Mirror behavior through GenServerRef::try_cast.
+        let err = server_ref.try_cast(TaggedCast::Set(1)).unwrap_err();
+        assert!(matches!(err, CastError::Full), "expected Full, got {err:?}");
+
+        crate::test_complete!("gen_server_ref_drop_oldest_reserved_slots_returns_full");
     }
 
     /// DropOldest eviction of a Call envelope must abort the reply obligation

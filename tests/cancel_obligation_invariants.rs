@@ -305,6 +305,228 @@ fn cancel_partial_obligation_resolution_detects_leak() {
     test_complete!("cancel_partial_obligation_resolution_detects_leak");
 }
 
+/// Repeated cancel requests during drain are idempotent and do not break cleanup.
+#[test]
+fn repeated_cancel_request_is_idempotent_during_drain() {
+    init_test("repeated_cancel_request_is_idempotent_during_drain");
+
+    let mut cancel_oracle = CancellationProtocolOracle::new();
+    let mut obligation_oracle = ObligationLeakOracle::new();
+
+    let root = region(0);
+    let worker = task(1);
+    let obl = obligation(10);
+    let reason = CancelReason::timeout();
+    let cleanup_budget = Budget::INFINITE;
+
+    test_section!("setup");
+    cancel_oracle.on_region_create(root, None);
+    cancel_oracle.on_task_create(worker, root);
+    cancel_oracle.on_transition(worker, &TaskState::Created, &TaskState::Running, t(10));
+    obligation_oracle.on_create(obl, ObligationKind::SendPermit, worker, root);
+
+    test_section!("request");
+    cancel_oracle.on_cancel_request(worker, reason.clone(), t(50));
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::Running,
+        &TaskState::CancelRequested {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        t(50),
+    );
+
+    // Idempotent repeated request while already cancel-requested.
+    cancel_oracle.on_cancel_request(worker, reason.clone(), t(60));
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::CancelRequested {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        &TaskState::CancelRequested {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        t(60),
+    );
+
+    test_section!("drain_finalize");
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::CancelRequested {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        &TaskState::Cancelling {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        t(100),
+    );
+
+    // Repeated request during drain should be a no-op for protocol validity.
+    cancel_oracle.on_cancel_request(worker, reason.clone(), t(110));
+    obligation_oracle.on_resolve(obl, ObligationState::Aborted);
+
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::Cancelling {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        &TaskState::Finalizing {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        t(150),
+    );
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::Finalizing {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        &TaskState::Completed(Outcome::Cancelled(reason)),
+        t(200),
+    );
+    obligation_oracle.on_region_close(root, t(220));
+
+    test_section!("verify");
+    let cancel_ok = cancel_oracle.check().is_ok();
+    assert_with_log!(
+        cancel_ok,
+        "repeated cancel is protocol-safe",
+        true,
+        cancel_ok
+    );
+
+    let has_request = cancel_oracle.has_cancel_request(worker);
+    assert_with_log!(has_request, "cancel request retained", true, has_request);
+
+    let obligation_ok = obligation_oracle.check(t(220)).is_ok();
+    assert_with_log!(
+        obligation_ok,
+        "no obligation leak after repeated cancel",
+        true,
+        obligation_ok
+    );
+
+    test_complete!("repeated_cancel_request_is_idempotent_during_drain");
+}
+
+/// Partial drain remains a leak even if cancel is requested repeatedly.
+#[test]
+fn repeated_cancel_request_does_not_mask_partial_drain_leak() {
+    init_test("repeated_cancel_request_does_not_mask_partial_drain_leak");
+
+    let mut cancel_oracle = CancellationProtocolOracle::new();
+    let mut obligation_oracle = ObligationLeakOracle::new();
+
+    let root = region(0);
+    let worker = task(1);
+    let obl_resolved = obligation(10);
+    let obl_leaked = obligation(11);
+    let reason = CancelReason::timeout();
+    let cleanup_budget = Budget::INFINITE;
+
+    test_section!("setup");
+    cancel_oracle.on_region_create(root, None);
+    cancel_oracle.on_task_create(worker, root);
+    cancel_oracle.on_transition(worker, &TaskState::Created, &TaskState::Running, t(10));
+    obligation_oracle.on_create(obl_resolved, ObligationKind::Ack, worker, root);
+    obligation_oracle.on_create(obl_leaked, ObligationKind::Lease, worker, root);
+
+    test_section!("request_drain");
+    cancel_oracle.on_cancel_request(worker, reason.clone(), t(50));
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::Running,
+        &TaskState::CancelRequested {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        t(50),
+    );
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::CancelRequested {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        &TaskState::Cancelling {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        t(100),
+    );
+
+    // Only one obligation is resolved during drain; the other remains leaked.
+    obligation_oracle.on_resolve(obl_resolved, ObligationState::Aborted);
+    cancel_oracle.on_cancel_request(worker, reason.clone(), t(120));
+
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::Cancelling {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        &TaskState::Finalizing {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        t(150),
+    );
+    cancel_oracle.on_transition(
+        worker,
+        &TaskState::Finalizing {
+            reason: reason.clone(),
+            cleanup_budget,
+        },
+        &TaskState::Completed(Outcome::Cancelled(reason)),
+        t(200),
+    );
+    obligation_oracle.on_region_close(root, t(220));
+
+    test_section!("verify");
+    let cancel_ok = cancel_oracle.check().is_ok();
+    assert_with_log!(
+        cancel_ok,
+        "protocol remains valid despite repeated cancel requests",
+        true,
+        cancel_ok
+    );
+
+    let leak_result = obligation_oracle.check(t(220));
+    let is_leak = leak_result.is_err();
+    assert_with_log!(
+        is_leak,
+        "partial drain leak still detected after repeated cancel",
+        true,
+        is_leak
+    );
+
+    if let Err(violation) = leak_result {
+        let leaked_count = violation.leaked.len();
+        assert_with_log!(
+            leaked_count == 1,
+            "exactly one leaked obligation",
+            1,
+            leaked_count
+        );
+        let leaked_obligation = violation.leaked[0].obligation;
+        assert_with_log!(
+            leaked_obligation == obl_leaked,
+            "leaked obligation identity is preserved",
+            obl_leaked,
+            leaked_obligation
+        );
+    }
+
+    test_complete!("repeated_cancel_request_does_not_mask_partial_drain_leak");
+}
+
 // ============================================================================
 // Region close + quiescence + obligations
 // ============================================================================
