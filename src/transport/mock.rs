@@ -1107,4 +1107,124 @@ mod tests {
         ));
         assert!(q.delays.is_some());
     }
+
+    // Pure data-type tests (wave 14 – CyanBarn)
+
+    #[test]
+    fn sim_transport_config_default_values() {
+        let cfg = SimTransportConfig::default();
+        assert_eq!(cfg.base_latency, Duration::ZERO);
+        assert_eq!(cfg.latency_jitter, Duration::ZERO);
+        assert!((cfg.loss_rate - 0.0).abs() < f64::EPSILON);
+        assert!((cfg.duplication_rate - 0.0).abs() < f64::EPSILON);
+        assert!((cfg.corruption_rate - 0.0).abs() < f64::EPSILON);
+        assert_eq!(cfg.capacity, 1024);
+        assert!(cfg.seed.is_none());
+        assert!(cfg.preserve_order);
+        assert!(cfg.fail_after.is_none());
+    }
+
+    #[test]
+    fn sim_transport_config_debug_clone() {
+        let cfg = SimTransportConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("SimTransportConfig"));
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned.capacity, 1024);
+    }
+
+    #[test]
+    fn sim_transport_config_reliable() {
+        let cfg = SimTransportConfig::reliable();
+        assert_eq!(cfg.base_latency, Duration::ZERO);
+        assert!((cfg.loss_rate - 0.0).abs() < f64::EPSILON);
+        assert!(cfg.preserve_order);
+    }
+
+    #[test]
+    fn sim_transport_config_lossy() {
+        let cfg = SimTransportConfig::lossy(0.5);
+        assert!((cfg.loss_rate - 0.5).abs() < f64::EPSILON);
+        assert_eq!(cfg.base_latency, Duration::ZERO);
+    }
+
+    #[test]
+    fn sim_transport_config_with_latency() {
+        let cfg =
+            SimTransportConfig::with_latency(Duration::from_millis(10), Duration::from_millis(5));
+        assert_eq!(cfg.base_latency, Duration::from_millis(10));
+        assert_eq!(cfg.latency_jitter, Duration::from_millis(5));
+    }
+
+    #[test]
+    fn sim_transport_config_deterministic() {
+        let cfg = SimTransportConfig::deterministic(42);
+        assert_eq!(cfg.seed, Some(42));
+    }
+
+    #[test]
+    fn sim_link_debug_clone() {
+        let link = SimLink {
+            config: SimTransportConfig::reliable(),
+        };
+        let dbg = format!("{link:?}");
+        assert!(dbg.contains("SimLink"));
+
+        let cloned = link.clone();
+        assert_eq!(cloned.config.capacity, 1024);
+    }
+
+    #[test]
+    fn sim_network_fully_connected_debug() {
+        let net = SimNetwork::fully_connected(3, SimTransportConfig::reliable());
+        let dbg = format!("{net:?}");
+        assert!(dbg.contains("SimNetwork"));
+    }
+
+    #[test]
+    fn sim_network_fully_connected_link_count() {
+        let net = SimNetwork::fully_connected(3, SimTransportConfig::reliable());
+        // 3 nodes, 6 directed links (3 * 2)
+        assert_eq!(net.links.len(), 6);
+        assert_eq!(net.nodes.len(), 3);
+    }
+
+    #[test]
+    fn sim_network_ring_link_count() {
+        let net = SimNetwork::ring(4, SimTransportConfig::reliable());
+        // 4 nodes, 8 directed links (4 bidirectional edges)
+        assert_eq!(net.links.len(), 8);
+        assert_eq!(net.nodes.len(), 4);
+    }
+
+    #[test]
+    fn sim_network_ring_zero_nodes() {
+        let net = SimNetwork::ring(0, SimTransportConfig::reliable());
+        assert_eq!(net.nodes.len(), 0);
+        assert_eq!(net.links.len(), 0);
+    }
+
+    #[test]
+    fn sim_network_partition_and_heal() {
+        let mut net = SimNetwork::fully_connected(4, SimTransportConfig::reliable());
+        assert_eq!(net.links.len(), 12); // 4 * 3
+
+        net.partition(&[0, 1], &[2, 3]);
+        // Removed 0->2, 0->3, 1->2, 1->3, 2->0, 2->1, 3->0, 3->1 = 8 links
+        assert_eq!(net.links.len(), 4);
+
+        net.heal_partition(&[0, 1], &[2, 3]);
+        assert_eq!(net.links.len(), 12);
+    }
+
+    #[test]
+    fn sim_network_transport_missing_link() {
+        // Ring: 0->1, 1->0, 1->2, 2->1, 2->0, 0->2
+        // Partition to create a missing link
+        let mut net = SimNetwork::ring(3, SimTransportConfig::reliable());
+        net.partition(&[0], &[2]);
+        // Getting transport for missing link should return a closed channel
+        let (_sink, _stream) = net.transport(0, 2);
+    }
 }

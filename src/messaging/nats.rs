@@ -1324,4 +1324,170 @@ mod tests {
         assert_eq!(nats_json_escape("new\nline"), "new\\nline");
         assert_eq!(nats_json_escape("plain"), "plain");
     }
+
+    // Pure data-type tests (wave 14 – CyanBarn)
+
+    #[test]
+    fn nats_error_display_all_variants() {
+        assert!(NatsError::Io(io::Error::other("e"))
+            .to_string()
+            .contains("I/O error"));
+        assert!(NatsError::Protocol("p".into())
+            .to_string()
+            .contains("protocol error"));
+        assert!(NatsError::Server("s".into())
+            .to_string()
+            .contains("server error"));
+        assert!(NatsError::InvalidUrl("bad://".into())
+            .to_string()
+            .contains("bad://"));
+        assert!(NatsError::Cancelled.to_string().contains("cancelled"));
+        assert!(NatsError::Closed.to_string().contains("closed"));
+        assert!(NatsError::SubscriptionNotFound(42)
+            .to_string()
+            .contains("42"));
+        assert!(NatsError::NotConnected
+            .to_string()
+            .contains("not connected"));
+    }
+
+    #[test]
+    fn nats_error_debug() {
+        let err = NatsError::Closed;
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("Closed"));
+    }
+
+    #[test]
+    fn nats_error_source_io() {
+        let err = NatsError::Io(io::Error::other("disk"));
+        assert!(std::error::Error::source(&err).is_some());
+    }
+
+    #[test]
+    fn nats_error_source_none_for_others() {
+        assert!(std::error::Error::source(&NatsError::Cancelled).is_none());
+        assert!(std::error::Error::source(&NatsError::Closed).is_none());
+        assert!(std::error::Error::source(&NatsError::NotConnected).is_none());
+    }
+
+    #[test]
+    fn nats_error_from_io() {
+        let io_err = io::Error::other("net");
+        let err: NatsError = NatsError::from(io_err);
+        assert!(matches!(err, NatsError::Io(_)));
+    }
+
+    #[test]
+    fn nats_config_debug_clone() {
+        let cfg = NatsConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("NatsConfig"));
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned.host, "127.0.0.1");
+        assert_eq!(cloned.port, 4222);
+    }
+
+    #[test]
+    fn nats_config_from_url_with_creds() {
+        let cfg = NatsConfig::from_url("nats://user:pass@myhost:4223").unwrap();
+        assert_eq!(cfg.host, "myhost");
+        assert_eq!(cfg.port, 4223);
+        assert_eq!(cfg.user, Some("user".into()));
+        assert_eq!(cfg.password, Some("pass".into()));
+    }
+
+    #[test]
+    fn nats_config_from_url_with_token() {
+        let cfg = NatsConfig::from_url("nats://mytoken@server:4222").unwrap();
+        assert_eq!(cfg.token, Some("mytoken".into()));
+        assert!(cfg.user.is_none());
+    }
+
+    #[test]
+    fn nats_config_from_url_host_only() {
+        let cfg = NatsConfig::from_url("nats://myhost").unwrap();
+        assert_eq!(cfg.host, "myhost");
+        assert_eq!(cfg.port, 4222); // default
+    }
+
+    #[test]
+    fn nats_config_from_url_invalid_scheme() {
+        assert!(NatsConfig::from_url("http://localhost").is_err());
+    }
+
+    #[test]
+    fn message_debug_clone() {
+        let msg = Message {
+            subject: "foo.bar".into(),
+            sid: 1,
+            reply_to: Some("_INBOX.123".into()),
+            payload: b"hello".to_vec(),
+        };
+        let dbg = format!("{msg:?}");
+        assert!(dbg.contains("foo.bar"));
+        assert!(dbg.contains("_INBOX"));
+
+        let cloned = msg.clone();
+        assert_eq!(cloned.subject, "foo.bar");
+        assert_eq!(cloned.sid, 1);
+        assert_eq!(cloned.payload, b"hello");
+    }
+
+    #[test]
+    fn message_no_reply() {
+        let msg = Message {
+            subject: "test".into(),
+            sid: 0,
+            reply_to: None,
+            payload: vec![],
+        };
+        assert!(msg.reply_to.is_none());
+        assert!(msg.payload.is_empty());
+    }
+
+    #[test]
+    fn server_info_default() {
+        let info = ServerInfo::default();
+        assert!(info.server_id.is_empty());
+        assert!(info.server_name.is_empty());
+        assert!(info.version.is_empty());
+        assert_eq!(info.proto, 0);
+        assert_eq!(info.max_payload, 0);
+        assert!(!info.tls_required);
+        assert!(!info.tls_available);
+        assert!(info.connect_urls.is_empty());
+    }
+
+    #[test]
+    fn server_info_debug_clone() {
+        let info = ServerInfo {
+            server_id: "test-id".into(),
+            ..Default::default()
+        };
+        let dbg = format!("{info:?}");
+        assert!(dbg.contains("ServerInfo"));
+
+        let cloned = info.clone();
+        assert_eq!(cloned.server_id, "test-id");
+    }
+
+    #[test]
+    fn server_info_parse_full() {
+        let json = r#"{"server_id":"abc","server_name":"srv","version":"2.10","proto":1,"max_payload":1048576}"#;
+        let info = ServerInfo::parse(json);
+        assert_eq!(info.server_id, "abc");
+        assert_eq!(info.server_name, "srv");
+        assert_eq!(info.version, "2.10");
+        assert_eq!(info.proto, 1);
+        assert_eq!(info.max_payload, 1_048_576);
+    }
+
+    #[test]
+    fn server_info_parse_empty() {
+        let info = ServerInfo::parse("{}");
+        assert!(info.server_id.is_empty());
+        assert_eq!(info.proto, 0);
+    }
 }

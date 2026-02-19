@@ -520,4 +520,120 @@ mod tests {
         crate::assert_with_log!(has_another, "another header", true, has_another);
         crate::test_complete!("test_metadata_interceptor");
     }
+
+    // Pure data-type tests (wave 14 – CyanBarn)
+
+    #[test]
+    fn channel_config_debug_clone() {
+        let cfg = ChannelConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("ChannelConfig"));
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned.connect_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn channel_config_default_values() {
+        let cfg = ChannelConfig::default();
+        assert_eq!(cfg.connect_timeout, Duration::from_secs(5));
+        assert!(cfg.timeout.is_none());
+        assert_eq!(cfg.max_recv_message_size, 4 * 1024 * 1024);
+        assert_eq!(cfg.max_send_message_size, 4 * 1024 * 1024);
+        assert_eq!(cfg.initial_connection_window_size, 1024 * 1024);
+        assert_eq!(cfg.initial_stream_window_size, 1024 * 1024);
+        assert!(cfg.keepalive_interval.is_none());
+        assert!(cfg.keepalive_timeout.is_none());
+        assert!(!cfg.use_tls);
+    }
+
+    #[test]
+    fn channel_builder_debug() {
+        let builder = Channel::builder("http://localhost:50051");
+        let dbg = format!("{builder:?}");
+        assert!(dbg.contains("ChannelBuilder"));
+        assert!(dbg.contains("localhost"));
+    }
+
+    #[test]
+    fn channel_builder_all_setters() {
+        let builder = Channel::builder("http://host:443")
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(60))
+            .max_recv_message_size(1024)
+            .max_send_message_size(2048)
+            .initial_connection_window_size(512)
+            .initial_stream_window_size(256)
+            .keepalive_interval(Duration::from_secs(10))
+            .keepalive_timeout(Duration::from_secs(5))
+            .tls();
+
+        assert_eq!(builder.config.connect_timeout, Duration::from_secs(30));
+        assert_eq!(builder.config.timeout, Some(Duration::from_secs(60)));
+        assert_eq!(builder.config.max_recv_message_size, 1024);
+        assert_eq!(builder.config.max_send_message_size, 2048);
+        assert_eq!(builder.config.initial_connection_window_size, 512);
+        assert_eq!(builder.config.initial_stream_window_size, 256);
+        assert_eq!(
+            builder.config.keepalive_interval,
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            builder.config.keepalive_timeout,
+            Some(Duration::from_secs(5))
+        );
+        assert!(builder.config.use_tls);
+    }
+
+    fn make_channel(uri: &str) -> Channel {
+        futures_lite::future::block_on(Channel::connect(uri)).unwrap()
+    }
+
+    #[test]
+    fn channel_debug_clone() {
+        let channel = make_channel("http://test:8080");
+        let dbg = format!("{channel:?}");
+        assert!(dbg.contains("Channel"));
+
+        let cloned = channel.clone();
+        assert_eq!(cloned.uri(), "http://test:8080");
+    }
+
+    #[test]
+    fn channel_uri_accessor() {
+        let channel = make_channel("http://myhost:9090");
+        assert_eq!(channel.uri(), "http://myhost:9090");
+        assert_eq!(channel.config().connect_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn grpc_client_debug() {
+        let channel = make_channel("http://test:50051");
+        let client = GrpcClient::new(channel);
+        let dbg = format!("{client:?}");
+        assert!(dbg.contains("GrpcClient"));
+    }
+
+    #[test]
+    fn grpc_client_channel_accessor() {
+        let channel = make_channel("http://svc:80");
+        let client = GrpcClient::new(channel);
+        assert_eq!(client.channel().uri(), "http://svc:80");
+    }
+
+    #[test]
+    fn metadata_interceptor_debug() {
+        let interceptor = MetadataInterceptor::new();
+        let dbg = format!("{interceptor:?}");
+        assert!(dbg.contains("MetadataInterceptor"));
+    }
+
+    #[test]
+    fn metadata_interceptor_empty() {
+        let interceptor = MetadataInterceptor::new();
+        let mut request = Request::new(Bytes::new());
+        interceptor.intercept(&mut request).unwrap();
+        // No headers added - request should still have empty metadata
+        assert!(request.metadata().get("nonexistent").is_none());
+    }
 }
