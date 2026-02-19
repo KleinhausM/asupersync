@@ -1167,4 +1167,25 @@ mod tests {
         );
         crate::test_complete!("debug_shows_value");
     }
+
+    /// Invariant: if `get_or_try_init` returns an error, the cell remains
+    /// UNINIT and a subsequent caller can succeed.
+    #[test]
+    fn get_or_try_init_error_resets_state() {
+        init_test("get_or_try_init_error_resets_state");
+        let cell = OnceCell::<u32>::new();
+
+        let result: Result<&u32, &str> = block_on(cell.get_or_try_init(|| async { Err("fail") }));
+        let is_err = result.is_err();
+        crate::assert_with_log!(is_err, "first init fails", true, is_err);
+
+        let still_uninit = !cell.is_initialized();
+        crate::assert_with_log!(still_uninit, "cell UNINIT after error", true, still_uninit);
+
+        // A second caller with a successful init should work.
+        let val = block_on(cell.get_or_try_init(|| async { Ok::<u32, &str>(42) }));
+        crate::assert_with_log!(val == Ok(&42), "second init ok", true, val == Ok(&42));
+
+        crate::test_complete!("get_or_try_init_error_resets_state");
+    }
 }

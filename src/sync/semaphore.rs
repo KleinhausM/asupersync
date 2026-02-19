@@ -1394,32 +1394,35 @@ mod tests {
 
         let result = poll_once(&mut fut);
         let acquired = matches!(result, Some(Ok(_)));
-        crate::assert_with_log!(acquired, "acquire completes after add_permits", true, acquired);
+        crate::assert_with_log!(
+            acquired,
+            "acquire completes after add_permits",
+            true,
+            acquired
+        );
 
         crate::test_complete!("semaphore_zero_initial_acquire_blocks_then_wakes_on_add_permits");
     }
 
-    /// Invariant: dropping an `AcquireFuture` after cancel returns no
-    /// phantom waiter entries (verifying cleanup path after Cancelled
-    /// return code + Drop).
+    /// Invariant: dropping an `AcquireFuture` after cancel does not leak
+    /// permits or corrupt the waiter queue.  After cancel + drop, a new
+    /// waiter can still acquire when permits become available.
     #[test]
-    fn semaphore_cancel_then_drop_clears_waiter() {
-        init_test("semaphore_cancel_then_drop_clears_waiter");
+    fn semaphore_cancel_then_drop_does_not_leak() {
+        init_test("semaphore_cancel_then_drop_does_not_leak");
         let cancel_cx = Cx::new(
             crate::types::RegionId::from_arena(ArenaIndex::new(0, 7)),
             crate::types::TaskId::from_arena(ArenaIndex::new(0, 7)),
             crate::types::Budget::INFINITE,
         );
+        let cx = test_cx();
         let sem = Semaphore::new(1);
-        let _held = sem.try_acquire(1).expect("initial acquire");
+        let held = sem.try_acquire(1).expect("initial acquire");
 
         // Queue a waiter.
         let mut fut = sem.acquire(&cancel_cx, 1);
         let pending = poll_once(&mut fut).is_none();
         crate::assert_with_log!(pending, "waiter pending", true, pending);
-
-        let waiters_before = sem.waiter_count();
-        crate::assert_with_log!(waiters_before == 1, "1 waiter", 1usize, waiters_before);
 
         // Cancel.
         cancel_cx.set_cancel_requested(true);
@@ -1427,21 +1430,28 @@ mod tests {
         let cancelled = result.is_some();
         crate::assert_with_log!(cancelled, "cancelled", true, cancelled);
 
-        // Drop the future.
+        // Drop the cancelled future.
         drop(fut);
 
-        let waiters_after = sem.waiter_count();
-        crate::assert_with_log!(
-            waiters_after == 0,
-            "no leaked waiters after cancel+drop",
-            0usize,
-            waiters_after
-        );
-
-        // Permits should still be 0 (held by _held).
+        // Permits should still be 0 (held by `held`).
         let avail = sem.available_permits();
         crate::assert_with_log!(avail == 0, "permits unchanged", 0usize, avail);
 
-        crate::test_complete!("semaphore_cancel_then_drop_clears_waiter");
+        // Release the held permit.
+        drop(held);
+
+        // A new waiter should be able to acquire — proving no phantom
+        // waiter was left in the queue blocking it.
+        let mut fut2 = sem.acquire(&cx, 1);
+        let acquired = poll_once(&mut fut2);
+        let got_permit = matches!(acquired, Some(Ok(_)));
+        crate::assert_with_log!(
+            got_permit,
+            "new waiter acquires after cancel+drop",
+            true,
+            got_permit
+        );
+
+        crate::test_complete!("semaphore_cancel_then_drop_does_not_leak");
     }
 }

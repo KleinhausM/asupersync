@@ -960,12 +960,7 @@ mod tests {
         let mut fut = mutex.lock(&cx);
         let lock_result = poll_once(&mut fut);
         let lock_poisoned = matches!(lock_result, Some(Err(LockError::Poisoned)));
-        crate::assert_with_log!(
-            lock_poisoned,
-            "lock returns Poisoned",
-            true,
-            lock_poisoned
-        );
+        crate::assert_with_log!(lock_poisoned, "lock returns Poisoned", true, lock_poisoned);
         crate::test_complete!("mutex_poison_propagation_on_panic");
     }
 
@@ -1031,7 +1026,12 @@ mod tests {
         crate::assert_with_log!(pending, "waiter is pending", true, pending);
 
         let waiters_before = mutex.waiters();
-        crate::assert_with_log!(waiters_before == 1, "1 waiter queued", 1usize, waiters_before);
+        crate::assert_with_log!(
+            waiters_before == 1,
+            "1 waiter queued",
+            1usize,
+            waiters_before
+        );
 
         // Cancel and poll to get Cancelled.
         cancel_cx.set_cancel_requested(true);
@@ -1061,7 +1061,6 @@ mod tests {
         let mutex = Arc::new(Mutex::new(0_u32));
 
         // Hold the lock on a thread that will panic.
-        let m = Arc::clone(&mutex);
         let cx = test_cx();
         let mut fut_wait = mutex.lock(&cx);
 

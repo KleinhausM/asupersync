@@ -3249,4 +3249,170 @@ mod tests {
 
         crate::test_complete!("pool_config_warmup_builder");
     }
+
+    // ========================================================================
+    // Invariant tests: cancel-safety, exhaustion, factory errors
+    // ========================================================================
+
+    /// Invariant: dropping an acquire future that is suspended inside
+    /// `WaitForNotification` removes the waiter from the queue.
+    #[test]
+    #[allow(unsafe_code)]
+    fn pool_cancel_during_wait_does_not_leak_waiter() {
+        init_test("pool_cancel_during_wait_does_not_leak_waiter");
+
+        let pool = GenericPool::new(simple_factory, PoolConfig::with_max_size(1));
+        let cx_handle: crate::cx::Cx = crate::cx::Cx::for_testing();
+
+        // Acquire the one resource so pool is at capacity.
+        let held = futures_lite::future::block_on(pool.acquire(&cx_handle)).expect("first acquire");
+
+        // Create a second acquire future. It will enter WaitForNotification
+        // because the pool is exhausted (max_size=1, active=1).
+        let waker = noop_pool_waker();
+        let mut task_cx = std::task::Context::from_waker(&waker);
+        {
+            let mut acquire_fut = pool.acquire(&cx_handle);
+            // SAFETY: acquire_fut lives on the stack and we do not move it.
+            let pinned = unsafe { std::pin::Pin::new_unchecked(&mut acquire_fut) };
+            let poll_result = pinned.poll(&mut task_cx);
+            // Should be Pending — pool is full.
+            let is_pending = poll_result.is_pending();
+            crate::assert_with_log!(is_pending, "acquire is Pending", true, is_pending);
+
+            // Verify a waiter was registered.
+            let waiters_before = pool.stats().waiters;
+            crate::assert_with_log!(
+                waiters_before >= 1,
+                "waiter registered",
+                true,
+                waiters_before >= 1
+            );
+            // acquire_fut dropped here — WaitForNotification::drop fires.
+        }
+
+        // After drop, waiters must be 0.
+        let waiters_after = pool.stats().waiters;
+        crate::assert_with_log!(
+            waiters_after == 0,
+            "waiter cleaned on drop",
+            0usize,
+            waiters_after
+        );
+
+        // Return the held resource and verify normal operation.
+        held.return_to_pool();
+        let reacquired = futures_lite::future::block_on(pool.acquire(&cx_handle));
+        let ok = reacquired.is_ok();
+        crate::assert_with_log!(ok, "reacquire succeeds", true, ok);
+
+        crate::test_complete!("pool_cancel_during_wait_does_not_leak_waiter");
+    }
+
+    /// Invariant: when the pool is at capacity, acquire blocks; when a
+    /// resource is returned, the blocked acquirer is woken and succeeds.
+    #[test]
+    fn pool_exhaustion_blocks_then_unblocks_on_return() {
+        init_test("pool_exhaustion_blocks_then_unblocks_on_return");
+
+        let pool = Arc::new(GenericPool::new(
+            simple_factory,
+            PoolConfig::with_max_size(1),
+        ));
+        let cx_handle: crate::cx::Cx = crate::cx::Cx::for_testing();
+
+        // Acquire the single resource.
+        let held = futures_lite::future::block_on(pool.acquire(&cx_handle)).expect("first acquire");
+        let held_val = *held;
+
+        // Spawn a thread that will block on acquire.
+        let pool2 = Arc::clone(&pool);
+        let blocker = std::thread::spawn(move || {
+            let cx2: crate::cx::Cx = crate::cx::Cx::for_testing();
+            futures_lite::future::block_on(pool2.acquire(&cx2))
+        });
+
+        // Give the blocker time to enter WaitForNotification.
+        std::thread::sleep(Duration::from_millis(20));
+
+        // Return the resource — this should wake the blocked acquirer.
+        held.return_to_pool();
+
+        let result = blocker.join().expect("blocker thread panicked");
+        let acquired = result.expect("blocked acquire should succeed");
+        let val = *acquired;
+        crate::assert_with_log!(
+            val == held_val,
+            "blocked acquirer got returned resource",
+            held_val,
+            val
+        );
+
+        crate::test_complete!("pool_exhaustion_blocks_then_unblocks_on_return");
+    }
+
+    /// Invariant: if the factory returns an error during acquire, the
+    /// creating slot is released and does not permanently reduce capacity.
+    #[test]
+    fn pool_factory_error_releases_create_slot() {
+        init_test("pool_factory_error_releases_create_slot");
+
+        let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let cc = Arc::clone(&call_count);
+
+        // Factory that fails on the first call, succeeds on subsequent ones.
+        let factory = move || {
+            let count = cc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move {
+                if count == 0 {
+                    Err::<u32, Box<dyn std::error::Error + Send + Sync>>(
+                        "deliberate factory error".into(),
+                    )
+                } else {
+                    Ok(count)
+                }
+            })
+                as std::pin::Pin<
+                    Box<
+                        dyn Future<Output = Result<u32, Box<dyn std::error::Error + Send + Sync>>>
+                            + Send,
+                    >,
+                >
+        };
+
+        let pool = GenericPool::new(factory, PoolConfig::with_max_size(2));
+        let cx_handle: crate::cx::Cx = crate::cx::Cx::for_testing();
+
+        // First acquire should fail (factory error).
+        let first = futures_lite::future::block_on(pool.acquire(&cx_handle));
+        let is_err = first.is_err();
+        crate::assert_with_log!(is_err, "first acquire fails", true, is_err);
+
+        // After the error, creating count must be 0 (slot released by RAII).
+        let stats = pool.stats();
+        crate::assert_with_log!(
+            stats.total == 0,
+            "no phantom slot leaked",
+            0usize,
+            stats.total
+        );
+
+        // Second acquire should succeed (factory returns Ok now).
+        let second = futures_lite::future::block_on(pool.acquire(&cx_handle));
+        let ok = second.is_ok();
+        crate::assert_with_log!(ok, "second acquire succeeds", true, ok);
+
+        crate::test_complete!("pool_factory_error_releases_create_slot");
+    }
+
+    fn noop_pool_waker() -> Waker {
+        struct NoopPoolWaker;
+
+        impl Wake for NoopPoolWaker {
+            fn wake(self: Arc<Self>) {}
+            fn wake_by_ref(self: &Arc<Self>) {}
+        }
+
+        Waker::from(Arc::new(NoopPoolWaker))
+    }
 }

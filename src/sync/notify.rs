@@ -880,12 +880,7 @@ mod tests {
 
         // fut2 should now be ready.
         let ready = poll_once(&mut fut2).is_ready();
-        crate::assert_with_log!(
-            ready,
-            "baton passed to second waiter",
-            true,
-            ready
-        );
+        crate::assert_with_log!(ready, "baton passed to second waiter", true, ready);
         crate::test_complete!("notify_one_baton_pass_to_next_waiter_on_drop");
     }
 

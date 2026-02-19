@@ -1535,7 +1535,12 @@ mod tests {
         // Now try to read — should be blocked by writer_waiters > 0.
         let mut read_fut = lock.read(&cx);
         let read_pending = poll_once(&mut read_fut).is_none();
-        crate::assert_with_log!(read_pending, "reader blocked by writer waiter", true, read_pending);
+        crate::assert_with_log!(
+            read_pending,
+            "reader blocked by writer waiter",
+            true,
+            read_pending
+        );
 
         // Cancel and drop the write waiter.
         cancel_cx.set_cancel_requested(true);
@@ -1555,7 +1560,12 @@ mod tests {
         // The blocked reader should now be able to acquire.
         let read_result = poll_once(&mut read_fut);
         let reader_acquired = matches!(read_result, Some(Ok(_)));
-        crate::assert_with_log!(reader_acquired, "reader unblocked after write cancel", true, reader_acquired);
+        crate::assert_with_log!(
+            reader_acquired,
+            "reader unblocked after write cancel",
+            true,
+            reader_acquired
+        );
 
         drop(read_guard);
         crate::test_complete!("cancel_only_write_waiter_unblocks_readers");
@@ -1637,12 +1647,22 @@ mod tests {
         crate::assert_with_log!(poisoned, "rwlock is poisoned", true, poisoned);
 
         let try_read = lock.try_read();
-        let tr_poisoned = matches!(try_read, Err(TryReadError::Poisoned));
-        crate::assert_with_log!(tr_poisoned, "try_read Poisoned", true, tr_poisoned);
+        let read_is_poisoned = matches!(try_read, Err(TryReadError::Poisoned));
+        crate::assert_with_log!(
+            read_is_poisoned,
+            "try_read Poisoned",
+            true,
+            read_is_poisoned
+        );
 
         let try_write = lock.try_write();
-        let tw_poisoned = matches!(try_write, Err(TryWriteError::Poisoned));
-        crate::assert_with_log!(tw_poisoned, "try_write Poisoned", true, tw_poisoned);
+        let write_is_poisoned = matches!(try_write, Err(TryWriteError::Poisoned));
+        crate::assert_with_log!(
+            write_is_poisoned,
+            "try_write Poisoned",
+            true,
+            write_is_poisoned
+        );
 
         let cx = test_cx();
         let mut read_fut = lock.read(&cx);

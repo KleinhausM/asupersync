@@ -353,7 +353,6 @@ pub use inner::{ContendedMutex, ContendedMutexGuard};
 #[allow(clippy::significant_drop_tightening)]
 mod tests {
     use super::*;
-    #[cfg(feature = "lock-metrics")]
     use std::sync::Arc;
     #[cfg(feature = "lock-metrics")]
     use std::thread;
@@ -576,5 +575,53 @@ mod tests {
             snap.contentions
         );
         crate::test_complete!("poisoned_lock_does_not_count_as_contention");
+    }
+
+    #[test]
+    fn try_lock_returns_poisoned_after_panic() {
+        init_test("try_lock_returns_poisoned_after_panic");
+        let m = Arc::new(ContendedMutex::new("test", 7u32));
+        let m2 = Arc::clone(&m);
+        let poisoner = std::thread::spawn(move || {
+            let _guard = m2.lock().expect("should succeed");
+            panic!("deliberate poison");
+        });
+        let _ = poisoner.join();
+
+        let result = m.try_lock();
+        let is_poisoned = matches!(result, Err(std::sync::TryLockError::Poisoned(_)));
+        crate::assert_with_log!(is_poisoned, "try_lock returns Poisoned", true, is_poisoned);
+
+        // Recover data through the poison error.
+        if let Err(std::sync::TryLockError::Poisoned(pe)) = m.try_lock() {
+            let guard = pe.into_inner();
+            crate::assert_with_log!(*guard == 7, "data preserved", 7u32, *guard);
+        }
+        crate::test_complete!("try_lock_returns_poisoned_after_panic");
+    }
+
+    #[cfg(feature = "lock-metrics")]
+    #[test]
+    fn hold_time_recorded_on_panic_in_critical_section() {
+        init_test("hold_time_recorded_on_panic_in_critical_section");
+        let m = Arc::new(ContendedMutex::new("test", 0u32));
+        let m2 = Arc::clone(&m);
+
+        let handle = std::thread::spawn(move || {
+            let _guard = m2.lock().expect("should succeed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            panic!("panic while holding guard");
+        });
+        let _ = handle.join();
+
+        // Guard::drop should have recorded hold time even though thread panicked.
+        let snap = m.snapshot();
+        crate::assert_with_log!(
+            snap.hold_ns >= 4_000_000,
+            "hold_ns recorded despite panic",
+            true,
+            snap.hold_ns >= 4_000_000
+        );
+        crate::test_complete!("hold_time_recorded_on_panic_in_critical_section");
     }
 }
