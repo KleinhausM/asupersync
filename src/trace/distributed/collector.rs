@@ -387,4 +387,67 @@ mod tests {
         assert!(summary.success);
         assert!(summary.end_to_end_latency.is_some());
     }
+
+    // Pure data-type tests (wave 18 – CyanBarn)
+
+    #[test]
+    fn trace_record_debug_clone() {
+        let collector = SymbolTraceCollector::new(RegionTag::new("test"));
+        let mut rng = DetRng::new(42);
+        let trace_id = TraceId::new_for_test(10);
+        let ctx = SymbolTraceContext::new_for_encoding(
+            trace_id,
+            SymbolSpanId::NIL,
+            RegionTag::new("region-a"),
+            &mut rng,
+        );
+        let span = SymbolSpan::new_encode(ctx, ObjectId::new_for_test(1), Time::from_millis(0));
+        collector.record_span(&span, Time::from_millis(0));
+
+        let record = collector.get_trace(trace_id).unwrap();
+        let record2 = record.clone();
+        assert_eq!(record2.trace_id, trace_id);
+        assert!(!record2.is_complete);
+        assert!(format!("{record2:?}").contains("TraceRecord"));
+    }
+
+    #[test]
+    fn trace_summary_debug_clone() {
+        let collector = SymbolTraceCollector::new(RegionTag::new("test"));
+        let mut rng = DetRng::new(42);
+        let trace_id = TraceId::new_for_test(20);
+        let ctx = SymbolTraceContext::new_for_encoding(
+            trace_id,
+            SymbolSpanId::NIL,
+            RegionTag::new("r"),
+            &mut rng,
+        );
+        let mut span = SymbolSpan::new_encode(ctx, ObjectId::new_for_test(1), Time::from_millis(0));
+        span.set_symbol_count(5);
+        span.complete_ok(Time::from_millis(100));
+        collector.record_span(&span, Time::from_millis(100));
+
+        let summary = collector.get_summary(trace_id).unwrap();
+        let summary2 = summary.clone();
+        assert_eq!(summary2.symbols_encoded, 5);
+        assert!(format!("{summary2:?}").contains("TraceSummary"));
+    }
+
+    #[test]
+    fn collector_builder_methods() {
+        let collector = SymbolTraceCollector::new(RegionTag::new("us-west"))
+            .with_max_traces(100)
+            .with_max_age(Duration::from_secs(120))
+            .with_clock_skew_tolerance(Duration::from_millis(50));
+
+        assert_eq!(collector.local_region(), &RegionTag::new("us-west"));
+        assert_eq!(collector.clock_skew_tolerance(), Duration::from_millis(50));
+    }
+
+    #[test]
+    fn collector_get_nonexistent_trace() {
+        let collector = SymbolTraceCollector::new(RegionTag::new("test"));
+        assert!(collector.get_trace(TraceId::new_for_test(999)).is_none());
+        assert!(collector.get_summary(TraceId::new_for_test(999)).is_none());
+    }
 }

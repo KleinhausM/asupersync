@@ -726,4 +726,106 @@ mod tests {
         };
         assert!(finalizing.is_cancelling());
     }
+
+    // Pure data-type tests (wave 18 – CyanBarn)
+
+    #[test]
+    fn config_debug_clone() {
+        let cfg = TaskInspectorConfig::default();
+        let cfg2 = cfg.clone();
+        assert!(format!("{cfg2:?}").contains("TaskInspectorConfig"));
+    }
+
+    #[test]
+    fn task_state_info_debug_clone() {
+        let s = TaskStateInfo::Running;
+        let s2 = s.clone();
+        assert!(format!("{s2:?}").contains("Running"));
+    }
+
+    #[test]
+    fn task_state_info_all_variants_debug() {
+        let variants: Vec<TaskStateInfo> = vec![
+            TaskStateInfo::Created,
+            TaskStateInfo::Running,
+            TaskStateInfo::CancelRequested {
+                reason: "timeout".into(),
+            },
+            TaskStateInfo::Cancelling {
+                reason: "timeout".into(),
+            },
+            TaskStateInfo::Finalizing {
+                reason: "timeout".into(),
+            },
+            TaskStateInfo::Completed {
+                outcome: "Ok".into(),
+            },
+        ];
+        for v in &variants {
+            assert!(!format!("{v:?}").is_empty());
+            assert!(!v.name().is_empty());
+        }
+    }
+
+    #[test]
+    fn task_details_debug_clone() {
+        let details = TaskDetails {
+            id: TaskId::testing_default(),
+            region_id: RegionId::testing_default(),
+            state: TaskStateInfo::Created,
+            phase: TaskPhase::Created,
+            poll_count: 0,
+            polls_remaining: 100,
+            created_at: Time::ZERO,
+            age: Duration::ZERO,
+            time_since_last_poll: None,
+            wake_pending: false,
+            obligations: vec![],
+            waiters: vec![],
+        };
+        let details2 = details.clone();
+        assert!(format!("{details2:?}").contains("TaskDetails"));
+    }
+
+    #[test]
+    fn task_summary_debug_clone_default() {
+        let summary = TaskSummary::default();
+        let summary2 = summary.clone();
+        assert_eq!(summary2.total_tasks, 0);
+        assert!(format!("{summary2:?}").contains("TaskSummary"));
+    }
+
+    #[test]
+    fn task_summary_with_data() {
+        let mut summary = TaskSummary::default();
+        summary.total_tasks = 10;
+        summary.running = 5;
+        summary.completed = 3;
+        summary.cancelling = 2;
+        summary.stuck_count = 1;
+        summary.by_region.insert(RegionId::testing_default(), 10);
+        assert_eq!(summary.by_region.len(), 1);
+    }
+
+    #[test]
+    fn task_details_with_obligations_and_waiters() {
+        let details = TaskDetails {
+            id: TaskId::testing_default(),
+            region_id: RegionId::testing_default(),
+            state: TaskStateInfo::Running,
+            phase: TaskPhase::Running,
+            poll_count: 42,
+            polls_remaining: 58,
+            created_at: Time::ZERO,
+            age: Duration::from_secs(10),
+            time_since_last_poll: Some(Duration::from_millis(100)),
+            wake_pending: true,
+            obligations: vec![ObligationId::new_for_test(1, 0)],
+            waiters: vec![TaskId::new_for_test(2, 0)],
+        };
+        assert!(details.is_running());
+        assert!(!details.is_terminal());
+        assert!(!details.obligations.is_empty());
+        assert!(!details.waiters.is_empty());
+    }
 }

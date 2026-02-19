@@ -874,6 +874,264 @@ mod tests {
             .expect("replay verification should succeed");
     }
 
+    // Pure data-type tests (wave 18 – CyanBarn)
+
+    #[test]
+    fn decode_config_debug_clone_hash_eq() {
+        let cfg = make_test_config();
+        let cfg2 = cfg.clone();
+        assert_eq!(cfg, cfg2);
+        assert!(format!("{cfg:?}").contains("DecodeConfig"));
+    }
+
+    #[test]
+    fn received_summary_debug_clone_hash_eq() {
+        let summary = ReceivedSummary {
+            total: 10,
+            source_count: 7,
+            repair_count: 3,
+            esis: vec![0, 1, 2],
+            truncated: false,
+        };
+        let summary2 = summary.clone();
+        assert_eq!(summary, summary2);
+        assert!(format!("{summary:?}").contains("ReceivedSummary"));
+    }
+
+    #[test]
+    fn received_summary_from_received_empty() {
+        let summary = ReceivedSummary::from_received(std::iter::empty());
+        assert_eq!(summary.total, 0);
+        assert_eq!(summary.source_count, 0);
+        assert_eq!(summary.repair_count, 0);
+        assert!(summary.esis.is_empty());
+        assert!(!summary.truncated);
+    }
+
+    #[test]
+    fn peeling_trace_debug_clone_default_hash_eq() {
+        let trace = PeelingTrace::default();
+        let trace2 = trace.clone();
+        assert_eq!(trace, trace2);
+        assert_eq!(trace.solved, 0);
+        assert!(format!("{trace:?}").contains("PeelingTrace"));
+    }
+
+    #[test]
+    fn peeling_trace_record_solved() {
+        let mut trace = PeelingTrace::default();
+        trace.record_solved(5);
+        trace.record_solved(10);
+        assert_eq!(trace.solved, 2);
+        assert_eq!(trace.solved_indices, vec![5, 10]);
+    }
+
+    #[test]
+    fn elimination_trace_debug_clone_default_hash_eq() {
+        let trace = EliminationTrace::default();
+        let trace2 = trace.clone();
+        assert_eq!(trace, trace2);
+        assert!(format!("{trace:?}").contains("EliminationTrace"));
+    }
+
+    #[test]
+    fn elimination_trace_record_operations() {
+        let mut trace = EliminationTrace::default();
+        trace.record_inactivation(3);
+        trace.record_pivot(3, 0);
+        trace.record_row_op();
+        assert_eq!(trace.inactivated, 1);
+        assert_eq!(trace.pivots, 1);
+        assert_eq!(trace.row_ops, 1);
+        assert_eq!(trace.pivot_events.len(), 1);
+    }
+
+    #[test]
+    fn inactivation_strategy_debug_clone_copy_default_hash_eq() {
+        let s = InactivationStrategy::default();
+        assert_eq!(s, InactivationStrategy::AllAtOnce);
+        let s2 = s;
+        assert_eq!(s, s2);
+        assert!(format!("{s:?}").contains("AllAtOnce"));
+    }
+
+    #[test]
+    fn inactivation_strategy_all_variants() {
+        let variants = [
+            InactivationStrategy::AllAtOnce,
+            InactivationStrategy::HighSupportFirst,
+            InactivationStrategy::BlockSchurLowRank,
+        ];
+        for (i, v) in variants.iter().enumerate() {
+            for (j, v2) in variants.iter().enumerate() {
+                if i == j {
+                    assert_eq!(v, v2);
+                } else {
+                    assert_ne!(v, v2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn strategy_transition_debug_clone_hash_eq() {
+        let t = StrategyTransition {
+            from: InactivationStrategy::AllAtOnce,
+            to: InactivationStrategy::HighSupportFirst,
+            reason: "escalation",
+        };
+        let t2 = t.clone();
+        assert_eq!(t, t2);
+        assert!(format!("{t:?}").contains("StrategyTransition"));
+    }
+
+    #[test]
+    fn pivot_event_debug_clone_hash_eq() {
+        let p = PivotEvent { col: 3, row: 7 };
+        let p2 = p.clone();
+        assert_eq!(p, p2);
+        assert!(format!("{p:?}").contains("PivotEvent"));
+    }
+
+    #[test]
+    fn proof_outcome_debug_clone_hash_eq() {
+        let success = ProofOutcome::Success {
+            symbols_recovered: 10,
+        };
+        let success2 = success.clone();
+        assert_eq!(success, success2);
+        assert!(format!("{success:?}").contains("Success"));
+
+        let fail = ProofOutcome::Failure {
+            reason: FailureReason::InsufficientSymbols {
+                received: 5,
+                required: 10,
+            },
+        };
+        assert_ne!(success, fail);
+    }
+
+    #[test]
+    fn failure_reason_all_variants() {
+        let variants: Vec<FailureReason> = vec![
+            FailureReason::InsufficientSymbols {
+                received: 1,
+                required: 2,
+            },
+            FailureReason::SingularMatrix {
+                row: 0,
+                attempted_cols: vec![1, 2],
+            },
+            FailureReason::SymbolSizeMismatch {
+                expected: 64,
+                actual: 32,
+            },
+            FailureReason::SymbolEquationArityMismatch {
+                esi: 5,
+                columns: 3,
+                coefficients: 4,
+            },
+            FailureReason::ColumnIndexOutOfRange {
+                esi: 1,
+                column: 99,
+                max_valid: 15,
+            },
+            FailureReason::CorruptDecodedOutput {
+                esi: 0,
+                byte_index: 7,
+                expected: 0xAA,
+                actual: 0xBB,
+            },
+        ];
+        for v in &variants {
+            assert!(!format!("{v:?}").is_empty());
+        }
+    }
+
+    #[test]
+    fn replay_error_display_mismatch() {
+        let err = ReplayError::Mismatch {
+            field: "version",
+            expected: "1".into(),
+            actual: "2".into(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("version"));
+        assert!(s.contains("expected"));
+        assert!(format!("{err:?}").contains("Mismatch"));
+    }
+
+    #[test]
+    fn replay_error_display_sequence() {
+        let err = ReplayError::SequenceMismatch {
+            label: "esis",
+            index: 5,
+            expected: "10".into(),
+            actual: "20".into(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("esis"));
+        assert!(s.contains("index 5"));
+    }
+
+    #[test]
+    fn replay_error_trait() {
+        let err: Box<dyn std::error::Error> = Box::new(ReplayError::Mismatch {
+            field: "test",
+            expected: "a".into(),
+            actual: "b".into(),
+        });
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn decode_proof_debug_clone_eq() {
+        let config = make_test_config();
+        let mut builder = DecodeProof::builder(config);
+        builder.set_received(ReceivedSummary {
+            total: 0,
+            source_count: 0,
+            repair_count: 0,
+            esis: vec![],
+            truncated: false,
+        });
+        builder.set_success(0);
+        let proof = builder.build();
+        let proof2 = proof.clone();
+        assert_eq!(proof, proof2);
+        assert!(format!("{proof:?}").contains("DecodeProof"));
+    }
+
+    #[test]
+    fn decode_proof_builder_debug() {
+        let builder = DecodeProof::builder(make_test_config());
+        assert!(format!("{builder:?}").contains("DecodeProofBuilder"));
+    }
+
+    #[test]
+    fn elimination_trace_strategy_transition_same_is_noop() {
+        let mut trace = EliminationTrace::default();
+        trace.record_strategy_transition(
+            InactivationStrategy::AllAtOnce,
+            InactivationStrategy::AllAtOnce,
+            "noop",
+        );
+        assert!(trace.strategy_transitions.is_empty());
+        assert_eq!(trace.strategy, InactivationStrategy::AllAtOnce);
+    }
+
+    #[test]
+    fn elimination_trace_strategy_transition_records() {
+        let mut trace = EliminationTrace::default();
+        trace.record_strategy_transition(
+            InactivationStrategy::AllAtOnce,
+            InactivationStrategy::HighSupportFirst,
+            "escalation",
+        );
+        assert_eq!(trace.strategy_transitions.len(), 1);
+        assert_eq!(trace.strategy, InactivationStrategy::HighSupportFirst);
+    }
+
     #[test]
     fn replay_verification_detects_mismatch() {
         let k = 6;

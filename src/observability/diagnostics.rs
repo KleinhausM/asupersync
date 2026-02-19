@@ -930,4 +930,196 @@ mod tests {
 
         crate::test_complete!("test_find_leaked_obligations_sorted_and_aged");
     }
+
+    // Pure data-type tests (wave 18 – CyanBarn)
+
+    #[test]
+    fn reason_debug_clone() {
+        let r = Reason::RegionNotFound;
+        let r2 = r.clone();
+        assert!(format!("{r2:?}").contains("RegionNotFound"));
+    }
+
+    #[test]
+    fn reason_display_all_variants() {
+        let r1 = Reason::RegionNotFound;
+        assert!(r1.to_string().contains("not found"));
+
+        let r2 = Reason::ChildRegionOpen {
+            child_id: RegionId::new_for_test(1, 0),
+            child_state: RegionState::Open,
+        };
+        assert!(r2.to_string().contains("child region"));
+
+        let r3 = Reason::TaskRunning {
+            task_id: TaskId::new_for_test(1, 0),
+            task_state: "Running".into(),
+            poll_count: 5,
+        };
+        assert!(r3.to_string().contains("task"));
+        assert!(r3.to_string().contains("polls=5"));
+
+        let r4 = Reason::ObligationHeld {
+            obligation_id: ObligationId::new_for_test(1, 0),
+            obligation_type: "Lease".into(),
+            holder_task: TaskId::new_for_test(2, 0),
+        };
+        assert!(r4.to_string().contains("obligation"));
+        assert!(r4.to_string().contains("Lease"));
+    }
+
+    #[test]
+    fn region_open_explanation_debug_clone() {
+        let explanation = RegionOpenExplanation {
+            region_id: RegionId::new_for_test(1, 0),
+            region_state: Some(RegionState::Open),
+            reasons: vec![Reason::RegionNotFound],
+            recommendations: vec!["check it".into()],
+        };
+        let explanation2 = explanation.clone();
+        assert!(format!("{explanation2:?}").contains("RegionOpenExplanation"));
+    }
+
+    #[test]
+    fn region_open_explanation_display() {
+        let explanation = RegionOpenExplanation {
+            region_id: RegionId::new_for_test(1, 0),
+            region_state: Some(RegionState::Open),
+            reasons: vec![Reason::RegionNotFound],
+            recommendations: vec!["fix it".into()],
+        };
+        let s = explanation.to_string();
+        assert!(s.contains("still open"));
+        assert!(s.contains("fix it"));
+    }
+
+    #[test]
+    fn task_blocked_explanation_debug_clone() {
+        let explanation = TaskBlockedExplanation {
+            task_id: TaskId::new_for_test(1, 0),
+            block_reason: BlockReason::NotStarted,
+            details: vec!["detail".into()],
+            recommendations: vec!["wait".into()],
+        };
+        let explanation2 = explanation.clone();
+        assert!(format!("{explanation2:?}").contains("TaskBlockedExplanation"));
+    }
+
+    #[test]
+    fn task_blocked_explanation_display() {
+        let explanation = TaskBlockedExplanation {
+            task_id: TaskId::new_for_test(1, 0),
+            block_reason: BlockReason::AwaitingSchedule,
+            details: vec!["pending wake".into()],
+            recommendations: vec!["wait for scheduler".into()],
+        };
+        let s = explanation.to_string();
+        assert!(s.contains("blocked"));
+        assert!(s.contains("awaiting schedule"));
+    }
+
+    #[test]
+    fn block_reason_debug_clone() {
+        let r = BlockReason::TaskNotFound;
+        let r2 = r.clone();
+        assert!(format!("{r2:?}").contains("TaskNotFound"));
+    }
+
+    #[test]
+    fn block_reason_display_all_variants() {
+        let variants: Vec<BlockReason> = vec![
+            BlockReason::TaskNotFound,
+            BlockReason::NotStarted,
+            BlockReason::AwaitingSchedule,
+            BlockReason::AwaitingFuture {
+                description: "channel recv".into(),
+            },
+            BlockReason::CancelRequested {
+                reason: CancelReasonInfo {
+                    kind: CancelKind::User,
+                    message: Some("stop".into()),
+                },
+            },
+            BlockReason::RunningCleanup {
+                reason: CancelReasonInfo {
+                    kind: CancelKind::User,
+                    message: None,
+                },
+                polls_remaining: 10,
+            },
+            BlockReason::Finalizing {
+                reason: CancelReasonInfo {
+                    kind: CancelKind::User,
+                    message: None,
+                },
+                polls_remaining: 5,
+            },
+            BlockReason::Completed,
+        ];
+        for v in &variants {
+            assert!(!v.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn cancellation_explanation_debug_clone() {
+        let explanation = CancellationExplanation {
+            kind: CancelKind::User,
+            message: Some("timeout".into()),
+            propagation_path: vec![CancellationStep {
+                region_id: RegionId::new_for_test(1, 0),
+                kind: CancelKind::User,
+            }],
+        };
+        let explanation2 = explanation.clone();
+        assert!(format!("{explanation2:?}").contains("CancellationExplanation"));
+    }
+
+    #[test]
+    fn cancellation_step_debug_clone() {
+        let step = CancellationStep {
+            region_id: RegionId::new_for_test(1, 0),
+            kind: CancelKind::User,
+        };
+        let step2 = step.clone();
+        assert!(format!("{step2:?}").contains("CancellationStep"));
+    }
+
+    #[test]
+    fn cancel_reason_info_debug_clone_display() {
+        let info = CancelReasonInfo {
+            kind: CancelKind::User,
+            message: Some("stop".into()),
+        };
+        let info2 = info.clone();
+        assert!(format!("{info2:?}").contains("CancelReasonInfo"));
+        let s = info.to_string();
+        assert!(s.contains("stop"));
+
+        let info_no_msg = CancelReasonInfo {
+            kind: CancelKind::User,
+            message: None,
+        };
+        assert!(!info_no_msg.to_string().is_empty());
+    }
+
+    #[test]
+    fn obligation_leak_debug_clone() {
+        let leak = ObligationLeak {
+            obligation_id: ObligationId::new_for_test(1, 0),
+            obligation_type: "Ack".into(),
+            holder_task: Some(TaskId::new_for_test(2, 0)),
+            region_id: RegionId::new_for_test(1, 0),
+            age: std::time::Duration::from_secs(60),
+        };
+        let leak2 = leak.clone();
+        assert!(format!("{leak2:?}").contains("ObligationLeak"));
+    }
+
+    #[test]
+    fn diagnostics_debug() {
+        let state = Arc::new(RuntimeState::new());
+        let diagnostics = Diagnostics::new(state);
+        assert!(format!("{diagnostics:?}").contains("Diagnostics"));
+    }
 }
