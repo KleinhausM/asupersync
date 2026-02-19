@@ -1381,4 +1381,452 @@ mod tests {
             .set_object_params(ObjectParams::new(oid, 512, config.symbol_size, 1, 2))
             .expect("second with same id should succeed");
     }
+
+    // ---- Gap tests ----
+
+    #[test]
+    fn feed_batch_returns_results_per_symbol() {
+        init_test("feed_batch_returns_results_per_symbol");
+        let config = encoding_config();
+        let mut encoder = EncodingPipeline::new(config.clone(), pool());
+        let object_id = ObjectId::new_for_test(100);
+        let data = vec![0xAAu8; 768]; // 3 source symbols at 256 bytes each
+
+        let symbols: Vec<AuthenticatedSymbol> = encoder
+            .encode_with_repair(object_id, &data, 0)
+            .map(|res| {
+                AuthenticatedSymbol::from_parts(
+                    res.unwrap().into_symbol(),
+                    crate::security::tag::AuthenticationTag::zero(),
+                )
+            })
+            .take(3)
+            .collect();
+
+        let mut decoder =
+            decoder_with_params(&config, object_id, data.len(), 1.5, 1);
+
+        let results = decoder.feed_batch(symbols.into_iter());
+        let len = results.len();
+        let expected_len = 3usize;
+        crate::assert_with_log!(len == expected_len, "batch length", expected_len, len);
+        for (i, r) in results.iter().enumerate() {
+            let is_ok = r.is_ok();
+            crate::assert_with_log!(is_ok, &format!("result[{i}] is Ok"), true, is_ok);
+        }
+        crate::test_complete!("feed_batch_returns_results_per_symbol");
+    }
+
+    #[test]
+    fn is_complete_false_without_params() {
+        init_test("is_complete_false_without_params");
+        let pipeline = DecodingPipeline::new(DecodingConfig::default());
+        let complete = pipeline.is_complete();
+        crate::assert_with_log!(!complete, "is_complete without params", false, complete);
+        crate::test_complete!("is_complete_false_without_params");
+    }
+
+    #[test]
+    fn is_complete_true_after_all_blocks_decoded() {
+        init_test("is_complete_true_after_all_blocks_decoded");
+        let config = encoding_config();
+        let mut encoder = EncodingPipeline::new(config.clone(), pool());
+        let object_id = ObjectId::new_for_test(101);
+        let data = vec![42u8; 512];
+        let symbols: Vec<Symbol> = encoder
+            .encode_with_repair(object_id, &data, 0)
+            .map(|res| res.unwrap().into_symbol())
+            .collect();
+
+        let mut decoder = decoder_with_params(&config, object_id, data.len(), 1.0, 0);
+
+        for symbol in symbols {
+            let auth = AuthenticatedSymbol::from_parts(
+                symbol,
+                crate::security::tag::AuthenticationTag::zero(),
+            );
+            let _ = decoder.feed(auth).unwrap();
+        }
+
+        let complete = decoder.is_complete();
+        crate::assert_with_log!(complete, "is_complete after all blocks", true, complete);
+        crate::test_complete!("is_complete_true_after_all_blocks_decoded");
+    }
+
+    #[test]
+    fn progress_reports_blocks_total_after_params() {
+        init_test("progress_reports_blocks_total_after_params");
+        let config = encoding_config();
+        let object_id = ObjectId::new_for_test(102);
+
+        let mut pipeline = DecodingPipeline::new(DecodingConfig {
+            symbol_size: config.symbol_size,
+            max_block_size: 1024,
+            ..DecodingConfig::default()
+        });
+        // data_len=512 < max_block_size=1024 => 1 block
+        let k = (512usize).div_ceil(usize::from(config.symbol_size)) as u16;
+        pipeline
+            .set_object_params(ObjectParams::new(object_id, 512, config.symbol_size, 1, k))
+            .expect("set params");
+
+        let progress = pipeline.progress();
+        let blocks_total = progress.blocks_total;
+        let expected_blocks = Some(1usize);
+        crate::assert_with_log!(
+            blocks_total == expected_blocks,
+            "blocks_total",
+            expected_blocks,
+            blocks_total
+        );
+        let estimate = progress.symbols_needed_estimate;
+        let positive = estimate > 0;
+        crate::assert_with_log!(positive, "symbols_needed_estimate > 0", true, positive);
+        crate::test_complete!("progress_reports_blocks_total_after_params");
+    }
+
+    #[test]
+    fn block_status_none_for_unknown_block() {
+        init_test("block_status_none_for_unknown_block");
+        let config = encoding_config();
+        let object_id = ObjectId::new_for_test(103);
+
+        let mut pipeline = DecodingPipeline::new(DecodingConfig {
+            symbol_size: config.symbol_size,
+            max_block_size: config.max_block_size,
+            ..DecodingConfig::default()
+        });
+        let k = (512usize).div_ceil(usize::from(config.symbol_size)) as u16;
+        pipeline
+            .set_object_params(ObjectParams::new(object_id, 512, config.symbol_size, 1, k))
+            .expect("set params");
+
+        let status = pipeline.block_status(99);
+        let is_none = status.is_none();
+        crate::assert_with_log!(is_none, "block_status(99) is None", true, is_none);
+        crate::test_complete!("block_status_none_for_unknown_block");
+    }
+
+    #[test]
+    fn block_status_collecting_after_partial_feed() {
+        init_test("block_status_collecting_after_partial_feed");
+        let config = encoding_config();
+        let mut encoder = EncodingPipeline::new(config.clone(), pool());
+        let object_id = ObjectId::new_for_test(104);
+        let data = vec![0xBBu8; 512];
+
+        let first_symbol = encoder
+            .encode_with_repair(object_id, &data, 0)
+            .next()
+            .expect("symbol")
+            .expect("encode")
+            .into_symbol();
+
+        // Use high overhead so 1 symbol doesn't trigger decode
+        let mut decoder = decoder_with_params(&config, object_id, data.len(), 1.5, 1);
+
+        let auth = AuthenticatedSymbol::from_parts(
+            first_symbol,
+            crate::security::tag::AuthenticationTag::zero(),
+        );
+        let _ = decoder.feed(auth).expect("feed");
+
+        let status = decoder.block_status(0);
+        let is_some = status.is_some();
+        crate::assert_with_log!(is_some, "block_status(0) is Some", true, is_some);
+
+        let status = status.unwrap();
+        let state = status.state;
+        let expected_state = BlockStateKind::Collecting;
+        crate::assert_with_log!(
+            state == expected_state,
+            "state is Collecting",
+            expected_state,
+            state
+        );
+        let received = status.symbols_received;
+        let expected_received = 1usize;
+        crate::assert_with_log!(
+            received == expected_received,
+            "symbols_received",
+            expected_received,
+            received
+        );
+        crate::test_complete!("block_status_collecting_after_partial_feed");
+    }
+
+    #[test]
+    fn block_status_decoded_after_complete() {
+        init_test("block_status_decoded_after_complete");
+        let config = encoding_config();
+        let mut encoder = EncodingPipeline::new(config.clone(), pool());
+        let object_id = ObjectId::new_for_test(105);
+        let data = vec![42u8; 512];
+        let symbols: Vec<Symbol> = encoder
+            .encode_with_repair(object_id, &data, 0)
+            .map(|res| res.unwrap().into_symbol())
+            .collect();
+
+        let mut decoder = decoder_with_params(&config, object_id, data.len(), 1.0, 0);
+
+        for symbol in symbols {
+            let auth = AuthenticatedSymbol::from_parts(
+                symbol,
+                crate::security::tag::AuthenticationTag::zero(),
+            );
+            let _ = decoder.feed(auth).unwrap();
+        }
+
+        // Block 0 should now be decoded; symbols are cleared but block state persists.
+        // After decode, symbols are cleared so block_progress returns None.
+        // The completed_blocks set tracks completion separately.
+        let _status = decoder.block_status(0);
+        let complete = decoder.is_complete();
+        crate::assert_with_log!(complete, "is_complete", true, complete);
+
+        // Verify via completed_blocks indirectly: feeding another sbn=0 symbol
+        // should give BlockAlreadyDecoded
+        let extra = Symbol::new(
+            SymbolId::new(object_id, 0, 99),
+            vec![0u8; usize::from(config.symbol_size)],
+            SymbolKind::Source,
+        );
+        let auth = AuthenticatedSymbol::from_parts(
+            extra,
+            crate::security::tag::AuthenticationTag::zero(),
+        );
+        let result = decoder.feed(auth).expect("feed");
+        let expected = SymbolAcceptResult::Rejected(RejectReason::BlockAlreadyDecoded);
+        let ok = result == expected;
+        crate::assert_with_log!(ok, "block already decoded", expected, result);
+        crate::test_complete!("block_status_decoded_after_complete");
+    }
+
+    #[test]
+    fn block_already_decoded_reject() {
+        init_test("block_already_decoded_reject");
+        let config = encoding_config();
+        let mut encoder = EncodingPipeline::new(config.clone(), pool());
+        let object_id = ObjectId::new_for_test(106);
+        let data = vec![42u8; 512];
+        let symbols: Vec<Symbol> = encoder
+            .encode_with_repair(object_id, &data, 0)
+            .map(|res| res.unwrap().into_symbol())
+            .collect();
+
+        let mut decoder = decoder_with_params(&config, object_id, data.len(), 1.0, 0);
+
+        for symbol in symbols {
+            let auth = AuthenticatedSymbol::from_parts(
+                symbol,
+                crate::security::tag::AuthenticationTag::zero(),
+            );
+            let _ = decoder.feed(auth).unwrap();
+        }
+
+        // Feed one more symbol for sbn=0
+        let extra = Symbol::new(
+            SymbolId::new(object_id, 0, 0),
+            vec![0u8; usize::from(config.symbol_size)],
+            SymbolKind::Source,
+        );
+        let auth = AuthenticatedSymbol::from_parts(
+            extra,
+            crate::security::tag::AuthenticationTag::zero(),
+        );
+        let result = decoder.feed(auth).expect("feed");
+        let expected = SymbolAcceptResult::Rejected(RejectReason::BlockAlreadyDecoded);
+        let ok = result == expected;
+        crate::assert_with_log!(ok, "block already decoded reject", expected, result);
+        crate::test_complete!("block_already_decoded_reject");
+    }
+
+    #[test]
+    fn verify_auth_no_context_unverified_symbol_errors() {
+        init_test("verify_auth_no_context_unverified_symbol_errors");
+        let config = encoding_config();
+        let mut decoder = DecodingPipeline::new(DecodingConfig {
+            symbol_size: config.symbol_size,
+            max_block_size: config.max_block_size,
+            verify_auth: true,
+            ..DecodingConfig::default()
+        });
+
+        let symbol = Symbol::new(
+            SymbolId::new(ObjectId::new_for_test(107), 0, 0),
+            vec![0u8; usize::from(config.symbol_size)],
+            SymbolKind::Source,
+        );
+        // from_parts creates an unverified symbol
+        let auth = AuthenticatedSymbol::from_parts(
+            symbol,
+            crate::security::tag::AuthenticationTag::zero(),
+        );
+
+        let result = decoder.feed(auth);
+        let is_err = result.is_err();
+        crate::assert_with_log!(is_err, "unverified with no context errors", true, is_err);
+        let err = result.unwrap_err();
+        let is_auth_failed = matches!(err, DecodingError::AuthenticationFailed { .. });
+        crate::assert_with_log!(
+            is_auth_failed,
+            "AuthenticationFailed variant",
+            true,
+            is_auth_failed
+        );
+        crate::test_complete!("verify_auth_no_context_unverified_symbol_errors");
+    }
+
+    #[test]
+    fn verify_auth_no_context_preverified_symbol_ok() {
+        init_test("verify_auth_no_context_preverified_symbol_ok");
+        let config = encoding_config();
+        let mut decoder = DecodingPipeline::new(DecodingConfig {
+            symbol_size: config.symbol_size,
+            max_block_size: config.max_block_size,
+            verify_auth: true,
+            ..DecodingConfig::default()
+        });
+
+        let symbol = Symbol::new(
+            SymbolId::new(ObjectId::new_for_test(108), 0, 0),
+            vec![0u8; usize::from(config.symbol_size)],
+            SymbolKind::Source,
+        );
+        // new_verified creates a pre-verified symbol
+        let auth = AuthenticatedSymbol::new_verified(
+            symbol,
+            crate::security::tag::AuthenticationTag::zero(),
+        );
+
+        let result = decoder.feed(auth);
+        let is_ok = result.is_ok();
+        crate::assert_with_log!(is_ok, "preverified symbol accepted", true, is_ok);
+        let accept = result.unwrap();
+        let is_accepted = matches!(accept, SymbolAcceptResult::Accepted { .. });
+        crate::assert_with_log!(
+            is_accepted,
+            "result is Accepted variant",
+            true,
+            is_accepted
+        );
+        crate::test_complete!("verify_auth_no_context_preverified_symbol_ok");
+    }
+
+    #[test]
+    fn with_auth_rejects_bad_tag() {
+        init_test("with_auth_rejects_bad_tag");
+        let config = encoding_config();
+        let mut decoder = DecodingPipeline::with_auth(
+            DecodingConfig {
+                symbol_size: config.symbol_size,
+                max_block_size: config.max_block_size,
+                verify_auth: true,
+                ..DecodingConfig::default()
+            },
+            crate::security::SecurityContext::for_testing(42),
+        );
+
+        let symbol = Symbol::new(
+            SymbolId::new(ObjectId::new_for_test(109), 0, 0),
+            vec![0u8; usize::from(config.symbol_size)],
+            SymbolKind::Source,
+        );
+        // zero tag is wrong for any real key
+        let auth = AuthenticatedSymbol::from_parts(
+            symbol,
+            crate::security::tag::AuthenticationTag::zero(),
+        );
+
+        let result = decoder.feed(auth).expect("feed should not return Err");
+        let expected = SymbolAcceptResult::Rejected(RejectReason::AuthenticationFailed);
+        let ok = result == expected;
+        crate::assert_with_log!(ok, "bad tag rejected", expected, result);
+        crate::test_complete!("with_auth_rejects_bad_tag");
+    }
+
+    #[test]
+    fn multi_block_roundtrip() {
+        init_test("multi_block_roundtrip");
+        let config = crate::config::EncodingConfig {
+            symbol_size: 256,
+            max_block_size: 1024,
+            repair_overhead: 1.05,
+            encoding_parallelism: 1,
+            decoding_parallelism: 1,
+        };
+        let mut encoder = EncodingPipeline::new(config.clone(), pool());
+        let object_id = ObjectId::new_for_test(110);
+        let data: Vec<u8> = (0..2048).map(|i| (i % 251) as u8).collect();
+
+        let symbols: Vec<Symbol> = encoder
+            .encode_with_repair(object_id, &data, 0)
+            .map(|res| res.unwrap().into_symbol())
+            .collect();
+
+        let mut decoder = DecodingPipeline::new(DecodingConfig {
+            symbol_size: config.symbol_size,
+            max_block_size: config.max_block_size,
+            repair_overhead: 1.0,
+            min_overhead: 0,
+            max_buffered_symbols: 0,
+            block_timeout: Duration::from_secs(30),
+            verify_auth: false,
+        });
+
+        // Compute block plan matching what the encoder does
+        let symbol_size = usize::from(config.symbol_size);
+        let num_blocks = data.len().div_ceil(config.max_block_size);
+        let mut total_k: u16 = 0;
+        for b in 0..num_blocks {
+            let block_start = b * config.max_block_size;
+            let block_len = usize::min(config.max_block_size, data.len() - block_start);
+            let k = block_len.div_ceil(symbol_size) as u16;
+            total_k += k;
+        }
+        decoder
+            .set_object_params(ObjectParams::new(
+                object_id,
+                data.len() as u64,
+                config.symbol_size,
+                num_blocks as u8,
+                total_k,
+            ))
+            .expect("set params");
+
+        for symbol in symbols {
+            let auth = AuthenticatedSymbol::from_parts(
+                symbol,
+                crate::security::tag::AuthenticationTag::zero(),
+            );
+            let _ = decoder.feed(auth).unwrap();
+        }
+
+        let complete = decoder.is_complete();
+        crate::assert_with_log!(complete, "multi-block is_complete", true, complete);
+
+        let decoded_data = decoder.into_data().expect("decoded");
+        let ok = decoded_data == data;
+        crate::assert_with_log!(ok, "multi-block roundtrip data", data.len(), decoded_data.len());
+        crate::test_complete!("multi_block_roundtrip");
+    }
+
+    #[test]
+    fn into_data_no_params_errors() {
+        init_test("into_data_no_params_errors");
+        let pipeline = DecodingPipeline::new(DecodingConfig::default());
+        let result = pipeline.into_data();
+        let is_err = result.is_err();
+        crate::assert_with_log!(is_err, "into_data without params errors", true, is_err);
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        let contains = msg.contains("object parameters not set");
+        crate::assert_with_log!(
+            contains,
+            "error message contains expected text",
+            true,
+            contains
+        );
+        crate::test_complete!("into_data_no_params_errors");
+    }
 }

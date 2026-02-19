@@ -474,4 +474,76 @@ mod tests {
             assert_eq!(entries[i].component, format!("comp_{i}"));
         }
     }
+
+    // ---- Gap tests ----
+
+    #[test]
+    fn collector_sink_entries_fifo_order() {
+        let sink = CollectorSink::new();
+        for name in &["a", "b", "c", "d", "e"] {
+            sink.emit(&test_entry(name));
+        }
+        let entries = sink.entries();
+        let names: Vec<&str> = entries.iter().map(|e| e.component.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn emit_scheduler_evidence_expected_loss_keys() {
+        let sink = CollectorSink::new();
+        emit_scheduler_evidence(&sink, "test_lane", 10, 5, 3, false);
+
+        let entry = &sink.entries()[0];
+        let map = &entry.expected_loss_by_action;
+
+        assert!(map.contains_key("meet_deadlines"), "missing meet_deadlines key");
+        assert!(map.contains_key("drain_cancel"), "missing drain_cancel key");
+        assert!(map.contains_key("process_ready"), "missing process_ready key");
+
+        let meet = map["meet_deadlines"];
+        let drain = map["drain_cancel"];
+        let ready = map["process_ready"];
+
+        assert!(
+            (meet - 5.0).abs() < f64::EPSILON,
+            "meet_deadlines: expected 5.0, got {meet}"
+        );
+        assert!(
+            (drain - 10.0).abs() < f64::EPSILON,
+            "drain_cancel: expected 10.0, got {drain}"
+        );
+        assert!(
+            (ready - 3.0).abs() < f64::EPSILON,
+            "process_ready: expected 3.0, got {ready}"
+        );
+    }
+
+    #[test]
+    fn collector_sink_concurrent_access() {
+        let sink = Arc::new(CollectorSink::new());
+        let mut handles = Vec::new();
+        for t in 0..4u32 {
+            let sink = Arc::clone(&sink);
+            handles.push(std::thread::spawn(move || {
+                for i in 0..25u32 {
+                    let component = format!("t{t}_i{i}");
+                    sink.emit(&{
+                        EvidenceLedgerBuilder::new()
+                            .ts_unix_ms(1_700_000_000_000 + u64::from(t * 100 + i))
+                            .component(&component)
+                            .action("concurrent_test")
+                            .posterior(vec![1.0])
+                            .chosen_expected_loss(0.0)
+                            .calibration_score(1.0)
+                            .build()
+                            .unwrap()
+                    });
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+        assert_eq!(sink.len(), 100, "expected 100 entries, got {}", sink.len());
+    }
 }
