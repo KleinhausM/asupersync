@@ -532,4 +532,201 @@ mod tests {
         );
         crate::test_complete!("progress_kind_serializes_snake_case");
     }
+
+    #[test]
+    fn progress_kind_debug() {
+        init_test("progress_kind_debug");
+        let dbg = format!("{:?}", ProgressKind::Started);
+        assert_eq!(dbg, "Started");
+        let dbg = format!("{:?}", ProgressKind::Update);
+        assert_eq!(dbg, "Update");
+        let dbg = format!("{:?}", ProgressKind::Completed);
+        assert_eq!(dbg, "Completed");
+        let dbg = format!("{:?}", ProgressKind::Failed);
+        assert_eq!(dbg, "Failed");
+        let dbg = format!("{:?}", ProgressKind::Cancelled);
+        assert_eq!(dbg, "Cancelled");
+        crate::test_complete!("progress_kind_debug");
+    }
+
+    #[test]
+    fn progress_kind_clone_copy() {
+        init_test("progress_kind_clone_copy");
+        let k = ProgressKind::Completed;
+        let k2 = k;
+        let k3 = k;
+        assert_eq!(k2, k3);
+        crate::test_complete!("progress_kind_clone_copy");
+    }
+
+    #[test]
+    fn progress_kind_eq() {
+        init_test("progress_kind_eq");
+        assert_eq!(ProgressKind::Started, ProgressKind::Started);
+        assert_ne!(ProgressKind::Started, ProgressKind::Failed);
+        crate::test_complete!("progress_kind_eq");
+    }
+
+    #[test]
+    fn progress_event_debug() {
+        init_test("progress_event_debug");
+        let ev = ProgressEvent::started("hello");
+        let dbg = format!("{ev:?}");
+        assert!(dbg.contains("ProgressEvent"));
+        crate::test_complete!("progress_event_debug");
+    }
+
+    #[test]
+    fn progress_event_clone() {
+        init_test("progress_event_clone");
+        let ev = ProgressEvent::update(3, 10, "cloning");
+        let ev2 = ev.clone();
+        assert_eq!(ev2.kind, ProgressKind::Update);
+        assert_eq!(ev2.current, Some(3));
+        assert_eq!(ev2.total, Some(10));
+        assert_eq!(ev2.message, "cloning");
+        crate::test_complete!("progress_event_clone");
+    }
+
+    #[test]
+    fn progress_event_started() {
+        init_test("progress_event_started");
+        let ev = ProgressEvent::started("begin");
+        assert_eq!(ev.kind, ProgressKind::Started);
+        assert_eq!(ev.message, "begin");
+        assert!(ev.current.is_none());
+        assert!(ev.total.is_none());
+        assert!(ev.elapsed_ms.is_none());
+        assert!(ev.operation.is_none());
+        crate::test_complete!("progress_event_started");
+    }
+
+    #[test]
+    fn progress_event_completed() {
+        init_test("progress_event_completed");
+        let ev = ProgressEvent::completed("done");
+        assert_eq!(ev.kind, ProgressKind::Completed);
+        assert_eq!(ev.message, "done");
+        crate::test_complete!("progress_event_completed");
+    }
+
+    #[test]
+    fn progress_event_failed() {
+        init_test("progress_event_failed");
+        let ev = ProgressEvent::failed("error");
+        assert_eq!(ev.kind, ProgressKind::Failed);
+        assert_eq!(ev.message, "error");
+        crate::test_complete!("progress_event_failed");
+    }
+
+    #[test]
+    fn progress_event_cancelled() {
+        init_test("progress_event_cancelled");
+        let ev = ProgressEvent::cancelled("abort");
+        assert_eq!(ev.kind, ProgressKind::Cancelled);
+        assert_eq!(ev.message, "abort");
+        crate::test_complete!("progress_event_cancelled");
+    }
+
+    #[test]
+    fn progress_event_update_fields() {
+        init_test("progress_event_update_fields");
+        let ev = ProgressEvent::update(5, 20, "processing");
+        assert_eq!(ev.kind, ProgressKind::Update);
+        assert_eq!(ev.current, Some(5));
+        assert_eq!(ev.total, Some(20));
+        assert_eq!(ev.message, "processing");
+        crate::test_complete!("progress_event_update_fields");
+    }
+
+    #[test]
+    fn progress_event_operation_builder() {
+        init_test("progress_event_operation_builder");
+        let ev = ProgressEvent::started("go").operation("sync");
+        assert_eq!(ev.operation, Some("sync".to_string()));
+        crate::test_complete!("progress_event_operation_builder");
+    }
+
+    #[test]
+    fn progress_event_elapsed_builder() {
+        init_test("progress_event_elapsed_builder");
+        let ev = ProgressEvent::completed("done").elapsed(Duration::from_millis(2500));
+        assert_eq!(ev.elapsed_ms, Some(2500));
+        crate::test_complete!("progress_event_elapsed_builder");
+    }
+
+    #[test]
+    fn progress_event_percentage_100() {
+        init_test("progress_event_percentage_100");
+        let ev = ProgressEvent::update(100, 100, "done");
+        assert_eq!(ev.percentage(), Some(100.0));
+        crate::test_complete!("progress_event_percentage_100");
+    }
+
+    #[test]
+    fn progress_reporter_with_writer_and_operation() {
+        init_test("progress_reporter_with_writer_and_operation");
+        let cursor = Cursor::new(Vec::new());
+        let mut reporter = ProgressReporter::with_writer(OutputFormat::Json, cursor)
+            .operation("test_op");
+        reporter.start("starting").unwrap();
+        reporter.update(1, 10, "step 1").unwrap();
+        reporter.complete("finished").unwrap();
+        // No panic means success
+        crate::test_complete!("progress_reporter_with_writer_and_operation");
+    }
+
+    #[test]
+    fn progress_reporter_fail_and_cancel() {
+        init_test("progress_reporter_fail_and_cancel");
+        let cursor = Cursor::new(Vec::new());
+        let mut reporter = ProgressReporter::with_writer(OutputFormat::Json, cursor);
+        reporter.fail("oops").unwrap();
+        // Create a separate reporter for cancel
+        let cursor2 = Cursor::new(Vec::new());
+        let mut reporter2 = ProgressReporter::with_writer(OutputFormat::Json, cursor2);
+        reporter2.cancel("aborted").unwrap();
+        crate::test_complete!("progress_reporter_fail_and_cancel");
+    }
+
+    #[test]
+    fn progress_reporter_human_format() {
+        init_test("progress_reporter_human_format");
+        let cursor = Cursor::new(Vec::new());
+        let mut reporter = ProgressReporter::with_writer(OutputFormat::Human, cursor);
+        reporter.start("begin").unwrap();
+        reporter.update(5, 10, "half").unwrap();
+        reporter.complete("end").unwrap();
+        crate::test_complete!("progress_reporter_human_format");
+    }
+
+    #[test]
+    fn progress_reporter_tsv_format() {
+        init_test("progress_reporter_tsv_format");
+        let cursor = Cursor::new(Vec::new());
+        let mut reporter = ProgressReporter::with_writer(OutputFormat::Tsv, cursor);
+        reporter.start("tsv test").unwrap();
+        reporter.complete("done").unwrap();
+        crate::test_complete!("progress_reporter_tsv_format");
+    }
+
+    #[test]
+    fn progress_reporter_json_pretty_format() {
+        init_test("progress_reporter_json_pretty_format");
+        let cursor = Cursor::new(Vec::new());
+        let mut reporter = ProgressReporter::with_writer(OutputFormat::JsonPretty, cursor);
+        reporter.start("pretty test").unwrap();
+        reporter.complete("done").unwrap();
+        crate::test_complete!("progress_reporter_json_pretty_format");
+    }
+
+    #[test]
+    fn progress_reporter_with_color() {
+        init_test("progress_reporter_with_color");
+        let reporter = ProgressReporter::new(OutputFormat::Human)
+            .with_color(ColorChoice::Never);
+        let dbg = format!("{:?}", reporter.elapsed());
+        assert!(!dbg.is_empty());
+        crate::test_complete!("progress_reporter_with_color");
+    }
 }

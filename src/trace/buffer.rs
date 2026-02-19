@@ -202,4 +202,128 @@ mod tests {
         let seqs: Vec<_> = buf.iter().map(|e| e.seq).collect();
         assert_eq!(seqs, vec![3, 4, 5]);
     }
+
+    #[test]
+    fn trace_buffer_debug() {
+        let buf = TraceBuffer::new(4);
+        let dbg = format!("{buf:?}");
+        assert!(dbg.contains("TraceBuffer"));
+    }
+
+    #[test]
+    fn trace_buffer_new_capacity() {
+        let buf = TraceBuffer::new(16);
+        assert_eq!(buf.capacity(), 16);
+        assert_eq!(buf.len(), 0);
+        assert!(buf.is_empty());
+        assert!(!buf.is_full());
+    }
+
+    #[test]
+    fn trace_buffer_capacity_clamps_to_one() {
+        let buf = TraceBuffer::new(0);
+        assert_eq!(buf.capacity(), 1);
+    }
+
+    #[test]
+    fn trace_buffer_is_full() {
+        let mut buf = TraceBuffer::new(2);
+        assert!(!buf.is_full());
+        buf.push(make_event(1));
+        assert!(!buf.is_full());
+        buf.push(make_event(2));
+        assert!(buf.is_full());
+    }
+
+    #[test]
+    fn trace_buffer_clear() {
+        let mut buf = TraceBuffer::new(4);
+        buf.push(make_event(1));
+        buf.push(make_event(2));
+        assert_eq!(buf.len(), 2);
+        buf.clear();
+        assert_eq!(buf.len(), 0);
+        assert!(buf.is_empty());
+        assert!(buf.last().is_none());
+    }
+
+    #[test]
+    fn trace_buffer_last_empty() {
+        let buf = TraceBuffer::new(4);
+        assert!(buf.last().is_none());
+    }
+
+    #[test]
+    fn trace_buffer_last_returns_newest() {
+        let mut buf = TraceBuffer::new(4);
+        buf.push(make_event(10));
+        buf.push(make_event(20));
+        buf.push(make_event(30));
+        assert_eq!(buf.last().unwrap().seq, 30);
+    }
+
+    #[test]
+    fn trace_buffer_default() {
+        let buf = TraceBuffer::default();
+        assert_eq!(buf.capacity(), 1024);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn trace_buffer_iter_empty() {
+        let buf = TraceBuffer::new(4);
+        assert_eq!(buf.iter().count(), 0);
+    }
+
+    #[test]
+    fn trace_buffer_handle_debug() {
+        let handle = TraceBufferHandle::new(8);
+        let dbg = format!("{handle:?}");
+        assert!(dbg.contains("TraceBufferHandle"));
+    }
+
+    #[test]
+    fn trace_buffer_handle_clone() {
+        let handle = TraceBufferHandle::new(8);
+        handle.push_event(make_event(1));
+        let handle2 = handle.clone();
+        // Cloned handle shares the same buffer
+        assert_eq!(handle2.len(), 1);
+    }
+
+    #[test]
+    fn trace_buffer_handle_next_seq_increments() {
+        let handle = TraceBufferHandle::new(4);
+        assert_eq!(handle.next_seq(), 0);
+        assert_eq!(handle.next_seq(), 1);
+        assert_eq!(handle.next_seq(), 2);
+    }
+
+    #[test]
+    fn trace_buffer_handle_push_and_snapshot() {
+        let handle = TraceBufferHandle::new(4);
+        handle.push_event(make_event(10));
+        handle.push_event(make_event(20));
+        let snap = handle.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap[0].seq, 10);
+        assert_eq!(snap[1].seq, 20);
+    }
+
+    #[test]
+    fn trace_buffer_handle_len_and_is_empty() {
+        let handle = TraceBufferHandle::new(4);
+        assert!(handle.is_empty());
+        assert_eq!(handle.len(), 0);
+        handle.push_event(make_event(1));
+        assert!(!handle.is_empty());
+        assert_eq!(handle.len(), 1);
+    }
+
+    #[test]
+    fn trace_buffer_handle_snapshot_empty() {
+        let handle = TraceBufferHandle::new(4);
+        let snap = handle.snapshot();
+        assert!(snap.is_empty());
+    }
 }
