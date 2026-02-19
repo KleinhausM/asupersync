@@ -1502,4 +1502,28 @@ mod tests {
         assert!(info.server_id.is_empty());
         assert_eq!(info.proto, 0);
     }
+
+    #[test]
+    fn nats_config_debug_clone_default() {
+        let cfg = NatsConfig::default();
+        let cloned = cfg.clone();
+        assert_eq!(cloned.host, "127.0.0.1");
+        assert_eq!(cloned.port, 4222);
+        assert!(!cloned.verbose);
+        assert!(!cloned.pedantic);
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("NatsConfig"));
+    }
+
+    #[test]
+    fn server_info_debug_clone_default() {
+        let info = ServerInfo::default();
+        assert!(info.server_id.is_empty());
+        assert_eq!(info.proto, 0);
+        assert!(!info.tls_required);
+        let cloned = info.clone();
+        assert_eq!(cloned.max_payload, 0);
+        let dbg = format!("{info:?}");
+        assert!(dbg.contains("ServerInfo"));
+    }
 }

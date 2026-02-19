@@ -742,4 +742,34 @@ mod tests {
         let acquired = pool.try_acquire(&key, make_time(120));
         assert_eq!(acquired, Some(id2));
     }
+
+    #[test]
+    fn pool_key_debug_clone_eq_ord_hash() {
+        use std::collections::HashSet;
+        let a = PoolKey::new("example.com", 443, true);
+        let b = a.clone();
+        assert_eq!(a, b);
+        assert_ne!(a, PoolKey::new("other.com", 443, true));
+        assert!(a < PoolKey::new("zexample.com", 443, true));
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("example.com"));
+        assert!(dbg.contains("443"));
+        let mut set = HashSet::new();
+        set.insert(a.clone());
+        assert!(set.contains(&b));
+    }
+
+    #[test]
+    fn pooled_connection_state_debug_clone_copy_eq() {
+        let a = PooledConnectionState::Idle;
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, PooledConnectionState::InUse);
+        assert_ne!(a, PooledConnectionState::Connecting);
+        assert_ne!(a, PooledConnectionState::Unhealthy);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Idle"));
+    }
 }

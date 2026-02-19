@@ -573,4 +573,42 @@ mod tests {
         };
         assert!(KafkaConsumer::new(cfg).is_err());
     }
+
+    #[test]
+    fn auto_offset_reset_debug_clone_copy_eq_default() {
+        let a = AutoOffsetReset::default();
+        assert_eq!(a, AutoOffsetReset::Latest);
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, AutoOffsetReset::Earliest);
+        assert_ne!(a, AutoOffsetReset::None);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Latest"));
+    }
+
+    #[test]
+    fn isolation_level_debug_clone_copy_eq_default() {
+        let a = IsolationLevel::default();
+        assert_eq!(a, IsolationLevel::ReadUncommitted);
+        let b = a; // Copy
+        let c = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, IsolationLevel::ReadCommitted);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("ReadUncommitted"));
+    }
+
+    #[test]
+    fn consumer_config_debug_clone_default() {
+        let cfg = ConsumerConfig::default();
+        let cloned = cfg.clone();
+        assert_eq!(cloned.group_id, "asupersync-default");
+        assert_eq!(cloned.auto_offset_reset, AutoOffsetReset::Latest);
+        assert_eq!(cloned.isolation_level, IsolationLevel::ReadUncommitted);
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("ConsumerConfig"));
+    }
 }

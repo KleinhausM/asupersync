@@ -418,4 +418,24 @@ mod tests {
         let frame = codec.decode(&mut buf).unwrap().unwrap();
         assert!(frame.is_empty());
     }
+
+    #[test]
+    fn length_delimited_codec_debug_clone() {
+        let codec = LengthDelimitedCodec::new();
+        let cloned = codec.clone();
+        let dbg = format!("{codec:?}");
+        assert!(dbg.contains("LengthDelimitedCodec"));
+        let dbg2 = format!("{cloned:?}");
+        assert_eq!(dbg, dbg2);
+    }
+
+    #[test]
+    fn length_delimited_codec_builder_debug_clone() {
+        let builder = LengthDelimitedCodec::builder();
+        let cloned = builder.clone();
+        let dbg = format!("{builder:?}");
+        assert!(dbg.contains("LengthDelimitedCodecBuilder"));
+        let dbg2 = format!("{cloned:?}");
+        assert_eq!(dbg, dbg2);
+    }
 }
