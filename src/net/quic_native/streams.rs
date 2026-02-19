@@ -1498,4 +1498,106 @@ mod tests {
         assert!(!remote_bidi.is_local_for(StreamRole::Server));
         assert_eq!(tbl.len(), 4); // 2 local bidi + 1 local uni + 1 remote bidi
     }
+
+    // =========================================================================
+    // Wave 44 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn stream_role_debug_clone_copy_eq() {
+        let r = StreamRole::Client;
+        let copied = r;
+        let cloned = r.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(StreamRole::Client, StreamRole::Server);
+        assert!(format!("{r:?}").contains("Client"));
+        assert!(format!("{:?}", StreamRole::Server).contains("Server"));
+    }
+
+    #[test]
+    fn stream_direction_debug_clone_copy_eq() {
+        let d = StreamDirection::Bidirectional;
+        let copied = d;
+        let cloned = d.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(StreamDirection::Bidirectional, StreamDirection::Unidirectional);
+        assert!(format!("{d:?}").contains("Bidirectional"));
+    }
+
+    #[test]
+    fn stream_id_debug_clone_copy_ord_hash() {
+        use std::collections::HashSet;
+        let a = StreamId(0);
+        let b = StreamId(4);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("StreamId"), "{dbg}");
+        let copied = a;
+        let cloned = a.clone();
+        assert_eq!(copied, cloned);
+        assert!(a < b);
+        assert!(b > a);
+        let mut set = HashSet::new();
+        set.insert(a);
+        set.insert(b);
+        set.insert(a);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn flow_control_error_debug_clone_eq_display() {
+        let e1 = FlowControlError::Exhausted {
+            attempted: 100,
+            remaining: 50,
+        };
+        let e2 = FlowControlError::LimitRegression {
+            current: 200,
+            requested: 100,
+        };
+        assert!(format!("{e1:?}").contains("Exhausted"));
+        assert!(format!("{e2:?}").contains("LimitRegression"));
+        assert!(format!("{e1}").contains("exhausted"));
+        assert!(format!("{e2}").contains("regression"));
+        assert_eq!(e1.clone(), e1);
+        assert_ne!(e1, e2);
+        let err: &dyn std::error::Error = &e1;
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn quic_stream_error_debug_clone_eq_display() {
+        let e1 = QuicStreamError::SendStopped { code: 42 };
+        let e2 = QuicStreamError::ReceiveStopped { code: 7 };
+        let e3 = QuicStreamError::OffsetOverflow {
+            offset: 10,
+            len: 20,
+        };
+        assert!(format!("{e1:?}").contains("SendStopped"));
+        assert!(format!("{e1}").contains("send stopped"));
+        assert!(format!("{e2}").contains("receive side stopped"));
+        assert!(format!("{e3}").contains("overflow"));
+        assert_eq!(e1.clone(), e1);
+        assert_ne!(e1, e2);
+    }
+
+    #[test]
+    fn stream_table_error_debug_clone_eq_display() {
+        let e1 = StreamTableError::DuplicateStream(StreamId(0));
+        let e2 = StreamTableError::UnknownStream(StreamId(1));
+        let e3 = StreamTableError::InvalidRemoteStream(StreamId(2));
+        assert!(format!("{e1:?}").contains("DuplicateStream"));
+        assert!(format!("{e1}").contains("duplicate stream"));
+        assert!(format!("{e2}").contains("unknown stream"));
+        assert!(format!("{e3}").contains("invalid remote stream"));
+        assert_eq!(e1.clone(), e1);
+        assert_ne!(e1, e2);
+        let err: &dyn std::error::Error = &e1;
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn stream_table_error_from_quic_stream_error() {
+        let inner = QuicStreamError::SendStopped { code: 99 };
+        let outer: StreamTableError = inner.clone().into();
+        assert_eq!(outer, StreamTableError::Stream(inner));
+    }
 }

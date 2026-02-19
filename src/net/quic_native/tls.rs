@@ -459,4 +459,69 @@ mod tests {
             ]
         );
     }
+
+    // =========================================================================
+    // Wave 44 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn crypto_level_debug_clone_copy_eq() {
+        let l = CryptoLevel::Initial;
+        let copied = l;
+        let cloned = l.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(CryptoLevel::Initial, CryptoLevel::OneRtt);
+        let dbg = format!("{l:?}");
+        assert!(dbg.contains("Initial"), "{dbg}");
+    }
+
+    #[test]
+    fn key_update_event_debug_clone_copy_eq() {
+        let e1 = KeyUpdateEvent::NoChange;
+        let e2 = KeyUpdateEvent::LocalUpdateScheduled {
+            next_phase: true,
+            generation: 1,
+        };
+        let e3 = KeyUpdateEvent::RemoteUpdateAccepted {
+            new_phase: false,
+            generation: 2,
+        };
+        assert!(format!("{e1:?}").contains("NoChange"));
+        assert!(format!("{e2:?}").contains("LocalUpdateScheduled"));
+        assert!(format!("{e3:?}").contains("RemoteUpdateAccepted"));
+        let copied = e2;
+        let cloned = e2.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(e1, e2);
+    }
+
+    #[test]
+    fn quic_tls_error_debug_clone_eq_display() {
+        let e1 = QuicTlsError::HandshakeNotConfirmed;
+        let e2 = QuicTlsError::InvalidTransition {
+            from: CryptoLevel::Initial,
+            to: CryptoLevel::OneRtt,
+        };
+        let e3 = QuicTlsError::StalePeerKeyPhase(true);
+
+        assert!(format!("{e1:?}").contains("HandshakeNotConfirmed"));
+        assert!(format!("{e1}").contains("handshake not confirmed"));
+        assert!(format!("{e2}").contains("invalid crypto transition"));
+        assert!(format!("{e3}").contains("stale peer key phase"));
+
+        assert_eq!(e1.clone(), e1);
+        assert_ne!(e1, e2);
+
+        let err: &dyn std::error::Error = &e1;
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn quic_tls_machine_debug_clone_eq() {
+        let m = QuicTlsMachine::new();
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("QuicTlsMachine"), "{dbg}");
+        let cloned = m.clone();
+        assert_eq!(m, cloned);
+    }
 }

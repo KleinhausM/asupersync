@@ -491,4 +491,64 @@ mod tests {
         assert_eq!(ctx.get_baggage("exists"), Some("yes"));
         assert_eq!(ctx.get_baggage("missing"), None);
     }
+
+    // =========================================================================
+    // Wave 44 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn trace_flags_debug_clone_copy_eq_default() {
+        let def = TraceFlags::default();
+        assert_eq!(def, TraceFlags::NONE);
+        assert_eq!(def.as_byte(), 0);
+        assert!(!def.is_sampled());
+        assert!(!def.is_debug());
+
+        let sampled = TraceFlags::SAMPLED;
+        let copied = sampled;
+        let cloned = sampled.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(def, sampled);
+
+        let dbg = format!("{sampled:?}");
+        assert!(dbg.contains("TraceFlags"), "{dbg}");
+    }
+
+    #[test]
+    fn region_tag_debug_clone_eq_hash_display() {
+        use std::collections::HashSet;
+        let t1 = RegionTag::new("us-west-2");
+        let t2 = RegionTag::new("eu-central-1");
+
+        let dbg = format!("{t1:?}");
+        assert!(dbg.contains("RegionTag"), "{dbg}");
+        assert_eq!(format!("{t1}"), "us-west-2");
+
+        let cloned = t1.clone();
+        assert_eq!(cloned, t1);
+        assert_ne!(t1, t2);
+
+        let mut set = HashSet::new();
+        set.insert(t1.clone());
+        set.insert(t2.clone());
+        set.insert(t1.clone());
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn symbol_trace_context_debug_clone_eq() {
+        let mut rng = DetRng::new(99);
+        let ctx = SymbolTraceContext::new_for_encoding(
+            TraceId::new_for_test(42),
+            SymbolSpanId::NIL,
+            RegionTag::new("test"),
+            &mut rng,
+        );
+
+        let dbg = format!("{ctx:?}");
+        assert!(dbg.contains("SymbolTraceContext"), "{dbg}");
+
+        let cloned = ctx.clone();
+        assert_eq!(cloned, ctx);
+    }
 }

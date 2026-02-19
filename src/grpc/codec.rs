@@ -414,4 +414,50 @@ mod tests {
         crate::assert_with_log!(ok, "compression unsupported", true, ok);
         crate::test_complete!("test_framed_codec_with_compression_errors_on_encode");
     }
+
+    // =========================================================================
+    // Wave 44 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn grpc_message_debug_clone() {
+        let msg = GrpcMessage::new(Bytes::from_static(b"hello"));
+        let dbg = format!("{msg:?}");
+        assert!(dbg.contains("GrpcMessage"), "{dbg}");
+        assert!(!msg.compressed);
+        let cloned = msg.clone();
+        assert_eq!(cloned.compressed, false);
+        assert_eq!(cloned.data, Bytes::from_static(b"hello"));
+
+        let compressed = GrpcMessage::compressed(Bytes::from_static(b"zz"));
+        assert!(compressed.compressed);
+        let cloned2 = compressed.clone();
+        assert!(cloned2.compressed);
+    }
+
+    #[test]
+    fn grpc_codec_debug_default() {
+        let codec = GrpcCodec::default();
+        let dbg = format!("{codec:?}");
+        assert!(dbg.contains("GrpcCodec"), "{dbg}");
+        assert_eq!(codec.max_message_size(), DEFAULT_MAX_MESSAGE_SIZE);
+
+        let codec2 = GrpcCodec::new();
+        assert_eq!(codec2.max_message_size(), DEFAULT_MAX_MESSAGE_SIZE);
+
+        let custom = GrpcCodec::with_max_size(1024);
+        assert_eq!(custom.max_message_size(), 1024);
+    }
+
+    #[test]
+    fn identity_codec_debug_clone_copy_default() {
+        let ic = IdentityCodec;
+        let dbg = format!("{ic:?}");
+        assert!(dbg.contains("IdentityCodec"), "{dbg}");
+        let copied = ic;
+        let cloned = ic.clone();
+        assert_eq!(format!("{copied:?}"), format!("{cloned:?}"));
+        let def = IdentityCodec::default();
+        assert_eq!(format!("{def:?}"), dbg);
+    }
 }
