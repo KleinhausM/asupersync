@@ -489,4 +489,20 @@ mod tests {
         assert_eq!(inner.size_hint(), (2, Some(2)));
         crate::test_complete!("filter_map_accessors");
     }
+
+    #[test]
+    fn filter_debug() {
+        fn pred(x: &i32) -> bool { *x > 1 }
+        let stream = Filter::new(iter(vec![1, 2, 3]), pred as fn(&i32) -> bool);
+        let dbg = format!("{stream:?}");
+        assert!(dbg.contains("Filter"));
+    }
+
+    #[test]
+    fn filter_map_debug() {
+        fn mapper(x: i32) -> Option<i32> { Some(x) }
+        let stream = FilterMap::new(iter(vec![1, 2]), mapper as fn(i32) -> Option<i32>);
+        let dbg = format!("{stream:?}");
+        assert!(dbg.contains("FilterMap"));
+    }
 }

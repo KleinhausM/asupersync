@@ -160,4 +160,12 @@ mod tests {
 
         crate::test_complete!("map_accessors");
     }
+
+    #[test]
+    fn map_debug() {
+        fn double(x: i32) -> i32 { x * 2 }
+        let stream = Map::new(iter(vec![1, 2, 3]), double as fn(i32) -> i32);
+        let dbg = format!("{stream:?}");
+        assert!(dbg.contains("Map"));
+    }
 }

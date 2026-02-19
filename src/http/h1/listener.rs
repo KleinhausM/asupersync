@@ -567,4 +567,14 @@ mod tests {
             yield_now().await;
         });
     }
+
+    #[test]
+    fn http1_listener_config_debug_clone_default() {
+        let cfg = Http1ListenerConfig::default();
+        let cloned = cfg.clone();
+        assert_eq!(cloned.max_connections, Some(10_000));
+        assert_eq!(cloned.drain_timeout, Duration::from_secs(30));
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("Http1ListenerConfig"));
+    }
 }

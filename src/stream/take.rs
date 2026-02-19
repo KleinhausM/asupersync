@@ -213,4 +213,19 @@ mod tests {
         crate::assert_with_log!(hint == (0, Some(4)), "size_hint", (0, Some(4)), hint);
         crate::test_complete!("test_take_while_size_hint");
     }
+
+    #[test]
+    fn take_debug() {
+        let stream = Take::new(iter(vec![1, 2, 3]), 2);
+        let dbg = format!("{stream:?}");
+        assert!(dbg.contains("Take"));
+    }
+
+    #[test]
+    fn take_while_debug() {
+        fn pred(v: &i32) -> bool { *v < 5 }
+        let stream = TakeWhile::new(iter(vec![1, 2]), pred as fn(&i32) -> bool);
+        let dbg = format!("{stream:?}");
+        assert!(dbg.contains("TakeWhile"));
+    }
 }
