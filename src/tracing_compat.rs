@@ -322,4 +322,86 @@ mod tests {
         }
         crate::test_complete!("test_noop_span_methods");
     }
+
+    #[test]
+    fn noop_guard_debug() {
+        #[cfg(not(feature = "tracing-integration"))]
+        {
+            let guard = NoopGuard;
+            let dbg = format!("{guard:?}");
+            assert!(dbg.contains("NoopGuard"), "{dbg}");
+        }
+    }
+
+    #[test]
+    fn noop_span_debug_clone_copy() {
+        #[cfg(not(feature = "tracing-integration"))]
+        {
+            let span = NoopSpan;
+            let dbg = format!("{span:?}");
+            assert!(dbg.contains("NoopSpan"), "{dbg}");
+
+            let copied = span;
+            let cloned = span.clone();
+            assert!(copied.is_disabled());
+            assert!(cloned.is_disabled());
+        }
+    }
+
+    #[test]
+    fn level_equality_and_ordering() {
+        #[cfg(not(feature = "tracing-integration"))]
+        {
+            // All noop levels are the same unit struct
+            assert_eq!(Level::TRACE, Level::DEBUG);
+            assert_eq!(Level::INFO, Level::WARN);
+            assert_eq!(Level::WARN, Level::ERROR);
+
+            // Ordering is consistent
+            assert!(Level::TRACE <= Level::ERROR);
+
+            // Debug
+            let dbg = format!("{:?}", Level::INFO);
+            assert!(dbg.contains("Level"), "{dbg}");
+
+            // Clone/Copy
+            let l = Level::INFO;
+            let copied = l;
+            let cloned = l.clone();
+            assert_eq!(copied, cloned);
+        }
+    }
+
+    #[test]
+    fn span_type_alias_works() {
+        #[cfg(not(feature = "tracing-integration"))]
+        {
+            let span: Span = NoopSpan::current();
+            let _guard = span.enter();
+        }
+    }
+
+    #[test]
+    fn all_span_macros_compile() {
+        #[cfg(not(feature = "tracing-integration"))]
+        {
+            let _ = trace_span!("t");
+            let _ = debug_span!("d");
+            let _ = info_span!("i");
+            let _ = warn_span!("w");
+            let _ = error_span!("e");
+        }
+    }
+
+    #[test]
+    fn instrument_trait_noop() {
+        #[cfg(not(feature = "tracing-integration"))]
+        {
+            let fut = async { 42 };
+            let instrumented = fut.instrument(NoopSpan);
+            // Can also use in_current_span
+            let _ = async { 1 }.in_current_span();
+            let _ = instrumented;
+        }
+    }
 }

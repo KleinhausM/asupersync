@@ -272,4 +272,80 @@ mod tests {
         }
         crate::test_complete!("io_op_cancel_emits_trace");
     }
+
+    #[test]
+    fn io_op_debug_format() {
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let task_id = create_task(&mut state, root);
+
+        let op = IoOp::submit(&mut state, task_id, root, None).expect("submit");
+        let dbg = format!("{op:?}");
+        assert!(dbg.contains("IoOp"), "{dbg}");
+    }
+
+    #[test]
+    fn io_op_id_accessor() {
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let task_id = create_task(&mut state, root);
+
+        let op = IoOp::submit(&mut state, task_id, root, None).expect("submit");
+        let id = op.id();
+        // Id should be deterministic (first obligation)
+        let _ = format!("{id:?}");
+        op.complete(&mut state).expect("complete");
+    }
+
+    #[test]
+    fn io_op_abort_with_explicit_reason() {
+        init_test("io_op_abort_with_explicit_reason");
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let task_id = create_task(&mut state, root);
+
+        state.now = Time::from_nanos(50);
+        let op =
+            IoOp::submit(&mut state, task_id, root, Some("explicit abort".into())).expect("submit");
+
+        state.now = Time::from_nanos(80);
+        let duration = op
+            .abort(&mut state, ObligationAbortReason::Explicit)
+            .expect("abort");
+        crate::assert_with_log!(duration == 30, "abort duration", 30, duration);
+
+        let abort_event = state
+            .trace
+            .snapshot()
+            .into_iter()
+            .find(|e| e.kind == TraceEventKind::ObligationAbort)
+            .expect("abort event");
+        match &abort_event.data {
+            TraceData::Obligation { abort_reason, .. } => {
+                crate::assert_with_log!(
+                    *abort_reason == Some(ObligationAbortReason::Explicit),
+                    "abort reason",
+                    Some(ObligationAbortReason::Explicit),
+                    *abort_reason
+                );
+            }
+            other => panic!("unexpected data: {other:?}"),
+        }
+        crate::test_complete!("io_op_abort_with_explicit_reason");
+    }
+
+    #[test]
+    fn io_op_submit_no_description() {
+        init_test("io_op_submit_no_description");
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let task_id = create_task(&mut state, root);
+
+        state.now = Time::from_nanos(0);
+        let op = IoOp::submit(&mut state, task_id, root, None).expect("submit without desc");
+        state.now = Time::from_nanos(5);
+        let duration = op.complete(&mut state).expect("complete");
+        crate::assert_with_log!(duration == 5, "duration no desc", 5, duration);
+        crate::test_complete!("io_op_submit_no_description");
+    }
 }

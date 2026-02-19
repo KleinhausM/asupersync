@@ -1058,6 +1058,7 @@ mod tests {
     }
 
     /// Simple counter actor for testing.
+    #[derive(Debug)]
     struct Counter {
         count: u64,
         started: bool,
@@ -1730,7 +1731,12 @@ mod tests {
         );
 
         let custom = MailboxConfig::with_capacity(8);
-        crate::assert_with_log!(custom.capacity == 8, "custom capacity", 8usize, custom.capacity);
+        crate::assert_with_log!(
+            custom.capacity == 8,
+            "custom capacity",
+            8usize,
+            custom.capacity
+        );
         crate::assert_with_log!(
             custom.backpressure,
             "with_capacity enables backpressure",
@@ -1805,8 +1811,312 @@ mod tests {
 
         let parent = ctx.parent().expect("parent should be Some");
         let parent_id_matches = parent.actor_id() == parent_id;
-        crate::assert_with_log!(parent_id_matches, "parent id matches", true, parent_id_matches);
+        crate::assert_with_log!(
+            parent_id_matches,
+            "parent id matches",
+            true,
+            parent_id_matches
+        );
 
         crate::test_complete!("actor_context_with_parent_supervisor");
+    }
+
+    // ---- Pure Data Type Tests (no runtime needed) ----
+
+    #[test]
+    fn actor_id_debug_format() {
+        let id = ActorId::from_task(TaskId::new_for_test(5, 3));
+        let dbg = format!("{id:?}");
+        assert!(dbg.contains("ActorId"), "{dbg}");
+    }
+
+    #[test]
+    fn actor_id_display_delegates_to_task_id() {
+        let tid = TaskId::new_for_test(7, 2);
+        let aid = ActorId::from_task(tid);
+        assert_eq!(format!("{aid}"), format!("{tid}"));
+    }
+
+    #[test]
+    fn actor_id_from_task_roundtrip() {
+        let tid = TaskId::new_for_test(3, 1);
+        let aid = ActorId::from_task(tid);
+        assert_eq!(aid.task_id(), tid);
+    }
+
+    #[test]
+    fn actor_id_copy_clone() {
+        let id = ActorId::from_task(TaskId::new_for_test(1, 1));
+        let copied = id; // Copy
+        let cloned = id.clone();
+        assert_eq!(id, copied);
+        assert_eq!(id, cloned);
+    }
+
+    #[test]
+    fn actor_id_hash_consistency() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let id1 = ActorId::from_task(TaskId::new_for_test(4, 2));
+        let id2 = ActorId::from_task(TaskId::new_for_test(4, 2));
+        assert_eq!(id1, id2);
+
+        let mut h1 = DefaultHasher::new();
+        let mut h2 = DefaultHasher::new();
+        id1.hash(&mut h1);
+        id2.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish(), "equal IDs must hash equal");
+    }
+
+    #[test]
+    fn actor_state_debug_all_variants() {
+        for (state, expected) in [
+            (ActorState::Created, "Created"),
+            (ActorState::Running, "Running"),
+            (ActorState::Stopping, "Stopping"),
+            (ActorState::Stopped, "Stopped"),
+        ] {
+            let dbg = format!("{state:?}");
+            assert_eq!(dbg, expected, "ActorState::{expected}");
+        }
+    }
+
+    #[test]
+    fn actor_state_clone_copy_eq() {
+        let s = ActorState::Running;
+        let copied = s;
+        let cloned = s.clone();
+        assert_eq!(s, copied);
+        assert_eq!(s, cloned);
+    }
+
+    #[test]
+    fn actor_state_exhaustive_inequality() {
+        let all = [
+            ActorState::Created,
+            ActorState::Running,
+            ActorState::Stopping,
+            ActorState::Stopped,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actor_state_cell_sequential_transitions() {
+        let cell = ActorStateCell::new(ActorState::Created);
+        assert_eq!(cell.load(), ActorState::Created);
+
+        cell.store(ActorState::Running);
+        assert_eq!(cell.load(), ActorState::Running);
+
+        cell.store(ActorState::Stopping);
+        assert_eq!(cell.load(), ActorState::Stopping);
+
+        cell.store(ActorState::Stopped);
+        assert_eq!(cell.load(), ActorState::Stopped);
+    }
+
+    #[test]
+    fn supervisor_message_debug_child_failed() {
+        let msg = SupervisorMessage::ChildFailed {
+            child_id: ActorId::from_task(TaskId::new_for_test(1, 1)),
+            reason: "panicked".to_string(),
+        };
+        let dbg = format!("{msg:?}");
+        assert!(dbg.contains("ChildFailed"), "{dbg}");
+        assert!(dbg.contains("panicked"), "{dbg}");
+    }
+
+    #[test]
+    fn supervisor_message_debug_child_stopped() {
+        let msg = SupervisorMessage::ChildStopped {
+            child_id: ActorId::from_task(TaskId::new_for_test(2, 1)),
+        };
+        let dbg = format!("{msg:?}");
+        assert!(dbg.contains("ChildStopped"), "{dbg}");
+    }
+
+    #[test]
+    fn supervisor_message_clone() {
+        let msg = SupervisorMessage::ChildFailed {
+            child_id: ActorId::from_task(TaskId::new_for_test(1, 1)),
+            reason: "boom".to_string(),
+        };
+        let cloned = msg.clone();
+        let (a, b) = (format!("{msg:?}"), format!("{cloned:?}"));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn supervised_outcome_debug_all_variants() {
+        let variants: Vec<SupervisedOutcome> = vec![
+            SupervisedOutcome::Stopped,
+            SupervisedOutcome::RestartBudgetExhausted { total_restarts: 5 },
+            SupervisedOutcome::Escalated,
+        ];
+        for v in &variants {
+            let dbg = format!("{v:?}");
+            assert!(!dbg.is_empty());
+        }
+        assert!(format!("{:?}", variants[0]).contains("Stopped"));
+        assert!(format!("{:?}", variants[1]).contains("5"));
+        assert!(format!("{:?}", variants[2]).contains("Escalated"));
+    }
+
+    #[test]
+    fn mailbox_config_debug_clone_copy() {
+        let cfg = MailboxConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("MailboxConfig"), "{dbg}");
+        assert!(dbg.contains("64"), "{dbg}");
+
+        let copied = cfg;
+        let cloned = cfg.clone();
+        assert_eq!(copied.capacity, cfg.capacity);
+        assert_eq!(cloned.backpressure, cfg.backpressure);
+    }
+
+    #[test]
+    fn mailbox_config_zero_capacity() {
+        let cfg = MailboxConfig::with_capacity(0);
+        assert_eq!(cfg.capacity, 0);
+        assert!(cfg.backpressure);
+    }
+
+    #[test]
+    fn mailbox_config_max_capacity() {
+        let cfg = MailboxConfig::with_capacity(usize::MAX);
+        assert_eq!(cfg.capacity, usize::MAX);
+    }
+
+    #[test]
+    fn default_mailbox_capacity_is_64() {
+        assert_eq!(DEFAULT_MAILBOX_CAPACITY, 64);
+    }
+
+    #[test]
+    fn actor_context_duplicate_child_registration() {
+        let cx: Cx = Cx::for_testing();
+        let (sender, _receiver) = mpsc::channel::<u64>(32);
+        let actor_id = ActorId::from_task(TaskId::new_for_test(1, 1));
+        let actor_ref = ActorRef {
+            actor_id,
+            sender,
+            state: Arc::new(ActorStateCell::new(ActorState::Running)),
+        };
+
+        let mut ctx = ActorContext::new(&cx, actor_ref, actor_id, None);
+        let child = ActorId::from_task(TaskId::new_for_test(2, 1));
+
+        ctx.register_child(child);
+        ctx.register_child(child); // duplicate
+        assert_eq!(ctx.child_count(), 2, "register_child does not dedup");
+
+        // Unregister removes first occurrence
+        assert!(ctx.unregister_child(child));
+        assert_eq!(ctx.child_count(), 1, "one copy remains");
+        assert!(ctx.unregister_child(child));
+        assert_eq!(ctx.child_count(), 0);
+        assert!(!ctx.unregister_child(child), "nothing left to remove");
+    }
+
+    #[test]
+    fn actor_context_stop_self_is_idempotent() {
+        let cx: Cx = Cx::for_testing();
+        let (sender, _receiver) = mpsc::channel::<u64>(32);
+        let actor_id = ActorId::from_task(TaskId::new_for_test(1, 1));
+        let actor_ref = ActorRef {
+            actor_id,
+            sender,
+            state: Arc::new(ActorStateCell::new(ActorState::Running)),
+        };
+
+        let mut ctx = ActorContext::new(&cx, actor_ref, actor_id, None);
+        ctx.stop_self();
+        assert!(ctx.is_stopping());
+        ctx.stop_self(); // idempotent
+        assert!(ctx.is_stopping());
+    }
+
+    #[test]
+    fn actor_context_self_ref_returns_working_ref() {
+        let cx: Cx = Cx::for_testing();
+        let (sender, _receiver) = mpsc::channel::<u64>(32);
+        let actor_id = ActorId::from_task(TaskId::new_for_test(1, 1));
+        let actor_ref = ActorRef {
+            actor_id,
+            sender,
+            state: Arc::new(ActorStateCell::new(ActorState::Running)),
+        };
+
+        let ctx = ActorContext::new(&cx, actor_ref, actor_id, None);
+        let self_ref = ctx.self_ref();
+        assert_eq!(self_ref.actor_id(), actor_id);
+        assert!(self_ref.is_alive());
+    }
+
+    #[test]
+    fn actor_context_deadline_reflects_budget() {
+        let cx: Cx = Cx::for_testing();
+        let (sender, _receiver) = mpsc::channel::<u64>(32);
+        let actor_id = ActorId::from_task(TaskId::new_for_test(1, 1));
+        let actor_ref = ActorRef {
+            actor_id,
+            sender,
+            state: Arc::new(ActorStateCell::new(ActorState::Running)),
+        };
+
+        let ctx = ActorContext::new(&cx, actor_ref, actor_id, None);
+        // for_testing() Cx has INFINITE budget, which has no deadline
+        assert!(ctx.deadline().is_none());
+    }
+
+    #[test]
+    fn actor_handle_debug() {
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let cx: Cx = Cx::for_testing();
+        let scope = crate::cx::Scope::<FailFast>::new(root, Budget::INFINITE);
+
+        let (handle, stored) = scope
+            .spawn_actor(&mut state, &cx, Counter::new(), 32)
+            .unwrap();
+        state.store_spawned_task(handle.task_id(), stored);
+
+        let dbg = format!("{handle:?}");
+        assert!(dbg.contains("ActorHandle"), "{dbg}");
+    }
+
+    #[test]
+    fn actor_ref_debug() {
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let cx: Cx = Cx::for_testing();
+        let scope = crate::cx::Scope::<FailFast>::new(root, Budget::INFINITE);
+
+        let (handle, stored) = scope
+            .spawn_actor(&mut state, &cx, Counter::new(), 32)
+            .unwrap();
+        state.store_spawned_task(handle.task_id(), stored);
+
+        let actor_ref = handle.sender();
+        let dbg = format!("{actor_ref:?}");
+        assert!(dbg.contains("ActorRef"), "{dbg}");
+    }
+
+    #[test]
+    fn actor_state_cell_debug() {
+        let cell = ActorStateCell::new(ActorState::Running);
+        let dbg = format!("{cell:?}");
+        assert!(dbg.contains("ActorStateCell"), "{dbg}");
     }
 }
