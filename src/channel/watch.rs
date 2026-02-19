@@ -1512,4 +1512,35 @@ mod tests {
         crate::assert_with_log!(count == 0, "count after drop", 0usize, count);
         crate::test_complete!("receiver_drop_decrements_count_atomically");
     }
+
+    #[test]
+    fn watch_send_error_debug_clone_copy_eq() {
+        let e = SendError::Closed(42);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Closed"), "{dbg}");
+        let copied: SendError<i32> = e;
+        let cloned = e.clone();
+        assert_eq!(copied, cloned);
+    }
+
+    #[test]
+    fn watch_recv_error_debug_clone_copy_eq() {
+        let e = RecvError::Closed;
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Closed"), "{dbg}");
+        let copied: RecvError = e;
+        let cloned = e.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(e, RecvError::Cancelled);
+    }
+
+    #[test]
+    fn modify_error_debug_clone_copy_eq() {
+        let e = ModifyError;
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("ModifyError"), "{dbg}");
+        let copied: ModifyError = e;
+        let cloned = e.clone();
+        assert_eq!(copied, cloned);
+    }
 }

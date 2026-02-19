@@ -1601,4 +1601,26 @@ mod tests {
         );
         crate::test_complete!("wake_receiver_notifies_pending_recv_waker");
     }
+
+    #[test]
+    fn mpsc_send_error_debug_clone_copy_eq() {
+        let e = SendError::Disconnected(42);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Disconnected"), "{dbg}");
+        let copied: SendError<i32> = e;
+        let cloned = e.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(e, SendError::Full(42));
+    }
+
+    #[test]
+    fn mpsc_recv_error_debug_clone_copy_eq() {
+        let e = RecvError::Disconnected;
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Disconnected"), "{dbg}");
+        let copied: RecvError = e;
+        let cloned = e.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(e, RecvError::Empty);
+    }
 }

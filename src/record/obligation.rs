@@ -812,4 +812,44 @@ mod tests {
         assert!(dbg.contains("ObligationRecord"));
         assert!(dbg.contains("SendPermit"));
     }
+
+    #[test]
+    fn source_location_debug_clone_copy_eq() {
+        let loc = SourceLocation::unknown();
+        let dbg = format!("{loc:?}");
+        assert!(dbg.contains("SourceLocation"), "{dbg}");
+        let copied: SourceLocation = loc;
+        let cloned = loc.clone();
+        assert_eq!(copied, cloned);
+    }
+
+    #[test]
+    fn obligation_kind_debug_clone_copy_hash_eq() {
+        use std::collections::HashSet;
+        let k = ObligationKind::Lease;
+        let dbg = format!("{k:?}");
+        assert!(dbg.contains("Lease"), "{dbg}");
+        let copied: ObligationKind = k;
+        let cloned = k.clone();
+        assert_eq!(copied, cloned);
+        assert!(k < ObligationKind::IoOp);
+
+        let mut set = HashSet::new();
+        set.insert(ObligationKind::SendPermit);
+        set.insert(ObligationKind::Ack);
+        set.insert(ObligationKind::Lease);
+        set.insert(ObligationKind::IoOp);
+        assert_eq!(set.len(), 4);
+    }
+
+    #[test]
+    fn obligation_abort_reason_debug_clone_copy_eq() {
+        let r = ObligationAbortReason::Cancel;
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("Cancel"), "{dbg}");
+        let copied: ObligationAbortReason = r;
+        let cloned = r.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(r, ObligationAbortReason::Explicit);
+    }
 }

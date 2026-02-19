@@ -966,4 +966,54 @@ mod tests {
         region.replica_lost("r2", Time::from_secs(5)).unwrap();
         region
     }
+
+    #[test]
+    fn distributed_region_state_debug_clone_copy_hash_eq() {
+        use std::collections::HashSet;
+        let s = DistributedRegionState::Active;
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Active"), "{dbg}");
+        let copied: DistributedRegionState = s;
+        let cloned = s.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(s, DistributedRegionState::Closed);
+
+        let mut set = HashSet::new();
+        set.insert(DistributedRegionState::Initializing);
+        set.insert(DistributedRegionState::Active);
+        set.insert(DistributedRegionState::Degraded);
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn consistency_level_debug_clone_copy_eq() {
+        let c = ConsistencyLevel::Quorum;
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("Quorum"), "{dbg}");
+        let copied: ConsistencyLevel = c;
+        let cloned = c.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(c, ConsistencyLevel::All);
+    }
+
+    #[test]
+    fn distributed_region_config_debug_clone_default() {
+        let c = DistributedRegionConfig::default();
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("DistributedRegionConfig"), "{dbg}");
+        assert_eq!(c.min_quorum, 2);
+        let cloned = c.clone();
+        assert_eq!(format!("{cloned:?}"), dbg);
+    }
+
+    #[test]
+    fn replica_status_debug_clone_copy_eq() {
+        let s = ReplicaStatus::Healthy;
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Healthy"), "{dbg}");
+        let copied: ReplicaStatus = s;
+        let cloned = s.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(s, ReplicaStatus::Unavailable);
+    }
 }
