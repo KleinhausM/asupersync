@@ -855,4 +855,102 @@ mod tests {
 
         crate::test_complete!("dropped_broadcast_waiter_does_not_leak_stored_notification");
     }
+
+    // ── Invariant: notify_one baton-pass on waiter drop ────────────────
+
+    /// Invariant: when a `notify_one`-notified waiter is dropped before
+    /// consuming readiness, the notification passes to the next waiting
+    /// task.  This is the baton-pass path in `Notified::drop`.
+    #[test]
+    fn notify_one_baton_pass_to_next_waiter_on_drop() {
+        init_test("notify_one_baton_pass_to_next_waiter_on_drop");
+        let notify = Notify::new();
+
+        // Register two waiters.
+        let mut fut1 = notify.notified();
+        let mut fut2 = notify.notified();
+        assert!(poll_once(&mut fut1).is_pending());
+        assert!(poll_once(&mut fut2).is_pending());
+
+        // notify_one selects fut1.
+        notify.notify_one();
+
+        // Drop fut1 without polling — baton should pass to fut2.
+        drop(fut1);
+
+        // fut2 should now be ready.
+        let ready = poll_once(&mut fut2).is_ready();
+        crate::assert_with_log!(
+            ready,
+            "baton passed to second waiter",
+            true,
+            ready
+        );
+        crate::test_complete!("notify_one_baton_pass_to_next_waiter_on_drop");
+    }
+
+    /// Invariant: when a `notify_one`-notified waiter is dropped and no
+    /// other waiter exists, the notification is re-stored so the next
+    /// `notified().await` completes immediately.
+    #[test]
+    fn notify_one_re_stores_when_no_other_waiter() {
+        init_test("notify_one_re_stores_when_no_other_waiter");
+        let notify = Notify::new();
+
+        // Register a single waiter.
+        let mut fut = notify.notified();
+        assert!(poll_once(&mut fut).is_pending());
+
+        // notify_one marks it.
+        notify.notify_one();
+
+        // Drop without consuming.
+        drop(fut);
+
+        // The notification should be re-stored.
+        let stored = notify.stored_notifications.load(Ordering::Acquire);
+        crate::assert_with_log!(stored == 1, "notification re-stored", 1usize, stored);
+
+        // A new notified() should complete immediately on first poll.
+        let mut fut2 = notify.notified();
+        let ready = poll_once(&mut fut2).is_ready();
+        crate::assert_with_log!(
+            ready,
+            "re-stored notification consumed by next waiter",
+            true,
+            ready
+        );
+        crate::test_complete!("notify_one_re_stores_when_no_other_waiter");
+    }
+
+    /// Invariant: `notify_waiters()` with no waiters must NOT create a
+    /// stored notification token.  It is edge-triggered for currently
+    /// waiting tasks only.
+    #[test]
+    fn notify_waiters_does_not_store_token_when_no_waiters() {
+        init_test("notify_waiters_does_not_store_token_when_no_waiters");
+        let notify = Notify::new();
+
+        // Broadcast with no one listening.
+        notify.notify_waiters();
+
+        let stored = notify.stored_notifications.load(Ordering::Acquire);
+        crate::assert_with_log!(
+            stored == 0,
+            "no stored token from broadcast",
+            0usize,
+            stored
+        );
+
+        // A new waiter should remain pending.
+        let mut fut = notify.notified();
+        let pending = poll_once(&mut fut).is_pending();
+        crate::assert_with_log!(
+            pending,
+            "waiter remains pending after no-op broadcast",
+            true,
+            pending
+        );
+        crate::test_complete!("notify_waiters_does_not_store_token_when_no_waiters");
+    }
 }

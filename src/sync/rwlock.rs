@@ -1506,4 +1506,155 @@ mod tests {
         crate::assert_with_log!(blocked, "try_read blocked by writer waiter", true, blocked);
         crate::test_complete!("test_try_read_blocked_by_writer_waiters");
     }
+
+    // ── Invariant: cancel write waiter unblocks readers ────────────────
+
+    /// Invariant: when the only write waiter is cancelled and dropped,
+    /// `writer_waiters` drops to 0 and blocked readers must be able to
+    /// acquire the lock.  This tests the `WriteFuture::drop` path that
+    /// drains `reader_waiters` when `writer_waiters == 0`.
+    #[test]
+    fn cancel_only_write_waiter_unblocks_readers() {
+        init_test("cancel_only_write_waiter_unblocks_readers");
+        let cx = test_cx();
+        let lock = RwLock::new(42_u32);
+
+        // Hold a read lock so a write waiter must queue.
+        let read_guard = read_blocking(&lock, &cx);
+
+        // Create a write waiter with a cancellable context.
+        let cancel_cx = Cx::new(
+            crate::types::RegionId::from_arena(ArenaIndex::new(0, 10)),
+            crate::types::TaskId::from_arena(ArenaIndex::new(0, 10)),
+            crate::types::Budget::INFINITE,
+        );
+        let mut write_fut = lock.write(&cancel_cx);
+        let pending = poll_once(&mut write_fut).is_none();
+        crate::assert_with_log!(pending, "write waiter pending", true, pending);
+
+        // Now try to read — should be blocked by writer_waiters > 0.
+        let mut read_fut = lock.read(&cx);
+        let read_pending = poll_once(&mut read_fut).is_none();
+        crate::assert_with_log!(read_pending, "reader blocked by writer waiter", true, read_pending);
+
+        // Cancel and drop the write waiter.
+        cancel_cx.set_cancel_requested(true);
+        let cancelled = matches!(poll_once(&mut write_fut), Some(Err(RwLockError::Cancelled)));
+        crate::assert_with_log!(cancelled, "write waiter cancelled", true, cancelled);
+        drop(write_fut);
+
+        // Verify writer_waiters is 0.
+        let state = lock.debug_state();
+        crate::assert_with_log!(
+            state.writer_waiters == 0,
+            "writer_waiters cleared",
+            0usize,
+            state.writer_waiters
+        );
+
+        // The blocked reader should now be able to acquire.
+        let read_result = poll_once(&mut read_fut);
+        let reader_acquired = matches!(read_result, Some(Ok(_)));
+        crate::assert_with_log!(reader_acquired, "reader unblocked after write cancel", true, reader_acquired);
+
+        drop(read_guard);
+        crate::test_complete!("cancel_only_write_waiter_unblocks_readers");
+    }
+
+    /// Invariant: dropping a `WriteFuture` that was polled once (counted=true,
+    /// waiter_id assigned) correctly decrements `writer_waiters` and removes
+    /// from `writer_queue`.  This simulates a `select!` drop.
+    #[test]
+    fn drop_write_future_cleans_writer_waiters_counter() {
+        init_test("drop_write_future_cleans_writer_waiters_counter");
+        let cx = test_cx();
+        let lock = RwLock::new(0_u32);
+
+        // Hold a read lock so writers must queue.
+        let _read = read_blocking(&lock, &cx);
+
+        // Create two write waiters.
+        let mut w1 = lock.write(&cx);
+        let _ = poll_once(&mut w1);
+        let mut w2 = lock.write(&cx);
+        let _ = poll_once(&mut w2);
+
+        let state = lock.debug_state();
+        crate::assert_with_log!(
+            state.writer_waiters == 2,
+            "2 writer waiters",
+            2usize,
+            state.writer_waiters
+        );
+
+        // Drop w1 (simulating select! cancel).
+        drop(w1);
+
+        let state = lock.debug_state();
+        crate::assert_with_log!(
+            state.writer_waiters == 1,
+            "1 writer waiter after drop",
+            1usize,
+            state.writer_waiters
+        );
+        crate::assert_with_log!(
+            state.writer_queue.len() == 1,
+            "1 in writer queue after drop",
+            1usize,
+            state.writer_queue.len()
+        );
+
+        // Drop w2.
+        drop(w2);
+
+        let state = lock.debug_state();
+        crate::assert_with_log!(
+            state.writer_waiters == 0,
+            "0 writer waiters after both dropped",
+            0usize,
+            state.writer_waiters
+        );
+        crate::test_complete!("drop_write_future_cleans_writer_waiters_counter");
+    }
+
+    /// Invariant: poison propagation through read/write/try_read/try_write.
+    /// A panic while holding a write guard poisons the lock; subsequent
+    /// operations must return the appropriate Poisoned error.
+    #[test]
+    fn rwlock_poison_propagation() {
+        init_test("rwlock_poison_propagation");
+        let lock = StdArc::new(RwLock::new(0_u32));
+
+        let l = StdArc::clone(&lock);
+        let handle = thread::spawn(move || {
+            let cx = test_cx();
+            let _guard = write_blocking(&l, &cx);
+            panic!("poison rwlock");
+        });
+        let _ = handle.join();
+
+        let poisoned = lock.is_poisoned();
+        crate::assert_with_log!(poisoned, "rwlock is poisoned", true, poisoned);
+
+        let try_read = lock.try_read();
+        let tr_poisoned = matches!(try_read, Err(TryReadError::Poisoned));
+        crate::assert_with_log!(tr_poisoned, "try_read Poisoned", true, tr_poisoned);
+
+        let try_write = lock.try_write();
+        let tw_poisoned = matches!(try_write, Err(TryWriteError::Poisoned));
+        crate::assert_with_log!(tw_poisoned, "try_write Poisoned", true, tw_poisoned);
+
+        let cx = test_cx();
+        let mut read_fut = lock.read(&cx);
+        let read_result = poll_once(&mut read_fut);
+        let read_poisoned = matches!(read_result, Some(Err(RwLockError::Poisoned)));
+        crate::assert_with_log!(read_poisoned, "read() Poisoned", true, read_poisoned);
+
+        let mut write_fut = lock.write(&cx);
+        let write_result = poll_once(&mut write_fut);
+        let write_poisoned = matches!(write_result, Some(Err(RwLockError::Poisoned)));
+        crate::assert_with_log!(write_poisoned, "write() Poisoned", true, write_poisoned);
+
+        crate::test_complete!("rwlock_poison_propagation");
+    }
 }

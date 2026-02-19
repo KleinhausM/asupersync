@@ -926,4 +926,197 @@ mod tests {
         crate::assert_with_log!(*guard == 0, "default value", 0u32, *guard);
         crate::test_complete!("test_mutex_default");
     }
+
+    // ── Invariant: poison propagation ──────────────────────────────────
+
+    /// Invariant: a panic while holding the guard poisons the mutex.
+    /// Subsequent `try_lock` must return `TryLockError::Poisoned` and
+    /// `lock` must return `LockError::Poisoned`.
+    #[test]
+    fn mutex_poison_propagation_on_panic() {
+        init_test("mutex_poison_propagation_on_panic");
+        let mutex = Arc::new(Mutex::new(42_u32));
+
+        // Spawn a thread that panics while holding the guard.
+        let m = Arc::clone(&mutex);
+        let handle = std::thread::spawn(move || {
+            let cx = test_cx();
+            let _guard = lock_blocking(&m, &cx);
+            panic!("deliberate panic to poison mutex");
+        });
+        let _ = handle.join(); // will be Err because the thread panicked
+
+        // The mutex should be poisoned now.
+        let poisoned = mutex.is_poisoned();
+        crate::assert_with_log!(poisoned, "mutex should be poisoned", true, poisoned);
+
+        // try_lock must return Poisoned.
+        let try_result = mutex.try_lock();
+        let is_poisoned = matches!(try_result, Err(TryLockError::Poisoned));
+        crate::assert_with_log!(is_poisoned, "try_lock returns Poisoned", true, is_poisoned);
+
+        // lock must return Poisoned.
+        let cx = test_cx();
+        let mut fut = mutex.lock(&cx);
+        let lock_result = poll_once(&mut fut);
+        let lock_poisoned = matches!(lock_result, Some(Err(LockError::Poisoned)));
+        crate::assert_with_log!(
+            lock_poisoned,
+            "lock returns Poisoned",
+            true,
+            lock_poisoned
+        );
+        crate::test_complete!("mutex_poison_propagation_on_panic");
+    }
+
+    /// Invariant: `get_mut` panics when mutex is poisoned.
+    #[test]
+    #[should_panic(expected = "mutex is poisoned")]
+    fn mutex_get_mut_panics_when_poisoned() {
+        let mutex = Arc::new(Mutex::new(42_u32));
+
+        let m = Arc::clone(&mutex);
+        let handle = std::thread::spawn(move || {
+            let cx = test_cx();
+            let _guard = lock_blocking(&m, &cx);
+            panic!("poison");
+        });
+        let _ = handle.join();
+
+        // This should panic.
+        let mut mutex = Arc::try_unwrap(mutex).expect("sole owner");
+        let _ = mutex.get_mut();
+    }
+
+    /// Invariant: `into_inner` panics when mutex is poisoned.
+    #[test]
+    #[should_panic(expected = "mutex is poisoned")]
+    fn mutex_into_inner_panics_when_poisoned() {
+        let mutex = Arc::new(Mutex::new(42_u32));
+
+        let m = Arc::clone(&mutex);
+        let handle = std::thread::spawn(move || {
+            let cx = test_cx();
+            let _guard = lock_blocking(&m, &cx);
+            panic!("poison");
+        });
+        let _ = handle.join();
+
+        let mutex = Arc::try_unwrap(mutex).expect("sole owner");
+        let _ = mutex.into_inner();
+    }
+
+    // ── Invariant: cancel-safety waiter cleanup ────────────────────────
+
+    /// Invariant: after a waiter is cancelled and the future is dropped,
+    /// `waiters()` must return 0 — no leaked waiter entries.
+    #[test]
+    fn mutex_cancel_cleans_waiter_on_drop() {
+        init_test("mutex_cancel_cleans_waiter_on_drop");
+        let cx = test_cx();
+        let mutex = Mutex::new(0_u32);
+
+        // Hold the lock.
+        let mut fut_hold = mutex.lock(&cx);
+        let _guard = poll_once(&mut fut_hold).expect("immediate").expect("lock");
+
+        // Create a waiter with a cancellable context.
+        let cancel_cx = Cx::new(
+            RegionId::from_arena(ArenaIndex::new(0, 5)),
+            TaskId::from_arena(ArenaIndex::new(0, 5)),
+            Budget::INFINITE,
+        );
+        let mut fut_wait = mutex.lock(&cancel_cx);
+        let pending = poll_once(&mut fut_wait).is_none();
+        crate::assert_with_log!(pending, "waiter is pending", true, pending);
+
+        let waiters_before = mutex.waiters();
+        crate::assert_with_log!(waiters_before == 1, "1 waiter queued", 1usize, waiters_before);
+
+        // Cancel and poll to get Cancelled.
+        cancel_cx.set_cancel_requested(true);
+        let result = poll_once(&mut fut_wait);
+        let cancelled = matches!(result, Some(Err(LockError::Cancelled)));
+        crate::assert_with_log!(cancelled, "waiter cancelled", true, cancelled);
+
+        // Drop the future — this is where cleanup happens.
+        drop(fut_wait);
+
+        let waiters_after = mutex.waiters();
+        crate::assert_with_log!(
+            waiters_after == 0,
+            "no leaked waiters after cancel+drop",
+            0usize,
+            waiters_after
+        );
+        crate::test_complete!("mutex_cancel_cleans_waiter_on_drop");
+    }
+
+    /// Invariant: poison propagation reaches a queued waiter.
+    /// A waiter already in the queue must see `Poisoned` on its next poll
+    /// after the holder panics.
+    #[test]
+    fn mutex_queued_waiter_sees_poison_after_holder_panics() {
+        init_test("mutex_queued_waiter_sees_poison_after_holder_panics");
+        let mutex = Arc::new(Mutex::new(0_u32));
+
+        // Hold the lock on a thread that will panic.
+        let m = Arc::clone(&mutex);
+        let cx = test_cx();
+        let mut fut_wait = mutex.lock(&cx);
+
+        // First, lock from another thread.
+        let m2 = Arc::clone(&mutex);
+        let handle = std::thread::spawn(move || {
+            let cx = test_cx();
+            let _guard = lock_blocking(&m2, &cx);
+            // Waiter registers here on the main thread.
+            // We panic to poison the mutex.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            panic!("poison while waiter is queued");
+        });
+
+        // Give the thread time to acquire the lock.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Register as a waiter.
+        let pending = poll_once(&mut fut_wait).is_none();
+        crate::assert_with_log!(pending, "waiter is pending", true, pending);
+
+        // Wait for the panicking thread to finish.
+        let _ = handle.join();
+
+        // Now poll the waiter — it should see Poisoned.
+        let result = poll_once(&mut fut_wait);
+        let poisoned = matches!(result, Some(Err(LockError::Poisoned)));
+        crate::assert_with_log!(poisoned, "queued waiter sees poison", true, poisoned);
+
+        crate::test_complete!("mutex_queued_waiter_sees_poison_after_holder_panics");
+    }
+
+    /// Invariant: `OwnedMutexGuard::try_lock` returns `Poisoned` on a
+    /// poisoned mutex.
+    #[test]
+    fn owned_mutex_try_lock_returns_poisoned() {
+        init_test("owned_mutex_try_lock_returns_poisoned");
+        let mutex = Arc::new(Mutex::new(0_u32));
+
+        let m = Arc::clone(&mutex);
+        let handle = std::thread::spawn(move || {
+            let cx = test_cx();
+            let _guard = lock_blocking(&m, &cx);
+            panic!("poison");
+        });
+        let _ = handle.join();
+
+        let result = OwnedMutexGuard::try_lock(Arc::clone(&mutex));
+        let is_poisoned = matches!(result, Err(TryLockError::Poisoned));
+        crate::assert_with_log!(
+            is_poisoned,
+            "OwnedMutexGuard::try_lock Poisoned",
+            true,
+            is_poisoned
+        );
+        crate::test_complete!("owned_mutex_try_lock_returns_poisoned");
+    }
 }

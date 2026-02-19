@@ -424,4 +424,150 @@ mod tests {
     fn barrier_zero_parties_panics() {
         let _ = Barrier::new(0);
     }
+
+    // ── Invariant: drop-without-poll cancel path ───────────────────────
+
+    /// Invariant: dropping a `BarrierWaitFuture` after it has registered
+    /// (polled once → Pending) but without re-polling must decrement
+    /// `arrived`, leaving the barrier in a consistent state for future
+    /// generations.  This is the most common real-world cancel pattern
+    /// (e.g. `select!` drops the losing branch without a final poll).
+    #[test]
+    fn barrier_drop_mid_wait_decrements_arrived() {
+        init_test("barrier_drop_mid_wait_decrements_arrived");
+        let barrier = Arc::new(Barrier::new(3));
+
+        // Arrive as party 1 via a background thread (will block until trip).
+        let b1 = Arc::clone(&barrier);
+        let handle = std::thread::spawn(move || {
+            let cx: Cx = Cx::for_testing();
+            block_on(b1.wait(&cx)).expect("wait failed")
+        });
+
+        // Arrive as party 2 and poll once to register, then drop.
+        {
+            let cx: Cx = Cx::for_testing();
+            let waker = Waker::noop();
+            let mut poll_cx = Context::from_waker(waker);
+            let mut fut = barrier.wait(&cx);
+            let pinned = unsafe { Pin::new_unchecked(&mut fut) };
+            let status = pinned.poll(&mut poll_cx);
+            let pending = status.is_pending();
+            crate::assert_with_log!(pending, "party 2 pending", true, pending);
+            // Drop fut here — BarrierWaitFuture::drop must decrement arrived.
+        }
+
+        // After the drop, arrived should be back to 1 (just party 1's thread).
+        // We verify by: a new party 2 + party 3 should trip the barrier.
+        let b3 = Arc::clone(&barrier);
+        let handle2 = std::thread::spawn(move || {
+            let cx: Cx = Cx::for_testing();
+            block_on(b3.wait(&cx)).expect("wait failed")
+        });
+
+        let cx: Cx = Cx::for_testing();
+        let result = block_on(barrier.wait(&cx)).expect("final wait failed");
+        // Exactly one leader per generation.
+        let handle_result = handle.join().expect("party 1 thread failed");
+        let handle2_result = handle2.join().expect("party 3 thread failed");
+
+        let total_leaders = [result.is_leader(), handle_result.is_leader(), handle2_result.is_leader()]
+            .iter()
+            .filter(|&&b| b)
+            .count();
+        crate::assert_with_log!(total_leaders == 1, "exactly 1 leader", 1usize, total_leaders);
+        crate::test_complete!("barrier_drop_mid_wait_decrements_arrived");
+    }
+
+    /// Invariant: cancelling a waiter that has arrived via poll (not just
+    /// Init-cancelled) must decrement `arrived` and remove its waker,
+    /// leaving the barrier functional for replacement parties.
+    #[test]
+    fn barrier_cancel_after_poll_arrival_cleans_state() {
+        init_test("barrier_cancel_after_poll_arrival_cleans_state");
+        let barrier = Barrier::new(2);
+
+        let cx: Cx = Cx::for_testing();
+        let waker = Waker::noop();
+        let mut poll_cx = Context::from_waker(waker);
+
+        // Poll once to arrive and register as a waiter.
+        let mut fut = barrier.wait(&cx);
+        let pinned = unsafe { Pin::new_unchecked(&mut fut) };
+        let status = pinned.poll(&mut poll_cx);
+        let pending = status.is_pending();
+        crate::assert_with_log!(pending, "arrived and waiting", true, pending);
+
+        // Now cancel.
+        cx.set_cancel_requested(true);
+        let pinned = unsafe { Pin::new_unchecked(&mut fut) };
+        let status = pinned.poll(&mut poll_cx);
+        let cancelled = matches!(status, Poll::Ready(Err(BarrierWaitError::Cancelled)));
+        crate::assert_with_log!(cancelled, "cancelled after arrival", true, cancelled);
+        drop(fut);
+
+        // Barrier should be usable: 2 new parties should trip it.
+        let barrier = Arc::new(barrier);
+        let b2 = Arc::clone(&barrier);
+        let handle = std::thread::spawn(move || {
+            let cx: Cx = Cx::for_testing();
+            block_on(b2.wait(&cx)).expect("replacement wait 1 failed")
+        });
+
+        let cx2: Cx = Cx::for_testing();
+        let result = block_on(barrier.wait(&cx2)).expect("replacement wait 2 failed");
+        let handle_result = handle.join().expect("thread failed");
+
+        let total_leaders = usize::from(result.is_leader()) + usize::from(handle_result.is_leader());
+        crate::assert_with_log!(total_leaders == 1, "exactly 1 leader", 1usize, total_leaders);
+        crate::test_complete!("barrier_cancel_after_poll_arrival_cleans_state");
+    }
+
+    /// Invariant: when one of multiple registered waiters is dropped,
+    /// the remaining waiters can still trip the barrier with a replacement.
+    #[test]
+    fn barrier_drop_one_of_multiple_waiters_allows_trip() {
+        init_test("barrier_drop_one_of_multiple_waiters_allows_trip");
+        let barrier = Arc::new(Barrier::new(3));
+
+        // Party 1: thread that blocks in wait.
+        let b1 = Arc::clone(&barrier);
+        let handle = std::thread::spawn(move || {
+            let cx: Cx = Cx::for_testing();
+            block_on(b1.wait(&cx)).expect("party 1 wait failed")
+        });
+        // Give party 1 time to arrive.
+        std::thread::sleep(Duration::from_millis(30));
+
+        // Party 2: arrives via poll, then is dropped (simulating select! cancel).
+        {
+            let cx: Cx = Cx::for_testing();
+            let waker = Waker::noop();
+            let mut poll_cx = Context::from_waker(waker);
+            let mut fut = barrier.wait(&cx);
+            let pinned = unsafe { Pin::new_unchecked(&mut fut) };
+            let _ = pinned.poll(&mut poll_cx); // arrives -> Pending
+            // drop here
+        }
+
+        // Party 2 replacement + party 3: should trip the barrier.
+        let b2 = Arc::clone(&barrier);
+        let handle2 = std::thread::spawn(move || {
+            let cx: Cx = Cx::for_testing();
+            block_on(b2.wait(&cx)).expect("party 2 replacement failed")
+        });
+
+        let cx: Cx = Cx::for_testing();
+        let result = block_on(barrier.wait(&cx)).expect("party 3 failed");
+
+        let r1 = handle.join().expect("party 1 thread");
+        let r2 = handle2.join().expect("party 2 replacement thread");
+
+        let total_leaders = [result.is_leader(), r1.is_leader(), r2.is_leader()]
+            .iter()
+            .filter(|&&b| b)
+            .count();
+        crate::assert_with_log!(total_leaders == 1, "exactly 1 leader", 1usize, total_leaders);
+        crate::test_complete!("barrier_drop_one_of_multiple_waiters_allows_trip");
+    }
 }
