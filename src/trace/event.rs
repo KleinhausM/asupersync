@@ -2269,4 +2269,47 @@ mod tests {
         // Should contain all 100 entries
         assert!(s.matches("SendPermit").count() == 100);
     }
+
+    // --- wave 78 trait coverage ---
+
+    #[test]
+    fn trace_event_kind_debug_clone_copy_eq_ord_hash() {
+        use std::collections::HashSet;
+        let k = TraceEventKind::Spawn;
+        let k2 = k; // Copy
+        let k3 = k.clone();
+        assert_eq!(k, k2);
+        assert_eq!(k, k3);
+        assert_ne!(k, TraceEventKind::Complete);
+        assert!(k < TraceEventKind::Complete);
+        let dbg = format!("{k:?}");
+        assert!(dbg.contains("Spawn"));
+        let mut set = HashSet::new();
+        set.insert(k);
+        assert!(set.contains(&k2));
+    }
+
+    #[test]
+    fn trace_data_debug_clone_eq() {
+        let d = TraceData::None;
+        let d2 = d.clone();
+        assert_eq!(d, d2);
+        assert_ne!(d, TraceData::Message("hi".into()));
+        let dbg = format!("{d:?}");
+        assert!(dbg.contains("None"));
+    }
+
+    #[test]
+    fn trace_event_debug_clone_eq() {
+        let e = TraceEvent::new(
+            0,
+            Time::from_nanos(100),
+            TraceEventKind::UserTrace,
+            TraceData::Message("hello".into()),
+        );
+        let e2 = e.clone();
+        assert_eq!(e, e2);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("TraceEvent"));
+    }
 }

@@ -851,4 +851,35 @@ mod tests {
         crate::assert_with_log!(empty, "is empty", true, empty);
         crate::test_complete!("guard_drop_notifies_all_closed");
     }
+
+    // --- wave 78 trait coverage ---
+
+    #[test]
+    fn connection_id_debug_clone_copy_eq_ord_hash() {
+        use std::collections::HashSet;
+        let id = ConnectionId(42);
+        let id2 = id; // Copy
+        let id3 = id.clone();
+        assert_eq!(id, id2);
+        assert_eq!(id, id3);
+        assert_ne!(id, ConnectionId(99));
+        assert!(id < ConnectionId(100));
+        let dbg = format!("{id:?}");
+        assert!(dbg.contains("42"));
+        let mut set = HashSet::new();
+        set.insert(id);
+        assert!(set.contains(&id2));
+    }
+
+    #[test]
+    fn connection_info_debug_clone() {
+        let info = ConnectionInfo {
+            addr: test_addr(9090),
+            connected_at: Instant::now(),
+        };
+        let info2 = info.clone();
+        assert_eq!(info.addr, info2.addr);
+        let dbg = format!("{info:?}");
+        assert!(dbg.contains("ConnectionInfo"));
+    }
 }

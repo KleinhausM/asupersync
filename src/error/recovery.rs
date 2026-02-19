@@ -264,4 +264,19 @@ mod tests {
         cb.record_success();
         assert_eq!(cb.state(), CircuitState::Closed);
     }
+
+    // --- wave 78 trait coverage ---
+
+    #[test]
+    fn circuit_state_debug_clone_copy_eq() {
+        let s = CircuitState::Closed;
+        let s2 = s; // Copy
+        let s3 = s.clone();
+        assert_eq!(s, s2);
+        assert_eq!(s, s3);
+        assert_ne!(s, CircuitState::Open);
+        assert_ne!(s, CircuitState::HalfOpen);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Closed"));
+    }
 }

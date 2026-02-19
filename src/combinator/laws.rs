@@ -975,4 +975,53 @@ mod tests {
             other => panic!("expected Failed, got {other:?}"),
         }
     }
+
+    // --- wave 78 trait coverage ---
+
+    #[test]
+    fn law_debug_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let l = Law::SeverityOrder;
+        let l2 = l; // Copy
+        let l3 = l.clone();
+        assert_eq!(l, l2);
+        assert_eq!(l, l3);
+        assert_ne!(l, Law::JoinCommutativity);
+        let dbg = format!("{l:?}");
+        assert!(dbg.contains("SeverityOrder"));
+        let mut set = HashSet::new();
+        set.insert(l);
+        assert!(set.contains(&l2));
+    }
+
+    #[test]
+    fn law_classification_debug_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let c = LawClassification::Unconditional;
+        let c2 = c; // Copy
+        let c3 = c.clone();
+        assert_eq!(c, c2);
+        assert_eq!(c, c3);
+        assert_ne!(c, LawClassification::SeverityLevelOnly);
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("Unconditional"));
+        let mut set = HashSet::new();
+        set.insert(c);
+        assert!(set.contains(&c2));
+    }
+
+    #[test]
+    fn law_entry_debug_clone() {
+        let e = LawEntry {
+            law: Law::SeverityBounded,
+            classification: LawClassification::Unconditional,
+            statement: "test statement",
+        };
+        let e2 = e.clone();
+        assert_eq!(e.law, e2.law);
+        assert_eq!(e.classification, e2.classification);
+        assert_eq!(e.statement, e2.statement);
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("LawEntry"));
+    }
 }
