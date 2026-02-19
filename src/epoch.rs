@@ -2751,4 +2751,247 @@ mod tests {
 
         crate::test_complete!("test_epoch_policy_variants");
     }
+
+    // ========================================================================
+    // Pure data-type trait coverage (wave 24)
+    // ========================================================================
+
+    #[test]
+    fn epoch_id_debug_format() {
+        let id = EpochId::new(42);
+        let dbg = format!("{id:?}");
+        assert!(dbg.contains("42"), "Debug should show value: {dbg}");
+    }
+
+    #[test]
+    fn epoch_id_display_format() {
+        let id = EpochId::new(7);
+        let disp = format!("{id}");
+        assert_eq!(disp, "Epoch(7)");
+    }
+
+    #[test]
+    fn epoch_id_from_conversions() {
+        let id: EpochId = 99u64.into();
+        assert_eq!(id, EpochId::new(99));
+        let raw: u64 = id.into();
+        assert_eq!(raw, 99);
+        assert_eq!(id.as_u64(), 99);
+    }
+
+    #[test]
+    fn epoch_id_hash_consistency() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(EpochId::new(1));
+        set.insert(EpochId::new(2));
+        set.insert(EpochId::new(1)); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn epoch_id_constants() {
+        assert_eq!(EpochId::GENESIS, EpochId::new(0));
+        assert_eq!(EpochId::MAX, EpochId::new(u64::MAX));
+        assert!(EpochId::GENESIS.is_before(EpochId::MAX));
+    }
+
+    #[test]
+    fn epoch_config_debug_clone() {
+        let cfg = EpochConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("EpochConfig"));
+        let cfg2 = cfg.clone();
+        assert_eq!(cfg2.target_duration, cfg.target_duration);
+        assert_eq!(cfg2.retention_epochs, cfg.retention_epochs);
+    }
+
+    #[test]
+    fn epoch_config_short_lived_values() {
+        let cfg = EpochConfig::short_lived();
+        assert_eq!(cfg.target_duration, Time::from_millis(100));
+        assert_eq!(cfg.min_duration, Time::from_millis(50));
+        assert_eq!(cfg.max_duration, Time::from_millis(200));
+        assert_eq!(cfg.retention_epochs, 5);
+        assert!(!cfg.require_quorum);
+    }
+
+    #[test]
+    fn epoch_config_long_lived_values() {
+        let cfg = EpochConfig::long_lived();
+        assert_eq!(cfg.target_duration, Time::from_secs(300));
+        assert_eq!(cfg.min_duration, Time::from_secs(120));
+        assert!(cfg.require_quorum);
+        assert_eq!(cfg.quorum_size, 3);
+    }
+
+    #[test]
+    fn epoch_config_validate_target_exceeds_max() {
+        let cfg = EpochConfig {
+            target_duration: Time::from_secs(200),
+            max_duration: Time::from_secs(100),
+            ..EpochConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn epoch_state_debug_clone_copy() {
+        let s = EpochState::Active;
+        let s2 = s; // Copy
+        let s3 = s; // Copy again
+        assert_eq!(s2, s3);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Active"));
+    }
+
+    #[test]
+    fn epoch_debug_clone() {
+        let cfg = EpochConfig::default();
+        let epoch = Epoch::new(EpochId::new(5), Time::from_secs(10), cfg);
+        let dbg = format!("{epoch:?}");
+        assert!(dbg.contains("Epoch"));
+        let epoch2 = epoch.clone();
+        assert_eq!(epoch2.id, EpochId::new(5));
+        assert_eq!(epoch2.state, EpochState::Active);
+    }
+
+    #[test]
+    fn epoch_genesis_constructor() {
+        let cfg = EpochConfig::default();
+        let epoch = Epoch::genesis(cfg);
+        assert_eq!(epoch.id, EpochId::GENESIS);
+        assert_eq!(epoch.started_at, Time::ZERO);
+        assert_eq!(epoch.state, EpochState::Active);
+        assert_eq!(epoch.operation_count, 0);
+    }
+
+    #[test]
+    fn symbol_validity_window_default_is_infinite() {
+        let w = SymbolValidityWindow::default();
+        assert_eq!(w.start, EpochId::GENESIS);
+        assert_eq!(w.end, EpochId::MAX);
+        assert!(w.contains(EpochId::new(1_000_000)));
+    }
+
+    #[test]
+    fn symbol_validity_window_until_epoch() {
+        let w = SymbolValidityWindow::until_epoch(EpochId::new(10));
+        assert_eq!(w.start, EpochId::GENESIS);
+        assert_eq!(w.end, EpochId::new(10));
+        assert!(w.contains(EpochId::new(0)));
+        assert!(w.contains(EpochId::new(10)));
+        assert!(!w.contains(EpochId::new(11)));
+    }
+
+    #[test]
+    fn symbol_validity_window_span_multi() {
+        let w = SymbolValidityWindow::new(EpochId::new(3), EpochId::new(7));
+        assert_eq!(w.span(), 5); // 3,4,5,6,7
+    }
+
+    #[test]
+    fn barrier_trigger_debug_clone_eq() {
+        let t = BarrierTrigger::AllArrived;
+        let t2 = t.clone();
+        assert_eq!(t, t2);
+        assert!(format!("{t:?}").contains("AllArrived"));
+
+        assert_ne!(BarrierTrigger::Timeout, BarrierTrigger::Cancelled);
+        assert_ne!(BarrierTrigger::Forced, BarrierTrigger::AllArrived);
+    }
+
+    #[test]
+    fn barrier_result_debug_clone_eq() {
+        let r = BarrierResult {
+            trigger: BarrierTrigger::AllArrived,
+            arrived: 3,
+            expected: 3,
+            triggered_at: Time::from_secs(10),
+        };
+        let r2 = r.clone();
+        assert_eq!(r, r2);
+        assert!(format!("{r:?}").contains("BarrierResult"));
+        assert_eq!(r.arrived, 3);
+    }
+
+    #[test]
+    fn epoch_transition_behavior_default() {
+        let b = EpochTransitionBehavior::default();
+        assert_eq!(b, EpochTransitionBehavior::AbortAll);
+        let b2 = b; // Copy
+        assert_eq!(b, b2);
+        assert!(format!("{b:?}").contains("AbortAll"));
+    }
+
+    #[test]
+    fn epoch_error_display_all_variants() {
+        let e1 = EpochError::BudgetExhausted {
+            epoch: EpochId::new(1),
+            budget: 100,
+            used: 100,
+        };
+        let s1 = e1.to_string();
+        assert!(s1.contains("budget"), "BudgetExhausted: {s1}");
+        assert!(s1.contains("100"));
+
+        let e2 = EpochError::Mismatch {
+            expected: EpochId::new(1),
+            actual: EpochId::new(2),
+        };
+        assert!(e2.to_string().contains("mismatch"));
+
+        let e3 = EpochError::ValidityViolation {
+            symbol_epoch: EpochId::new(5),
+            window: SymbolValidityWindow::new(EpochId::new(1), EpochId::new(3)),
+        };
+        assert!(e3.to_string().contains("validity"));
+
+        let e4 = EpochError::BarrierTimeout {
+            epoch: EpochId::new(1),
+            arrived: 2,
+            expected: 5,
+        };
+        let s4 = e4.to_string();
+        assert!(s4.contains("barrier") || s4.contains("timeout"), "{s4}");
+    }
+
+    #[test]
+    fn epoch_error_is_std_error() {
+        let e = EpochError::Expired {
+            epoch: EpochId::new(1),
+        };
+        let err: &dyn std::error::Error = &e;
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn epoch_error_clone_eq() {
+        let e1 = EpochError::Expired {
+            epoch: EpochId::new(3),
+        };
+        let e2 = e1.clone();
+        assert_eq!(e1, e2);
+    }
+
+    #[test]
+    fn epoch_context_debug_clone() {
+        let ctx = EpochContext::new(EpochId::new(1), Time::ZERO, Time::from_secs(10));
+        let dbg = format!("{ctx:?}");
+        assert!(dbg.contains("EpochContext"));
+        let ctx2 = ctx.clone();
+        assert_eq!(ctx2.epoch_id, EpochId::new(1));
+    }
+
+    #[test]
+    fn epoch_policy_debug_clone_default() {
+        let p = EpochPolicy::default();
+        let dbg = format!("{p:?}");
+        assert!(dbg.contains("EpochPolicy"));
+        let p2 = p.clone();
+        assert_eq!(p2.on_transition, EpochTransitionBehavior::AbortAll);
+        assert!(p2.check_on_poll);
+        assert!(p2.propagate_to_children);
+        assert!(p2.grace_period.is_none());
+    }
 }

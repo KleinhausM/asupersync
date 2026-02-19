@@ -1182,4 +1182,227 @@ mod tests {
         assert_eq!(eg.canonical_id(c), a);
         crate::test_complete!("egraph_union_find_canonical_is_min");
     }
+
+    // ========================================================================
+    // Pure data-type trait coverage (wave 24)
+    // ========================================================================
+
+    #[test]
+    fn plan_id_debug_format() {
+        let id = PlanId::new(42);
+        let dbg = format!("{id:?}");
+        assert!(dbg.contains("42"), "Debug should contain index: {dbg}");
+    }
+
+    #[test]
+    fn plan_id_clone_copy_eq() {
+        let a = PlanId::new(7);
+        let b = a; // Copy
+        let c = a; // Copy again
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+        assert_eq!(a.index(), 7);
+    }
+
+    #[test]
+    fn plan_id_ord_hash() {
+        use std::collections::HashSet;
+        let a = PlanId::new(1);
+        let b = PlanId::new(2);
+        assert!(a < b);
+        assert!(b > a);
+        let mut set = HashSet::new();
+        set.insert(a);
+        set.insert(b);
+        set.insert(PlanId::new(1)); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn plan_node_debug_and_eq() {
+        let leaf = PlanNode::Leaf {
+            label: "task_a".into(),
+        };
+        let leaf2 = leaf.clone();
+        assert_eq!(leaf, leaf2);
+        let dbg = format!("{leaf:?}");
+        assert!(dbg.contains("Leaf"), "Debug should contain variant: {dbg}");
+        assert!(dbg.contains("task_a"));
+    }
+
+    #[test]
+    fn plan_node_join_race_timeout_debug() {
+        let join = PlanNode::Join {
+            children: vec![PlanId::new(0), PlanId::new(1)],
+        };
+        assert!(format!("{join:?}").contains("Join"));
+
+        let race = PlanNode::Race {
+            children: vec![PlanId::new(0)],
+        };
+        assert!(format!("{race:?}").contains("Race"));
+
+        let timeout = PlanNode::Timeout {
+            child: PlanId::new(0),
+            duration: Duration::from_millis(500),
+        };
+        assert!(format!("{timeout:?}").contains("Timeout"));
+    }
+
+    #[test]
+    fn plan_error_debug_eq() {
+        let e1 = PlanError::MissingNode {
+            parent: PlanId::new(0),
+            child: PlanId::new(99),
+        };
+        let e2 = e1.clone();
+        assert_eq!(e1, e2);
+        assert!(format!("{e1:?}").contains("MissingNode"));
+
+        let e3 = PlanError::EmptyChildren {
+            parent: PlanId::new(5),
+        };
+        assert!(format!("{e3:?}").contains("EmptyChildren"));
+
+        let e4 = PlanError::Cycle {
+            at: PlanId::new(3),
+        };
+        assert!(format!("{e4:?}").contains("Cycle"));
+    }
+
+    #[test]
+    fn plan_dag_debug_default_clone() {
+        let dag = PlanDag::default();
+        let dbg = format!("{dag:?}");
+        assert!(dbg.contains("PlanDag"));
+        assert_eq!(dag.node_count(), 0);
+        assert!(dag.root().is_none());
+
+        let dag2 = dag.clone();
+        assert_eq!(dag2.node_count(), 0);
+    }
+
+    #[test]
+    fn plan_dag_node_accessors() {
+        let mut dag = PlanDag::new();
+        let a = dag.leaf("alpha");
+        let b = dag.leaf("beta");
+        let join = dag.join(vec![a, b]);
+        dag.set_root(join);
+
+        assert_eq!(dag.node_count(), 3);
+        assert_eq!(dag.root(), Some(join));
+        assert!(matches!(dag.node(a), Some(PlanNode::Leaf { label }) if label == "alpha"));
+        assert!(matches!(dag.node(join), Some(PlanNode::Join { children }) if children.len() == 2));
+
+        // node_mut
+        if let Some(PlanNode::Leaf { label }) = dag.node_mut(b) {
+            assert_eq!(label, "beta");
+        } else {
+            panic!("expected Leaf");
+        }
+
+        // out of bounds
+        assert!(dag.node(PlanId::new(100)).is_none());
+    }
+
+    #[test]
+    fn plan_dag_no_root_validates_ok() {
+        let dag = PlanDag::new();
+        assert!(dag.validate().is_ok());
+    }
+
+    #[test]
+    fn eclass_id_debug_copy_eq_ord_hash() {
+        use std::collections::HashSet;
+        let a = EClassId::new(0);
+        let b = EClassId::new(1);
+        let c = a; // Copy
+        assert_eq!(a, c);
+        assert_ne!(a, b);
+        assert!(a < b);
+        assert!(format!("{a:?}").contains('0'));
+
+        let mut set = HashSet::new();
+        set.insert(a);
+        set.insert(b);
+        set.insert(EClassId::new(0));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn eclass_id_index() {
+        let id = EClassId::new(42);
+        assert_eq!(id.index(), 42);
+    }
+
+    #[test]
+    fn enode_leaf_debug_eq_hash() {
+        use std::collections::HashSet;
+        let n1 = ENode::Leaf {
+            label: "x".into(),
+        };
+        let n2 = n1.clone();
+        assert_eq!(n1, n2);
+        assert!(format!("{n1:?}").contains("Leaf"));
+
+        let mut set = HashSet::new();
+        set.insert(n1);
+        set.insert(n2); // same, dedup
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn enode_variants_debug() {
+        let join = ENode::Join {
+            children: vec![EClassId::new(0)],
+        };
+        assert!(format!("{join:?}").contains("Join"));
+
+        let race = ENode::Race {
+            children: vec![EClassId::new(1), EClassId::new(2)],
+        };
+        assert!(format!("{race:?}").contains("Race"));
+
+        let timeout = ENode::Timeout {
+            child: EClassId::new(0),
+            duration: Duration::from_secs(1),
+        };
+        assert!(format!("{timeout:?}").contains("Timeout"));
+    }
+
+    #[test]
+    fn eclass_id_accessor() {
+        let mut eg = EGraph::new();
+        let a = eg.add_leaf("alpha");
+        let cls = eg.class(a).expect("class exists");
+        assert_eq!(cls.id(), a);
+    }
+
+    #[test]
+    fn egraph_debug_default() {
+        let eg = EGraph::new();
+        let dbg = format!("{eg:?}");
+        assert!(dbg.contains("EGraph"));
+    }
+
+    #[test]
+    fn egraph_class_nodes_cloned() {
+        let mut eg = EGraph::new();
+        let a = eg.add_leaf("single");
+        let nodes = eg.class_nodes_cloned(a).expect("class exists");
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(&nodes[0], ENode::Leaf { label } if label == "single"));
+    }
+
+    #[test]
+    fn egraph_add_timeout() {
+        let mut eg = EGraph::new();
+        let a = eg.add_leaf("child");
+        let t = eg.add_timeout(a, Duration::from_millis(250));
+        let nodes = eg.class_nodes_cloned(t).expect("class exists");
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(&nodes[0], ENode::Timeout { child, duration }
+            if *child == a && *duration == Duration::from_millis(250)));
+    }
 }
