@@ -545,4 +545,37 @@ mod tests {
         assert_eq!(percent_decode("%"), "%");
         assert_eq!(percent_decode("%A"), "%A");
     }
+
+    #[test]
+    fn request_debug_clone() {
+        let r = Request::new("GET", "/api/v1");
+        let dbg = format!("{:?}", r);
+        assert!(dbg.contains("Request"));
+        assert!(dbg.contains("GET"));
+
+        let r2 = r.clone();
+        assert_eq!(r2.method, "GET");
+        assert_eq!(r2.path, "/api/v1");
+    }
+
+    #[test]
+    fn extensions_debug_clone_default() {
+        let e = Extensions::default();
+        let dbg = format!("{:?}", e);
+        assert!(dbg.contains("Extensions"));
+
+        let e2 = e.clone();
+        assert!(e2.get("missing").is_none());
+    }
+
+    #[test]
+    fn extraction_error_debug_clone() {
+        let e = ExtractionError::bad_request("missing field");
+        let dbg = format!("{:?}", e);
+        assert!(dbg.contains("ExtractionError"));
+        assert!(dbg.contains("missing field"));
+
+        let e2 = e.clone();
+        assert_eq!(e2.message, "missing field");
+    }
 }

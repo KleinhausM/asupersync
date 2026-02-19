@@ -774,4 +774,26 @@ mod tests {
         );
         crate::test_complete!("token_default");
     }
+
+    #[test]
+    fn slab_token_debug_clone_copy_hash() {
+        let t = SlabToken::from_usize(42);
+        let dbg = format!("{:?}", t);
+        assert!(dbg.contains("SlabToken"));
+
+        let t2 = t.clone();
+        assert_eq!(t, t2);
+
+        // Copy
+        let t3 = t;
+        assert_eq!(t, t3);
+
+        // Hash
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(t);
+        set.insert(SlabToken::from_usize(99));
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&t));
+    }
 }

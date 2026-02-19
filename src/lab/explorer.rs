@@ -1610,4 +1610,49 @@ mod tests {
         assert_eq!(report.runs.len(), report.total_runs);
         assert!(!report.runs.is_empty());
     }
+
+    #[test]
+    fn exploration_mode_debug_clone_copy_default_eq() {
+        let m = ExplorationMode::default();
+        assert_eq!(m, ExplorationMode::Baseline);
+
+        let dbg = format!("{:?}", m);
+        assert!(dbg.contains("Baseline"));
+
+        let m2 = m.clone();
+        assert_eq!(m, m2);
+
+        let m3 = m;
+        assert_eq!(m, m3);
+
+        assert_ne!(ExplorationMode::Baseline, ExplorationMode::TopologyPrioritized);
+    }
+
+    #[test]
+    fn explorer_config_debug_clone_default() {
+        let c = ExplorerConfig::default();
+        let dbg = format!("{:?}", c);
+        assert!(dbg.contains("ExplorerConfig"));
+
+        let c2 = c.clone();
+        assert_eq!(c2.base_seed, 0);
+        assert_eq!(c2.max_runs, 100);
+        assert!(c2.record_traces);
+    }
+
+    #[test]
+    fn saturation_metrics_debug_clone() {
+        let s = SaturationMetrics {
+            window: 10,
+            saturated: false,
+            existing_class_hits: 5,
+            runs_since_last_new_class: Some(3),
+        };
+        let dbg = format!("{:?}", s);
+        assert!(dbg.contains("SaturationMetrics"));
+
+        let s2 = s.clone();
+        assert_eq!(s2.window, 10);
+        assert!(!s2.saturated);
+    }
 }
