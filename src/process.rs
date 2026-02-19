@@ -1467,8 +1467,10 @@ mod tests {
         if let Err(e) = err {
             let disp = format!("{e}");
             let dbg_str = format!("{e:?}");
-            crate::assert_with_log!(!disp.is_empty(), "display non-empty", true, !disp.is_empty());
-            crate::assert_with_log!(!dbg_str.is_empty(), "debug non-empty", true, !dbg_str.is_empty());
+            let disp_empty = disp.is_empty();
+            crate::assert_with_log!(!disp_empty, "display non-empty", true, !disp_empty);
+            let dbg_empty = dbg_str.is_empty();
+            crate::assert_with_log!(!dbg_empty, "debug non-empty", true, !dbg_empty);
         }
         crate::test_complete!("test_process_error_display");
     }
