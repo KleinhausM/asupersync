@@ -122,4 +122,20 @@ mod tests {
         // Should not hang or produce all zeros
         assert_ne!(rng.next_u64(), 0);
     }
+
+    // =========================================================================
+    // Wave 57 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn det_rng_debug_clone() {
+        let mut rng = DetRng::new(42);
+        let dbg = format!("{rng:?}");
+        assert!(dbg.contains("DetRng"), "{dbg}");
+
+        // Clone preserves sequence position
+        let _ = rng.next_u64(); // advance once
+        let mut forked = rng.clone();
+        assert_eq!(rng.next_u64(), forked.next_u64());
+    }
 }

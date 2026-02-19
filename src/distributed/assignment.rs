@@ -480,4 +480,33 @@ mod tests {
             assert!(a.can_decode);
         }
     }
+
+    // =========================================================================
+    // Wave 57 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn assignment_strategy_debug_clone_copy_eq() {
+        let s = AssignmentStrategy::Striped;
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Striped"), "{dbg}");
+        let copied = s;
+        let cloned = s.clone();
+        assert_eq!(copied, cloned);
+        assert_ne!(s, AssignmentStrategy::Full);
+    }
+
+    #[test]
+    fn replica_assignment_debug_clone() {
+        let ra = ReplicaAssignment {
+            replica_id: "r0".to_string(),
+            symbol_indices: vec![0, 1, 2],
+            can_decode: true,
+        };
+        let dbg = format!("{ra:?}");
+        assert!(dbg.contains("ReplicaAssignment"), "{dbg}");
+        let cloned = ra.clone();
+        assert_eq!(cloned.replica_id, "r0");
+        assert_eq!(cloned.symbol_indices, [0, 1, 2]);
+    }
 }

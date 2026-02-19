@@ -300,4 +300,25 @@ mod tests {
         crate::assert_with_log!(recv_buf.len() == 128, "recv buf len", 128, recv_buf.len());
         crate::test_complete!("test_prepare_for_recv_exposes_full_buffer_len");
     }
+
+    // =========================================================================
+    // Wave 57 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn socket_ancillary_debug_default() {
+        let anc = SocketAncillary::default();
+        let dbg = format!("{anc:?}");
+        assert!(dbg.contains("SocketAncillary"), "{dbg}");
+        assert_eq!(anc.capacity(), 0);
+        assert!(anc.is_empty());
+    }
+
+    #[test]
+    fn ancillary_messages_debug() {
+        let anc = SocketAncillary::new(0);
+        let msgs = anc.messages();
+        let dbg = format!("{msgs:?}");
+        assert!(dbg.contains("AncillaryMessages"), "{dbg}");
+    }
 }

@@ -312,5 +312,29 @@ mod tests {
         assert_eq!(h1.finish(), h2.finish());
     }
 
-    // Unit structs are trivially clone/default; no runtime test needed.
+    // =========================================================================
+    // Wave 57 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn det_hasher_debug_clone() {
+        let mut h = DetHasher::default();
+        h.write(b"partial");
+        let dbg = format!("{h:?}");
+        assert!(dbg.contains("DetHasher"), "{dbg}");
+        let h2 = h.clone();
+        assert_eq!(h.finish(), h2.finish());
+    }
+
+    #[test]
+    fn det_build_hasher_clone_default() {
+        let b1 = DetBuildHasher;
+        let b2 = b1.clone();
+        let b3 = DetBuildHasher::default();
+        let mut x = b2.build_hasher();
+        let mut y = b3.build_hasher();
+        x.write(b"same");
+        y.write(b"same");
+        assert_eq!(x.finish(), y.finish());
+    }
 }
