@@ -1195,4 +1195,22 @@ mod tests {
         let foata = canonicalize(&events);
         assert_eq!(foata.depth(), 2);
     }
+
+    // --- wave 77 trait coverage ---
+
+    #[test]
+    fn trace_event_key_debug_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let k = TraceEventKey::new(1, 2, 3, 4);
+        let k2 = k; // Copy
+        let k3 = k.clone();
+        assert_eq!(k, k2);
+        assert_eq!(k, k3);
+        assert_ne!(k, TraceEventKey::new(1, 2, 3, 5));
+        let dbg = format!("{k:?}");
+        assert!(dbg.contains("TraceEventKey"));
+        let mut set = HashSet::new();
+        set.insert(k);
+        assert!(set.contains(&k2));
+    }
 }

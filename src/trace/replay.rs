@@ -1233,4 +1233,63 @@ mod tests {
             _ => panic!("Expected Checkpoint"),
         }
     }
+
+    // --- wave 77 trait coverage ---
+
+    #[test]
+    fn trace_metadata_debug_clone_eq() {
+        let m = TraceMetadata {
+            version: REPLAY_SCHEMA_VERSION,
+            seed: 42,
+            recorded_at: 0,
+            config_hash: 0xABC,
+            description: Some("test".into()),
+        };
+        let m2 = m.clone();
+        assert_eq!(m, m2);
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("TraceMetadata"));
+    }
+
+    #[test]
+    fn compact_task_id_debug_clone_copy_eq() {
+        let id = CompactTaskId(42);
+        let id2 = id; // Copy
+        let id3 = id.clone();
+        assert_eq!(id, id2);
+        assert_eq!(id, id3);
+        assert_ne!(id, CompactTaskId(99));
+        let dbg = format!("{id:?}");
+        assert!(dbg.contains("42"));
+    }
+
+    #[test]
+    fn compact_region_id_debug_clone_copy_eq() {
+        let id = CompactRegionId(7);
+        let id2 = id; // Copy
+        let id3 = id.clone();
+        assert_eq!(id, id2);
+        assert_eq!(id, id3);
+        assert_ne!(id, CompactRegionId(99));
+        let dbg = format!("{id:?}");
+        assert!(dbg.contains('7'));
+    }
+
+    #[test]
+    fn replay_event_debug_clone_eq() {
+        let e = ReplayEvent::TaskScheduled {
+            task: CompactTaskId(1),
+            at_tick: 100,
+        };
+        let e2 = e.clone();
+        assert_eq!(e, e2);
+        assert_ne!(
+            e,
+            ReplayEvent::TaskYielded {
+                task: CompactTaskId(1),
+            }
+        );
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("TaskScheduled"));
+    }
 }

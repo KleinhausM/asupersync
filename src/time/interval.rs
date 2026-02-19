@@ -1127,4 +1127,24 @@ mod tests {
         );
         crate::test_complete!("clone_creates_independent_copy");
     }
+
+    // --- wave 77 trait coverage ---
+
+    #[test]
+    fn missed_tick_behavior_debug_clone_copy_eq_hash_default() {
+        use std::collections::HashSet;
+        let b = MissedTickBehavior::default();
+        assert_eq!(b, MissedTickBehavior::Burst);
+        let b2 = b; // Copy
+        let b3 = b.clone();
+        assert_eq!(b, b2);
+        assert_eq!(b, b3);
+        assert_ne!(b, MissedTickBehavior::Delay);
+        assert_ne!(b, MissedTickBehavior::Skip);
+        let dbg = format!("{b:?}");
+        assert!(dbg.contains("Burst"));
+        let mut set = HashSet::new();
+        set.insert(b);
+        assert!(set.contains(&b2));
+    }
 }

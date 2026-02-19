@@ -434,4 +434,29 @@ mod tests {
                 .any(|setting| matches!(setting, Setting::EnablePush(_)))
         );
     }
+
+    // --- wave 77 trait coverage ---
+
+    #[test]
+    fn settings_debug_clone_eq_default() {
+        let s = Settings::default();
+        let s2 = s.clone();
+        assert_eq!(s, s2);
+        let modified = Settings {
+            max_frame_size: 32768,
+            ..Settings::default()
+        };
+        assert_ne!(s, modified);
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("Settings"));
+    }
+
+    #[test]
+    fn settings_builder_debug_clone() {
+        let b = SettingsBuilder::new();
+        let b2 = b.clone();
+        let dbg = format!("{b:?}");
+        assert!(dbg.contains("SettingsBuilder"));
+        assert_eq!(b.build(), b2.build());
+    }
 }
