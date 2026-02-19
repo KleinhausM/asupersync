@@ -1635,4 +1635,81 @@ mod tests {
         assert_eq!(report.tests_run, 2);
         assert!(report.all_passed());
     }
+
+    // ── derive-trait coverage (wave 73) ──────────────────────────────────
+
+    #[test]
+    fn await_point_debug_clone_eq_hash() {
+        use std::collections::HashSet;
+
+        let p1 = AwaitPoint::anonymous(5);
+        let p2 = p1.clone();
+        assert_eq!(p1, p2);
+
+        let p3 = AwaitPoint::anonymous(6);
+        assert_ne!(p1, p3);
+
+        let mut set = HashSet::new();
+        set.insert(p1.clone());
+        set.insert(p2);
+        assert_eq!(set.len(), 1);
+        set.insert(p3);
+        assert_eq!(set.len(), 2);
+
+        let dbg = format!("{:?}", p1);
+        assert!(dbg.contains("AwaitPoint"));
+    }
+
+    #[test]
+    fn injection_mode_debug_clone_copy_eq_default() {
+        let m = InjectionMode::default();
+        assert_eq!(m, InjectionMode::Recording);
+
+        let m2 = m; // Copy
+        let m3 = m.clone();
+        assert_eq!(m2, m3);
+
+        let inj = InjectionMode::Injecting { target: 42 };
+        let inj2 = inj; // Copy
+        assert_eq!(inj, inj2);
+        assert_ne!(m, inj);
+
+        let dbg = format!("{inj:?}");
+        assert!(dbg.contains("Injecting"));
+    }
+
+    #[test]
+    fn injection_outcome_debug_clone_eq() {
+        let o1 = InjectionOutcome::Success;
+        let o2 = o1.clone();
+        assert_eq!(o1, o2);
+
+        let o3 = InjectionOutcome::Timeout;
+        assert_ne!(o1, o3);
+
+        let o4 = InjectionOutcome::Panic("boom".to_string());
+        let o5 = o4.clone();
+        assert_eq!(o4, o5);
+
+        let dbg = format!("{o4:?}");
+        assert!(dbg.contains("Panic"));
+        assert!(dbg.contains("boom"));
+    }
+
+    #[test]
+    fn instrumented_poll_result_debug_clone_copy_eq() {
+        let r1: InstrumentedPollResult<i32> = InstrumentedPollResult::Inner(42);
+        let r2 = r1; // Copy
+        let r3 = r1.clone();
+        assert_eq!(r1, r2);
+        assert_eq!(r2, r3);
+
+        let r4: InstrumentedPollResult<i32> = InstrumentedPollResult::CancellationInjected(5);
+        assert_ne!(r1, r4);
+        let r5 = r4; // Copy
+        assert_eq!(r4, r5);
+
+        let dbg = format!("{r1:?}");
+        assert!(dbg.contains("Inner"));
+    }
 }

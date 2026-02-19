@@ -940,4 +940,68 @@ mod tests {
         assert!(msg.contains("divergence"));
         crate::test_complete!("error_display_divergence");
     }
+
+    // ── derive-trait coverage (wave 73) ──────────────────────────────────
+
+    #[test]
+    fn trace_certificate_snapshot_debug_clone_copy_eq() {
+        let cert = TraceCertificateSnapshot {
+            event_hash: 111,
+            schedule_hash: 222,
+            steps: 333,
+            trace_fingerprint: 444,
+        };
+        let cert2 = cert; // Copy
+        let cert3 = cert.clone();
+        assert_eq!(cert, cert2);
+        assert_eq!(cert2, cert3);
+        let dbg = format!("{cert:?}");
+        assert!(dbg.contains("TraceCertificateSnapshot"));
+        assert!(dbg.contains("111"));
+    }
+
+    #[test]
+    fn exploration_run_summary_debug_clone() {
+        let s = ExplorationRunSummary {
+            seed: 42,
+            passed: true,
+            steps: 100,
+            fingerprint: 999,
+            failures: vec![],
+        };
+        let s2 = s.clone();
+        assert_eq!(s2.seed, 42);
+        assert!(s2.passed);
+        assert_eq!(s2.steps, 100);
+        assert_eq!(s2.fingerprint, 999);
+        assert!(s2.failures.is_empty());
+        let dbg = format!("{s2:?}");
+        assert!(dbg.contains("ExplorationRunSummary"));
+    }
+
+    #[test]
+    fn scenario_exploration_result_debug_clone() {
+        let r = ScenarioExplorationResult {
+            scenario_id: "test-explore".to_string(),
+            seeds_explored: 10,
+            passed: 8,
+            failed: 2,
+            unique_fingerprints: 3,
+            runs: vec![ExplorationRunSummary {
+                seed: 0,
+                passed: true,
+                steps: 50,
+                fingerprint: 1,
+                failures: vec![],
+            }],
+            first_failure_seed: Some(5),
+        };
+        let r2 = r.clone();
+        assert_eq!(r2.scenario_id, "test-explore");
+        assert_eq!(r2.seeds_explored, 10);
+        assert_eq!(r2.first_failure_seed, Some(5));
+        assert_eq!(r2.runs.len(), 1);
+        let dbg = format!("{r2:?}");
+        assert!(dbg.contains("ScenarioExplorationResult"));
+    }
 }

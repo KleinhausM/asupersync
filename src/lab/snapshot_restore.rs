@@ -912,4 +912,55 @@ mod tests {
         );
         crate::test_complete!("resolved_obligation_stats_computed");
     }
+
+    // ── derive-trait coverage (wave 73) ──────────────────────────────────
+
+    #[test]
+    fn restore_error_debug_clone_eq() {
+        let e1 = RestoreError::OrphanTask {
+            task_id: 5,
+            region_id: 99,
+        };
+        let e2 = e1.clone();
+        assert_eq!(e1, e2);
+        let dbg = format!("{e1:?}");
+        assert!(dbg.contains("OrphanTask"));
+
+        let e3 = RestoreError::CyclicRegionTree {
+            cycle: vec![1, 2, 3],
+        };
+        let e4 = e3.clone();
+        assert_eq!(e3, e4);
+        assert_ne!(e1, e3);
+    }
+
+    #[test]
+    fn snapshot_stats_debug_clone_default() {
+        let s = SnapshotStats::default();
+        assert_eq!(s.region_count, 0);
+        assert_eq!(s.task_count, 0);
+        assert_eq!(s.obligation_count, 0);
+        assert_eq!(s.max_depth, 0);
+        assert_eq!(s.terminal_task_count, 0);
+        assert_eq!(s.resolved_obligation_count, 0);
+        assert_eq!(s.closed_region_count, 0);
+
+        let s2 = s.clone();
+        let dbg = format!("{s2:?}");
+        assert!(dbg.contains("SnapshotStats"));
+    }
+
+    #[test]
+    fn validation_result_debug_clone() {
+        let vr = ValidationResult {
+            is_valid: true,
+            errors: vec![],
+            stats: SnapshotStats::default(),
+        };
+        let vr2 = vr.clone();
+        assert!(vr2.is_valid);
+        assert!(vr2.errors.is_empty());
+        let dbg = format!("{vr2:?}");
+        assert!(dbg.contains("ValidationResult"));
+    }
 }

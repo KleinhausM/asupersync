@@ -303,4 +303,54 @@ mod tests {
         }
         assert_eq!(mono.len(), 7);
     }
+
+    // ── derive-trait coverage (wave 73) ──────────────────────────────────
+
+    #[test]
+    fn monotonicity_debug_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+
+        let m = Monotonicity::Monotone;
+        let m2 = m; // Copy
+        let m3 = m.clone();
+        assert_eq!(m, m2);
+        assert_eq!(m2, m3);
+
+        let nm = Monotonicity::NonMonotone;
+        assert_ne!(m, nm);
+
+        let mut set = HashSet::new();
+        set.insert(m);
+        set.insert(m2);
+        assert_eq!(set.len(), 1);
+        set.insert(nm);
+        assert_eq!(set.len(), 2);
+
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("Monotone"));
+    }
+
+    #[test]
+    fn calm_classification_debug_clone_eq() {
+        let c1 = CalmClassification {
+            operation: "TestOp",
+            protocol: "TestProto",
+            monotonicity: Monotonicity::Monotone,
+            justification: "test justification",
+        };
+        let c2 = c1.clone();
+        assert_eq!(c1, c2);
+
+        let c3 = CalmClassification {
+            operation: "OtherOp",
+            protocol: "TestProto",
+            monotonicity: Monotonicity::NonMonotone,
+            justification: "other justification",
+        };
+        assert_ne!(c1, c3);
+
+        let dbg = format!("{c1:?}");
+        assert!(dbg.contains("CalmClassification"));
+        assert!(dbg.contains("TestOp"));
+    }
 }
