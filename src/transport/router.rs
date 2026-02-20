@@ -327,17 +327,17 @@ impl LoadBalancer {
                 if available.is_empty() {
                     return None;
                 }
-                let total_weight: u32 = available.iter().map(|e| e.weight).sum();
+                let total_weight: u64 = available.iter().map(|e| u64::from(e.weight)).sum();
                 if total_weight == 0 {
                     return available.first().copied();
                 }
 
                 let counter = self.rr_counter.fetch_add(1, Ordering::Relaxed);
-                let target = (counter % u64::from(total_weight)) as u32;
+                let target = counter % total_weight;
 
-                let mut cumulative = 0u32;
+                let mut cumulative = 0u64;
                 for endpoint in &available {
-                    cumulative += endpoint.weight;
+                    cumulative += u64::from(endpoint.weight);
                     if target < cumulative {
                         return Some(endpoint);
                     }
@@ -471,7 +471,7 @@ impl LoadBalancer {
                 candidates.sort_by_key(|e| e.connection_count());
                 candidates.truncate(n);
                 candidates
-            }
+            },
 
             // For others, fallback to first-available logic or simple selection
             _ => available.into_iter().take(n).collect(),
