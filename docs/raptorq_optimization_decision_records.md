@@ -91,7 +91,7 @@ Current artifact summary (`coverage_summary` in JSON):
 
 Closure blockers for `asupersync-3ltrv` remain:
 
-1. Finalize offline profile-pack comparator evidence for `E5` (`asupersync-36m6p`) with p95/p99 links.
+1. Finalize offline profile-pack comparator evidence for `E5` (`asupersync-36m6p`) with p95/p99 links; current blocker is pre-existing `src/raptorq/decoder.rs` compile debt (`gf256_addmul_slice` argument mismatch near ~2222/~2479).
 2. Promote `F7` from proposed to approved_guarded only after burst comparator evidence + rollback rehearsal outcomes are recorded.
 3. Keep `F8` as proposed/template until implementation exists, then attach overlap-vs-sequential evidence and rollback outcomes.
 
@@ -100,3 +100,11 @@ Recent evidence alignment updates (2026-02-19):
 - `F6` (`asupersync-j96j4`) moved from template/proposed to approved_guarded in the decision artifact based on closed-bead implementation evidence.
 - `E5` card now points to active offline profile-pack bead (`asupersync-36m6p`) and uses deterministic profile-pack replay commands.
 - Stale non-existent command flags (`--mode`, `--policy`, `--cache`, `--pipeline`) were replaced with valid deterministic `rch exec -- ...` commands.
+
+Recent evidence alignment updates (2026-02-20):
+
+- Added partial `E5` measured-comparator evidence anchors from latest Track-E execution (`agent-mail asupersync-3ltrv #1383`), including artifact path `artifacts/raptorq_track_e_gf256_bench_v1.json`.
+- Added deterministic bench repro commands for E5 comparator capture:
+  - `rch exec -- cargo bench --bench raptorq_benchmark -- gf256_primitives`
+  - `rch exec -- cargo bench --bench raptorq_benchmark -- gf256_dual_policy`
+- Recorded current closure blocker for final E5 comparator corpus: pre-existing `src/raptorq/decoder.rs` compile mismatch around `gf256_addmul_slice` usage.
