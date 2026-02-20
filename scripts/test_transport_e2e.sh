@@ -12,14 +12,6 @@
 #   RUST_LOG       - tracing filter (default: asupersync=debug)
 #   RUST_BACKTRACE - 1 to enable backtraces (default: 1)
 #   TEST_SEED      - deterministic seed override (default: 0xDEADBEEF)
-#
-# Pass/Fail Semantics:
-#   PASS when cargo test exits 0 and no failure patterns are detected.
-#   FAIL when cargo test is non-zero or any failure pattern is detected.
-#
-# Artifact Bundle:
-#   summary.json + suite log + extracted seeds/traces/endpoints under
-#   target/e2e-results/transport/artifacts_<timestamp>/.
 
 set -euo pipefail
 
@@ -123,10 +115,6 @@ SUITE_STATUS="failed"
 if [ "$TEST_RESULT" -eq 0 ] && [ "$PATTERN_FAILURES" -eq 0 ]; then
     SUITE_STATUS="passed"
 fi
-FAILURE_CLASS="test_or_pattern_failure"
-if [ "$SUITE_STATUS" = "passed" ]; then
-    FAILURE_CLASS="none"
-fi
 
 cat > "${SUMMARY_FILE}" << ENDJSON
 {
@@ -137,7 +125,6 @@ cat > "${SUMMARY_FILE}" << ENDJSON
   "started_ts": "${RUN_STARTED_TS}",
   "ended_ts": "${RUN_ENDED_TS}",
   "status": "${SUITE_STATUS}",
-  "failure_class": "${FAILURE_CLASS}",
   "repro_command": "${REPRO_COMMAND}",
   "artifact_path": "${SUMMARY_FILE}",
   "suite": "${SUITE_ID}",

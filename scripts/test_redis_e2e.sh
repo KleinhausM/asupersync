@@ -158,16 +158,11 @@ FAILED=$(grep -c "^test .* FAILED$" "$LOG_FILE" 2>/dev/null || echo "0")
 SUITE_ID="redis_e2e"
 SCENARIO_ID="E2E-SUITE-REDIS"
 SUMMARY_FILE="${ARTIFACT_DIR}/summary.json"
-MANIFEST_FILE="${ARTIFACT_DIR}/artifact_manifest.json"
-REPRO_COMMAND="REDIS_IMAGE=${REDIS_IMAGE} REDIS_PORT=${REDIS_PORT} TEST_LOG_LEVEL=${TEST_LOG_LEVEL} RUST_LOG=${RUST_LOG} TEST_SEED=${TEST_SEED} bash ${SCRIPT_DIR}/$(basename "$0")"
+REPRO_COMMAND="TEST_LOG_LEVEL=${TEST_LOG_LEVEL} RUST_LOG=${RUST_LOG} TEST_SEED=${TEST_SEED} bash ${SCRIPT_DIR}/$(basename "$0")"
 RUN_ENDED_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SUITE_STATUS="failed"
-if [ "$TEST_RESULT" -eq 0 ] && [ "$PATTERN_FAILURES" -eq 0 ]; then
-    SUITE_STATUS="passed"
-fi
-FAILURE_CLASS="test_or_pattern_failure"
-if [ "$SUITE_STATUS" = "passed" ]; then
-    FAILURE_CLASS="none"
+if [[ "$TEST_RESULT" -eq 0 && "$PATTERN_FAILURES" -eq 0 ]]; then
+  SUITE_STATUS="passed"
 fi
 
 cat > "${SUMMARY_FILE}" << ENDJSON
@@ -179,7 +174,6 @@ cat > "${SUMMARY_FILE}" << ENDJSON
   "started_ts": "${RUN_STARTED_TS}",
   "ended_ts": "${RUN_ENDED_TS}",
   "status": "${SUITE_STATUS}",
-  "failure_class": "${FAILURE_CLASS}",
   "repro_command": "${REPRO_COMMAND}",
   "artifact_path": "${SUMMARY_FILE}",
   "suite": "${SUITE_ID}",
@@ -201,22 +195,7 @@ grep -oE "trace_fingerprint[= ]+[a-f0-9]+" "$LOG_FILE" > "${ARTIFACT_DIR}/traces
 
 echo "127.0.0.1:${REDIS_PORT}" > "${ARTIFACT_DIR}/endpoints.txt"
 
-cat > "${MANIFEST_FILE}" << ENDJSON
-{
-  "schema_version": "e2e-suite-artifact-manifest-v1",
-  "suite_id": "${SUITE_ID}",
-  "scenario_id": "${SCENARIO_ID}",
-  "summary_file": "${SUMMARY_FILE}",
-  "suite_log": "${LOG_FILE}",
-  "artifact_dir": "${ARTIFACT_DIR}",
-  "seed_file": "${ARTIFACT_DIR}/seeds.txt",
-  "trace_file": "${ARTIFACT_DIR}/traces.txt",
-  "endpoints_file": "${ARTIFACT_DIR}/endpoints.txt"
-}
-ENDJSON
-
 echo "  Summary: ${SUMMARY_FILE}"
-echo "  Manifest: ${MANIFEST_FILE}"
 
 # --- Summary ---
 echo ""

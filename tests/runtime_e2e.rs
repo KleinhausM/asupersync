@@ -1723,7 +1723,7 @@ fn e2e_obligation_tracked_channel_commit() {
     let mut runtime = LabRuntime::new(config);
     let root = runtime.state.create_root_region(Budget::INFINITE);
 
-    let (tx, rx) = tracked_channel::<u32>(1);
+    let (tx, mut rx) = tracked_channel::<u32>(1);
     let recv_value = Arc::new(Mutex::new(None));
     let recv_value_clone = recv_value.clone();
     let proof_kind = Arc::new(Mutex::new(None));

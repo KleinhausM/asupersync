@@ -10,7 +10,7 @@ use crate::error::{Error, ErrorKind};
 use crate::raptorq::decoder::{
     DecodeError as RaptorDecodeError, InactivationDecoder, ReceivedSymbol,
 };
-use crate::raptorq::gf256::{Gf256, gf256_addmul_slice};
+use crate::raptorq::gf256::Gf256;
 use crate::raptorq::systematic::SystematicParams;
 use crate::security::{AuthenticatedSymbol, SecurityContext};
 use crate::types::symbol_set::{InsertResult, SymbolSet, ThresholdConfig};
@@ -674,8 +674,6 @@ fn decode_block(
     let object_id = symbols.first().map_or(ObjectId::NIL, Symbol::object_id);
     let params = SystematicParams::for_source_block(k, symbol_size);
     let block_seed = seed_for_block(object_id, plan.sbn);
-    let base_rows = params.s + params.h;
-
     let decoder = InactivationDecoder::new(k, symbol_size, block_seed);
     let padding_rows = params.k_prime.saturating_sub(k);
 
@@ -808,7 +806,11 @@ fn seed_for(object_id: ObjectId, sbn: u8, esi: u32) -> u64 {
     let mut seed = hi ^ lo.rotate_left(13);
     seed ^= u64::from(sbn) << 56;
     seed ^= u64::from(esi);
-    if seed == 0 { 1 } else { seed }
+    if seed == 0 {
+        1
+    } else {
+        seed
+    }
 }
 
 #[cfg(test)]

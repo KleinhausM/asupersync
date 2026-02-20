@@ -19,17 +19,17 @@
 #![allow(missing_docs)]
 #![allow(clippy::semicolon_if_nothing_returned)]
 
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
 
-use asupersync::Cx;
 use asupersync::channel::mpsc;
 use asupersync::record::task::TaskRecord;
-use asupersync::runtime::RuntimeState;
 use asupersync::runtime::scheduler::{GlobalQueue, LocalQueue};
+use asupersync::runtime::RuntimeState;
 use asupersync::sync::ContendedMutex;
 use asupersync::types::{Budget, CancelKind, CancelReason, RegionId, TaskId, Time};
 use asupersync::util::ArenaIndex;
+use asupersync::Cx;
 use std::sync::Arc;
 
 // =============================================================================
@@ -191,7 +191,7 @@ fn bench_channel_send_recv(c: &mut Criterion) {
             |b, &capacity| {
                 b.iter_batched(
                     || mpsc::channel::<u64>(capacity),
-                    |(tx, mut rx)| {
+                    |(tx, rx)| {
                         tx.try_send(42u64).expect("send");
                         let v = rx.try_recv().expect("recv");
                         black_box(v)
@@ -211,7 +211,7 @@ fn bench_channel_send_recv(c: &mut Criterion) {
             |b, &count| {
                 b.iter_batched(
                     || mpsc::channel::<u64>(count as usize),
-                    |(tx, mut rx)| {
+                    |(tx, rx)| {
                         for i in 0..count {
                             tx.try_send(i).expect("send");
                         }
