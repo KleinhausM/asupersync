@@ -955,16 +955,14 @@ impl GaussianSolver {
                     factor,
                 );
             }
+        } else if factor_is_one {
+            gf256_add_slice(&mut target_row[tail_start..], &pivot_row[tail_start..]);
         } else {
-            if factor_is_one {
-                gf256_add_slice(&mut target_row[tail_start..], &pivot_row[tail_start..]);
-            } else {
-                gf256_addmul_slice(
-                    &mut target_row[tail_start..],
-                    &pivot_row[tail_start..],
-                    factor,
-                );
-            }
+            gf256_addmul_slice(
+                &mut target_row[tail_start..],
+                &pivot_row[tail_start..],
+                factor,
+            );
         }
     }
 }

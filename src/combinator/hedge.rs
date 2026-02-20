@@ -447,15 +447,11 @@ impl<Prim, Back, F> HedgeFuture<Prim, Back, F> {
     fn new(config: HedgeConfig, primary: Prim, backup_factory: F) -> Self {
         // Start timer immediately
         let timer = {
-            let now = if let Some(current) = Cx::current() {
-                if let Some(driver) = current.timer_driver() {
-                    driver.now()
-                } else {
-                    crate::time::wall_now()
-                }
-            } else {
-                crate::time::wall_now()
-            };
+            let now = Cx::current().map_or_else(crate::time::wall_now, |current| {
+                current
+                    .timer_driver()
+                    .map_or_else(crate::time::wall_now, |driver| driver.now())
+            });
             Sleep::after(now, config.hedge_delay)
         };
 
@@ -504,7 +500,7 @@ where
         // Check timer to start backup
         if this.timer.is_some() {
             // If timer is ready, spawn backup
-            if let Poll::Ready(()) = Pin::new(this.timer.as_mut().unwrap()).poll(cx) {
+            if Pin::new(this.timer.as_mut().unwrap()).poll(cx) == Poll::Ready(()) {
                 // Timer elapsed, start backup
                 this.timer = None; // Drop timer
                 this.config.backup_spawned = true;

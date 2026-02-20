@@ -484,6 +484,7 @@ impl Bulkhead {
         let mut queue = self.queue.write();
         if let Some(idx) = queue.iter().position(|e| e.id == entry_id) {
             let entry = queue.remove(idx);
+            drop(queue);
 
             if matches!(entry.result, Some(Ok(()))) {
                 // Permit was granted but not claimed. Release it.

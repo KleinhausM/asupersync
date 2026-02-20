@@ -272,7 +272,7 @@ impl Stealer {
         }
         // Cap theft at 256 tasks to avoid monopolizing the destination queue
         // or holding locks too long processing the batch.
-        let steal_limit = (initial_len / 2).max(1).min(256);
+        let steal_limit = (initial_len / 2).clamp(1, 256);
 
         // Common case: queue has only stealable tasks. Skip per-task locality
         // branching and temporary local-task buffering entirely.

@@ -626,15 +626,11 @@ where
                             // Cx::current() will be used by Sleep internally
                             // We need to construct Sleep with a relative duration from "now"
                             // Sleep::after handles getting the time source correctly
-                            let now = if let Some(current) = Cx::current() {
-                                if let Some(driver) = current.timer_driver() {
-                                    driver.now()
-                                } else {
-                                    crate::time::wall_now()
-                                }
-                            } else {
-                                crate::time::wall_now()
-                            };
+                            let now = Cx::current().map_or_else(crate::time::wall_now, |current| {
+                                current
+                                    .timer_driver()
+                                    .map_or_else(crate::time::wall_now, |driver| driver.now())
+                            });
 
                             let sleep = Sleep::after(now, delay);
                             self.inner = RetryInner::Sleeping(sleep);

@@ -1044,24 +1044,33 @@ fn glob_match(pattern: &str, path: &str) -> bool {
 }
 
 fn glob_match_parts(pat: &[&str], path: &[&str]) -> bool {
-    if pat.is_empty() {
-        return path.is_empty();
-    }
-    if pat[0] == "**" {
-        // ** matches zero or more segments
-        // Try matching the rest of the pattern against every suffix of path
-        for i in 0..=path.len() {
-            if glob_match_parts(&pat[1..], &path[i..]) {
-                return true;
-            }
+    let mut p = 0;
+    let mut s = 0;
+    let mut star_idx: Option<usize> = None;
+    let mut match_idx = 0;
+
+    while s < path.len() {
+        if p < pat.len() && (pat[p] == "*" || pat[p] == path[s]) {
+            p += 1;
+            s += 1;
+        } else if p < pat.len() && pat[p] == "**" {
+            star_idx = Some(p);
+            match_idx = s;
+            p += 1;
+        } else if let Some(star) = star_idx {
+            p = star + 1;
+            match_idx += 1;
+            s = match_idx;
+        } else {
+            return false;
         }
-        return false;
     }
-    if path.is_empty() {
-        return false;
+
+    while p < pat.len() && pat[p] == "**" {
+        p += 1;
     }
-    let segment_matches = pat[0] == "*" || pat[0] == path[0];
-    segment_matches && glob_match_parts(&pat[1..], &path[1..])
+
+    p == pat.len()
 }
 
 /// Check a single caveat predicate against a verification context.
