@@ -249,6 +249,10 @@ harness = false
 name = "methodology_baselines"
 harness = false
 
+[[bench]]
+name = "load_balancer_benchmark"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "fat"
