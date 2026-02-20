@@ -5,6 +5,7 @@
 use super::elapsed::Elapsed;
 use super::sleep::Sleep;
 use crate::types::Time;
+use pin_project::pin_project;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -18,7 +19,7 @@ use std::time::Duration;
 ///
 /// # Type Parameters
 ///
-/// * `F` - The inner future type. Must implement `Unpin`.
+/// * `F` - The inner future type.
 ///
 /// # Cancel Safety
 ///
@@ -44,8 +45,10 @@ use std::time::Duration;
 /// }
 /// ```
 #[derive(Debug)]
+#[pin_project]
 pub struct TimeoutFuture<F> {
     /// The inner future.
+    #[pin]
     future: F,
     /// The sleep future for the timeout.
     sleep: Sleep,
@@ -180,21 +183,24 @@ impl<F: Future + Unpin> TimeoutFuture<F> {
     }
 }
 
-impl<F: Future + Unpin> Future for TimeoutFuture<F> {
+impl<F: Future> Future for TimeoutFuture<F> {
     type Output = Result<F::Output, Elapsed>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+
         // Poll the inner future first — if it's ready, we should return its
         // result even if the timeout has also elapsed. This avoids losing
         // completed work at the boundary.
-        match Pin::new(&mut self.future).poll(cx) {
+        match this.future.poll(cx) {
             Poll::Ready(output) => return Poll::Ready(Ok(output)),
             Poll::Pending => {}
         }
 
         // Poll the sleep future to register wakeup (e.g. background thread in standalone mode)
-        match Pin::new(&mut self.sleep).poll(cx) {
-            Poll::Ready(()) => Poll::Ready(Err(Elapsed::new(self.sleep.deadline()))),
+        let deadline = this.sleep.deadline();
+        match Pin::new(this.sleep).poll(cx) {
+            Poll::Ready(()) => Poll::Ready(Err(Elapsed::new(deadline))),
             Poll::Pending => Poll::Pending,
         }
     }

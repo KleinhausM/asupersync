@@ -3,6 +3,7 @@
 //! The `Filter` combinator yields only items that match a predicate.
 
 use super::Stream;
+use pin_project::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -11,7 +12,9 @@ use std::task::{Context, Poll};
 /// Created by [`StreamExt::filter`](super::StreamExt::filter).
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
+#[pin_project]
 pub struct Filter<S, P> {
+    #[pin]
     stream: S,
     predicate: P,
 }
@@ -38,20 +41,19 @@ impl<S, P> Filter<S, P> {
     }
 }
 
-impl<S: Unpin, P> Unpin for Filter<S, P> {}
-
 impl<S, P> Stream for Filter<S, P>
 where
-    S: Stream + Unpin,
+    S: Stream,
     P: FnMut(&S::Item) -> bool,
 {
     type Item = S::Item;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+        let mut this = self.project();
         loop {
-            match Pin::new(&mut self.stream).poll_next(cx) {
+            match this.stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(item)) => {
-                    if (self.predicate)(&item) {
+                    if (this.predicate)(&item) {
                         return Poll::Ready(Some(item));
                     }
                     // Item filtered out, continue to next
@@ -74,7 +76,9 @@ where
 /// Created by [`StreamExt::filter_map`](super::StreamExt::filter_map).
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
+#[pin_project]
 pub struct FilterMap<S, F> {
+    #[pin]
     stream: S,
     f: F,
 }
@@ -101,20 +105,19 @@ impl<S, F> FilterMap<S, F> {
     }
 }
 
-impl<S: Unpin, F> Unpin for FilterMap<S, F> {}
-
 impl<S, F, T> Stream for FilterMap<S, F>
 where
-    S: Stream + Unpin,
+    S: Stream,
     F: FnMut(S::Item) -> Option<T>,
 {
     type Item = T;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        let mut this = self.project();
         loop {
-            match Pin::new(&mut self.stream).poll_next(cx) {
+            match this.stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(item)) => {
-                    if let Some(result) = (self.f)(item) {
+                    if let Some(result) = (this.f)(item) {
                         return Poll::Ready(Some(result));
                     }
                     // Item filtered out, continue to next

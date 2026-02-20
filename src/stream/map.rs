@@ -3,6 +3,7 @@
 //! The `Map` combinator transforms each item in a stream using a provided function.
 
 use super::Stream;
+use pin_project::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -11,7 +12,9 @@ use std::task::{Context, Poll};
 /// Created by [`StreamExt::map`](super::StreamExt::map).
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
+#[pin_project]
 pub struct Map<S, F> {
+    #[pin]
     stream: S,
     f: F,
 }
@@ -38,18 +41,17 @@ impl<S, F> Map<S, F> {
     }
 }
 
-impl<S: Unpin, F> Unpin for Map<S, F> {}
-
 impl<S, F, T> Stream for Map<S, F>
 where
-    S: Stream + Unpin,
+    S: Stream,
     F: FnMut(S::Item) -> T,
 {
     type Item = T;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        match Pin::new(&mut self.stream).poll_next(cx) {
-            Poll::Ready(Some(item)) => Poll::Ready(Some((self.f)(item))),
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        let this = self.project();
+        match this.stream.poll_next(cx) {
+            Poll::Ready(Some(item)) => Poll::Ready(Some((this.f)(item))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }

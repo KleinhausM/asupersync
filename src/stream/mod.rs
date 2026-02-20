@@ -723,19 +723,17 @@ mod tests {
         // We can poll it manually.
 
         let stream = iter(vec![1, 2]);
-        let mut processed = stream.then(|x| async move { x * 10 });
+        let mut processed = Box::pin(stream.then(|x| async move { x * 10 }));
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
         // First item
-        let mut next = processed.next();
-        let poll = Pin::new(&mut next).poll(&mut cx);
+        let poll = processed.as_mut().poll_next(&mut cx);
         let ok = matches!(poll, Poll::Ready(Some(10)));
         crate::assert_with_log!(ok, "then 1", "Poll::Ready(Some(10))", poll);
 
         // Second item
-        let mut next = processed.next();
-        let poll = Pin::new(&mut next).poll(&mut cx);
+        let poll = processed.as_mut().poll_next(&mut cx);
         crate::assert_with_log!(
             poll == Poll::Ready(Some(20)),
             "then 2",
@@ -744,8 +742,7 @@ mod tests {
         );
 
         // End
-        let mut next = processed.next();
-        let poll = Pin::new(&mut next).poll(&mut cx);
+        let poll = processed.as_mut().poll_next(&mut cx);
         crate::assert_with_log!(
             poll == Poll::Ready(None::<i32>),
             "then done",

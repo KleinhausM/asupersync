@@ -1,6 +1,7 @@
 //! Then (async map) combinator.
 
 use super::Stream;
+use pin_project::pin_project;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -8,10 +9,13 @@ use std::task::{Context, Poll};
 /// Stream for the [`then`](super::StreamExt::then) method.
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
+#[pin_project]
 pub struct Then<S, Fut, F> {
+    #[pin]
     stream: S,
     f: F,
-    pending: Option<Pin<Box<Fut>>>,
+    #[pin]
+    pending: Option<Fut>,
 }
 
 impl<S, Fut, F> Then<S, Fut, F> {
@@ -26,28 +30,30 @@ impl<S, Fut, F> Then<S, Fut, F> {
 
 impl<S, Fut, F> Stream for Then<S, Fut, F>
 where
-    S: Stream + Unpin,
-    F: FnMut(S::Item) -> Fut + Unpin,
+    S: Stream,
+    F: FnMut(S::Item) -> Fut,
     Fut: Future,
 {
     type Item = Fut::Output;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+
         loop {
-            if let Some(fut) = self.pending.as_mut() {
-                match fut.as_mut().poll(cx) {
+            if let Some(fut) = this.pending.as_mut().as_pin_mut() {
+                match fut.poll(cx) {
                     Poll::Ready(item) => {
-                        self.pending = None;
+                        this.pending.set(None);
                         return Poll::Ready(Some(item));
                     }
                     Poll::Pending => return Poll::Pending,
                 }
             }
 
-            match Pin::new(&mut self.stream).poll_next(cx) {
+            match this.stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(item)) => {
-                    let fut = (self.f)(item);
-                    self.pending = Some(Box::pin(fut));
+                    let fut = (this.f)(item);
+                    this.pending.set(Some(fut));
                 }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
@@ -80,16 +86,17 @@ mod tests {
         Waker::from(Arc::new(NoopWaker))
     }
 
-    fn collect_then<S, Fut, F>(stream: &mut Then<S, Fut, F>) -> Vec<Fut::Output>
+    fn collect_then<S, Fut, F>(stream: Then<S, Fut, F>) -> Vec<Fut::Output>
     where
-        S: Stream + Unpin,
-        F: FnMut(S::Item) -> Fut + Unpin,
+        S: Stream,
+        F: FnMut(S::Item) -> Fut,
         Fut: Future,
     {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let mut items = Vec::new();
-        while let Poll::Ready(Some(item)) = Pin::new(&mut *stream).poll_next(&mut cx) {
+        let mut stream = Box::pin(stream);
+        while let Poll::Ready(Some(item)) = stream.as_mut().poll_next(&mut cx) {
             items.push(item);
         }
         items
@@ -97,22 +104,22 @@ mod tests {
 
     #[test]
     fn test_then_async_transform() {
-        let mut s = Then::new(iter(vec![1, 2, 3]), |x: i32| async move { x * 2 });
-        let items = collect_then(&mut s);
+        let s = Then::new(iter(vec![1, 2, 3]), |x: i32| async move { x * 2 });
+        let items = collect_then(s);
         assert_eq!(items, vec![2, 4, 6]);
     }
 
     #[test]
     fn test_then_empty_stream() {
-        let mut s = Then::new(iter(Vec::<i32>::new()), |x: i32| async move { x });
-        let items = collect_then(&mut s);
+        let s = Then::new(iter(Vec::<i32>::new()), |x: i32| async move { x });
+        let items = collect_then(s);
         assert!(items.is_empty());
     }
 
     #[test]
     fn test_then_type_change() {
-        let mut s = Then::new(iter(vec![1, 2]), |x: i32| async move { format!("{x}") });
-        let items = collect_then(&mut s);
+        let s = Then::new(iter(vec![1, 2]), |x: i32| async move { format!("{x}") });
+        let items = collect_then(s);
         assert_eq!(items, vec!["1".to_string(), "2".to_string()]);
     }
 
@@ -124,8 +131,8 @@ mod tests {
 
     #[test]
     fn test_then_single_item() {
-        let mut s = Then::new(iter(vec![42]), |x: i32| async move { x + 1 });
-        let items = collect_then(&mut s);
+        let s = Then::new(iter(vec![42]), |x: i32| async move { x + 1 });
+        let items = collect_then(s);
         assert_eq!(items, vec![43]);
     }
 }
