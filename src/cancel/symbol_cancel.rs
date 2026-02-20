@@ -195,16 +195,24 @@ impl SymbolCancelToken {
     /// Returns true if this call triggered the cancellation (first caller wins).
     #[allow(clippy::must_use_candidate)]
     pub fn cancel(&self, reason: &CancelReason, now: Time) -> bool {
+        // Hold the reason lock to serialize updates and ensure visibility consistency.
+        // This prevents a race where a listener observes cancelled=true but reason=None.
+        let mut reason_guard = self.state.reason.write();
+
         if self
             .state
             .cancelled
             .compare_exchange(false, true, Ordering::Release, Ordering::Acquire)
             .is_ok()
         {
+            // We won the race. State is now cancelled.
             self.state
                 .cancelled_at
                 .store(now.as_nanos(), Ordering::Release);
-            *self.state.reason.write() = Some(reason.clone());
+            *reason_guard = Some(reason.clone());
+            
+            // Drop the lock before notifying to avoid reentrancy deadlocks.
+            drop(reason_guard);
 
             let listeners = {
                 let mut listeners = self.state.listeners.write();
@@ -234,12 +242,17 @@ impl SymbolCancelToken {
             // Already cancelled. Strengthen the stored reason if the new
             // one is more severe, preserving the monotone-severity
             // invariant required by the cancellation protocol.
-            let mut reason_guard = self.state.reason.write();
+            //
+            // Since we hold the write lock, and the winner releases the lock
+            // only after writing Some(reason), we are guaranteed to see
+            // the existing reason here.
             match *reason_guard {
                 Some(ref mut stored) => {
                     stored.strengthen(reason);
                 }
                 None => {
+                    // This case should be unreachable under the new locking protocol,
+                    // but we handle it safely just in case.
                     *reason_guard = Some(reason.clone());
                 }
             }
