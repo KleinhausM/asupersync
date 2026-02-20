@@ -256,7 +256,7 @@ where
     ///
     /// Consumes this endpoint and returns the value plus a new endpoint at state `Next`.
     pub async fn recv(self, cx: &crate::cx::Cx) -> Result<(T, Endpoint<Next>), SessionError> {
-        let Self { tx, rx, .. } = self;
+        let Self { tx, mut rx, .. } = self;
         let boxed = rx.recv(cx).await.map_err(|e| match e {
             crate::channel::mpsc::RecvError::Cancelled => SessionError::Cancelled,
             crate::channel::mpsc::RecvError::Disconnected
@@ -323,7 +323,7 @@ impl<A: Session, B: Session> Endpoint<Offer<A, B>> {
     ///
     /// Returns the chosen branch as an `Offered` enum.
     pub async fn offer(self, cx: &crate::cx::Cx) -> Result<Offered<A, B>, SessionError> {
-        let Self { tx, rx, .. } = self;
+        let Self { tx, mut rx, .. } = self;
         let boxed = rx.recv(cx).await.map_err(|e| match e {
             crate::channel::mpsc::RecvError::Cancelled => SessionError::Cancelled,
             crate::channel::mpsc::RecvError::Disconnected

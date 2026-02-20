@@ -203,7 +203,7 @@ fn e2e_deadline_monotone_oracle() {
 #[test]
 fn e2e_two_phase_channel_abort_releases_capacity() {
     init_test("e2e_two_phase_channel_abort_releases_capacity");
-    let (tx, rx) = mpsc::channel::<u32>(1);
+    let (tx, mut rx) = mpsc::channel::<u32>(1);
     let cx: Cx = Cx::for_testing();
 
     // Reserve a slot and drop the permit (cancel/abort), then send again.

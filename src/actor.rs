@@ -674,7 +674,7 @@ pub const DEFAULT_MAILBOX_CAPACITY: usize = 64;
 /// 3. Drains remaining buffered messages (no silent drops)
 /// 4. Calls `on_stop`
 /// 5. Returns the actor state
-async fn run_actor_loop<A: Actor>(mut actor: A, cx: Cx, cell: &ActorCell<A::Message>) -> A {
+async fn run_actor_loop<A: Actor>(mut actor: A, cx: Cx, cell: &mut ActorCell<A::Message>) -> A {
     use crate::tracing_compat::debug;
 
     cell.state.store(ActorState::Running);
@@ -820,14 +820,14 @@ impl<P: crate::types::Policy> crate::cx::Scope<'_, P> {
         let inner_weak = Arc::downgrade(&child_cx.inner);
         let state_for_task = Arc::clone(&actor_state);
 
-        let cell = ActorCell {
+        let mut cell = ActorCell {
             mailbox: msg_rx,
             state: Arc::clone(&actor_state),
         };
 
         // Create the actor loop future
         let wrapped = async move {
-            let result = CatchUnwind(Box::pin(run_actor_loop(actor, child_cx, &cell))).await;
+            let result = CatchUnwind(Box::pin(run_actor_loop(actor, child_cx, &mut cell))).await;
             match result {
                 Ok(actor_final) => {
                     let _ = result_tx.send(&cx_for_send, Ok(actor_final));
@@ -932,7 +932,7 @@ impl<P: crate::types::Policy> crate::cx::Scope<'_, P> {
         let region_id = self.region_id();
         let state_for_task = Arc::clone(&actor_state);
 
-        let cell = ActorCell {
+        let mut cell = ActorCell {
             mailbox: msg_rx,
             state: Arc::clone(&actor_state),
         };
@@ -942,7 +942,7 @@ impl<P: crate::types::Policy> crate::cx::Scope<'_, P> {
                 actor,
                 &mut factory,
                 child_cx,
-                &cell,
+                &mut cell,
                 Supervisor::new(strategy),
                 task_id,
                 region_id,
@@ -990,7 +990,7 @@ async fn run_supervised_loop<A, F>(
     initial_actor: A,
     factory: &mut F,
     cx: Cx,
-    cell: &ActorCell<A::Message>,
+    cell: &mut ActorCell<A::Message>,
     mut supervisor: crate::supervision::Supervisor,
     task_id: TaskId,
     region_id: RegionId,

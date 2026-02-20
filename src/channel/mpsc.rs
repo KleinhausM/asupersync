@@ -627,13 +627,13 @@ impl<T> Receiver<T> {
     /// Creates a receive future for the next value.
     #[inline]
     #[must_use]
-    pub fn recv<'a>(&'a self, cx: &'a Cx) -> Recv<'a, T> {
+    pub fn recv<'a>(&'a mut self, cx: &'a Cx) -> Recv<'a, T> {
         Recv { receiver: self, cx }
     }
 
     /// Attempts to receive a value without blocking.
     #[inline]
-    pub fn try_recv(&self) -> Result<T, RecvError> {
+    pub fn try_recv(&mut self) -> Result<T, RecvError> {
         let mut inner = self.shared.inner.lock();
         inner.queue.pop_front().map_or_else(
             || {
@@ -688,14 +688,14 @@ impl<T> Receiver<T> {
 
 /// Future returned by [`Receiver::recv`].
 pub struct Recv<'a, T> {
-    receiver: &'a Receiver<T>,
+    receiver: &'a mut Receiver<T>,
     cx: &'a Cx,
 }
 
 impl<T> Future for Recv<'_, T> {
     type Output = Result<T, RecvError>;
 
-    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.cx.checkpoint().is_err() {
             self.cx.trace("mpsc::recv cancelled");
             return Poll::Ready(Err(RecvError::Cancelled));

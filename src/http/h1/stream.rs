@@ -141,7 +141,8 @@ impl Body for IncomingBody {
             return Poll::Ready(None);
         }
 
-        let recv_future = self.receiver.recv(&self.cx);
+        let cx = self.cx.clone();
+        let recv_future = self.receiver.recv(&cx);
         let mut pinned = std::pin::pin!(recv_future);
         match pinned.as_mut().poll(poll_cx) {
             Poll::Ready(Ok(frame)) => {
@@ -668,7 +669,8 @@ impl Body for OutgoingBody {
             return Poll::Ready(None);
         }
 
-        let recv_future = self.receiver.recv(&self.cx);
+        let cx = self.cx.clone();
+        let recv_future = self.receiver.recv(&cx);
         let mut pinned = std::pin::pin!(recv_future);
         match pinned.as_mut().poll(poll_cx) {
             Poll::Ready(Ok(frame)) => Poll::Ready(Some(frame)),

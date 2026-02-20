@@ -1326,7 +1326,11 @@ impl<S: GenServer> GenServerHandle<S> {
 pub const DEFAULT_GENSERVER_MAILBOX_CAPACITY: usize = 64;
 
 /// Runs the GenServer message loop.
-async fn run_gen_server_loop<S: GenServer>(mut server: S, cx: Cx, cell: &GenServerCell<S>) -> S {
+async fn run_gen_server_loop<S: GenServer>(
+    mut server: S,
+    cx: Cx,
+    cell: &mut GenServerCell<S>,
+) -> S {
     use crate::tracing_compat::debug;
 
     cell.state.store(ActorState::Running);
@@ -1495,14 +1499,15 @@ impl<P: crate::types::Policy> crate::cx::Scope<'_, P> {
         let inner_weak = Arc::downgrade(&child_cx.inner);
         let state_for_task = Arc::clone(&server_state);
 
-        let cell = GenServerCell {
+        let mut cell = GenServerCell {
             mailbox: msg_rx,
             state: Arc::clone(&server_state),
             _keep_alive: msg_tx.clone(),
         };
 
         let wrapped = async move {
-            let result = CatchUnwind(Box::pin(run_gen_server_loop(server, child_cx, &cell))).await;
+            let result =
+                CatchUnwind(Box::pin(run_gen_server_loop(server, child_cx, &mut cell))).await;
             match result {
                 Ok(server_final) => {
                     let _ = result_tx.send(&cx_for_send, Ok(server_final));
