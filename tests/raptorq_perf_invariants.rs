@@ -1727,7 +1727,12 @@ fn g7_expected_loss_contract_schema_and_coverage() {
         .as_array()
         .expect("contract.states must be an array")
         .iter()
-        .map(|value| value.as_str().expect("state entries must be strings").to_string())
+        .map(|value| {
+            value
+                .as_str()
+                .expect("state entries must be strings")
+                .to_string()
+        })
         .collect::<BTreeSet<_>>();
     assert_eq!(
         observed_states, expected_states,
@@ -1744,7 +1749,12 @@ fn g7_expected_loss_contract_schema_and_coverage() {
         .as_array()
         .expect("contract.actions must be an array")
         .iter()
-        .map(|value| value.as_str().expect("action entries must be strings").to_string())
+        .map(|value| {
+            value
+                .as_str()
+                .expect("action entries must be strings")
+                .to_string()
+        })
         .collect::<BTreeSet<_>>();
     assert_eq!(
         observed_actions, expected_actions,
@@ -1754,7 +1764,11 @@ fn g7_expected_loss_contract_schema_and_coverage() {
     let matrix_rows = artifact["contract"]["loss_matrix"]
         .as_array()
         .expect("contract.loss_matrix must be an array");
-    assert_eq!(matrix_rows.len(), 4, "G7 loss matrix must have 4 state rows");
+    assert_eq!(
+        matrix_rows.len(),
+        4,
+        "G7 loss matrix must have 4 state rows"
+    );
     for row in matrix_rows {
         let state = row["state"]
             .as_str()
@@ -1768,7 +1782,10 @@ fn g7_expected_loss_contract_schema_and_coverage() {
                 .expect("loss_terms must contain every action")
                 .as_i64()
                 .expect("loss term must be numeric");
-            assert!(term >= 0, "loss term must be non-negative for state {state}");
+            assert!(
+                term >= 0,
+                "loss term must be non-negative for state {state}"
+            );
         }
     }
     let regression_terms = artifact["contract"]["loss_matrix"][2]["loss_terms"]
@@ -1889,6 +1906,260 @@ fn g7_expected_loss_contract_schema_and_coverage() {
         replay_command.contains("rch exec --"),
         "G7 replay command must use rch"
     );
+
+    assert_eq!(
+        artifact["reproducibility"]["decision_replay_bundle"]["artifact_path"].as_str(),
+        Some(REPLAY_CATALOG_ARTIFACT_PATH),
+        "G7 decision replay bundle must point to canonical replay catalog artifact"
+    );
+
+    let closure_readiness = &artifact["closure_readiness"];
+    let ready_to_close = closure_readiness["ready_to_close"]
+        .as_bool()
+        .expect("closure_readiness.ready_to_close must be a bool");
+    let closure_dependencies = closure_readiness["dependencies"]
+        .as_array()
+        .expect("closure_readiness.dependencies must be an array");
+    assert!(
+        !closure_dependencies.is_empty(),
+        "closure_readiness.dependencies must list at least one dependency"
+    );
+    let dependency_beads = closure_dependencies
+        .iter()
+        .map(|entry| {
+            let _required_status = entry["required_status"]
+                .as_str()
+                .expect("closure dependency must include required_status");
+            let _current_status = entry["current_status"]
+                .as_str()
+                .expect("closure dependency must include current_status");
+            let evidence_refs = entry["evidence_refs"]
+                .as_array()
+                .expect("closure dependency must include evidence_refs");
+            assert!(
+                !evidence_refs.is_empty(),
+                "closure dependency must include at least one evidence ref"
+            );
+            entry["bead_id"]
+                .as_str()
+                .expect("closure dependency must include bead_id")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    for required in [
+        "asupersync-3ltrv",
+        "asupersync-36m6p",
+        "asupersync-n5fk6",
+        "asupersync-2zu9p",
+    ] {
+        assert!(
+            dependency_beads.contains(required),
+            "closure_readiness.dependencies must include {required}"
+        );
+    }
+
+    if !ready_to_close {
+        let remaining_requirements = closure_readiness["remaining_requirements"]
+            .as_array()
+            .expect("remaining_requirements must be an array when not ready_to_close");
+        assert!(
+            !remaining_requirements.is_empty(),
+            "remaining_requirements must be non-empty when ready_to_close is false"
+        );
+    }
+
+    assert_eq!(
+        closure_readiness["track_g_handoff"]["bead_id"].as_str(),
+        Some("asupersync-2cyx5"),
+        "closure_readiness.track_g_handoff must stay anchored to Track-G bead"
+    );
+}
+
+/// Validate G7 deterministic decision replay samples are complete and coherent.
+#[test]
+fn g7_expected_loss_contract_replay_bundle_is_well_formed() {
+    let artifact: serde_json::Value = serde_json::from_str(RAPTORQ_G7_EXPECTED_LOSS_JSON)
+        .expect("G7 expected-loss artifact must be valid JSON");
+    let replay_catalog: serde_json::Value =
+        serde_json::from_str(include_str!("../artifacts/raptorq_replay_catalog_v1.json",))
+            .expect("replay catalog must be valid JSON");
+
+    let catalog_replay_refs = replay_catalog["entries"]
+        .as_array()
+        .expect("replay catalog entries must be an array")
+        .iter()
+        .map(|entry| {
+            entry["replay_ref"]
+                .as_str()
+                .expect("replay catalog entries must include replay_ref")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+
+    let bundle = &artifact["reproducibility"]["decision_replay_bundle"];
+    let required_classes = bundle["required_scenario_classes"]
+        .as_array()
+        .expect("required_scenario_classes must be an array")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("required_scenario_classes values must be strings")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        required_classes,
+        BTreeSet::from([
+            "normal".to_string(),
+            "edge".to_string(),
+            "conflicting_evidence".to_string(),
+        ]),
+        "G7 bundle must require normal/edge/conflicting_evidence classes"
+    );
+
+    let decision_samples = bundle["decision_samples"]
+        .as_array()
+        .expect("decision_samples must be an array");
+    assert!(
+        decision_samples.len() >= 3,
+        "G7 decision replay bundle must include at least three scenario samples"
+    );
+
+    let tie_break_rank = |action: &str| -> usize {
+        match action {
+            "fallback" => 0,
+            "rollback" => 1,
+            "canary_hold" => 2,
+            "continue" => 3,
+            _ => usize::MAX,
+        }
+    };
+    let required_states = BTreeSet::from([
+        "healthy".to_string(),
+        "degraded".to_string(),
+        "regression".to_string(),
+        "unknown".to_string(),
+    ]);
+    let required_actions = BTreeSet::from([
+        "continue".to_string(),
+        "canary_hold".to_string(),
+        "rollback".to_string(),
+        "fallback".to_string(),
+    ]);
+
+    for sample in decision_samples {
+        let scenario_class = sample["scenario_class"]
+            .as_str()
+            .expect("decision sample must include scenario_class");
+        assert!(
+            required_classes.contains(scenario_class),
+            "decision sample has unsupported scenario_class {scenario_class}"
+        );
+
+        let replay_ref = sample["replay_ref"]
+            .as_str()
+            .expect("decision sample must include replay_ref");
+        assert!(
+            catalog_replay_refs.contains(replay_ref),
+            "decision sample replay_ref {replay_ref} must be present in replay catalog"
+        );
+
+        let _seed = sample["seed"]
+            .as_u64()
+            .expect("decision sample seed must be an unsigned integer");
+        let state_posterior = sample["state_posterior"]
+            .as_object()
+            .expect("decision sample must include state_posterior object");
+        let observed_states = state_posterior.keys().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(
+            observed_states, required_states,
+            "decision sample state_posterior must cover all G7 states"
+        );
+
+        let expected_loss_terms = sample["expected_loss_terms"]
+            .as_object()
+            .expect("decision sample must include expected_loss_terms object");
+        let observed_actions = expected_loss_terms.keys().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(
+            observed_actions, required_actions,
+            "decision sample expected_loss_terms must cover all G7 actions"
+        );
+
+        let chosen_action = sample["chosen_action"]
+            .as_str()
+            .expect("decision sample must include chosen_action");
+        assert!(
+            required_actions.contains(chosen_action),
+            "decision sample chosen_action must be a valid G7 action"
+        );
+
+        let contributors = sample["top_evidence_contributors"]
+            .as_array()
+            .expect("decision sample must include top_evidence_contributors array");
+        assert!(
+            !contributors.is_empty(),
+            "decision sample must include at least one evidence contributor"
+        );
+        for contributor in contributors {
+            let _name = contributor["name"]
+                .as_str()
+                .expect("evidence contributor must include name");
+            let _weight = contributor["contribution_permille"]
+                .as_u64()
+                .expect("evidence contributor must include contribution_permille");
+        }
+
+        let confidence_score = sample["confidence_score"]
+            .as_u64()
+            .expect("confidence_score must be numeric");
+        let uncertainty_score = sample["uncertainty_score"]
+            .as_u64()
+            .expect("uncertainty_score must be numeric");
+        assert!(
+            confidence_score <= 1000,
+            "confidence_score must remain within configured 0..=1000 range"
+        );
+        assert!(
+            uncertainty_score <= 1000,
+            "uncertainty_score must remain within configured 0..=1000 range"
+        );
+
+        let fallback_trigger = sample["deterministic_fallback_trigger"]
+            .as_object()
+            .expect("decision sample must include deterministic_fallback_trigger object");
+        let fired = fallback_trigger
+            .get("fired")
+            .and_then(serde_json::Value::as_bool)
+            .expect("deterministic_fallback_trigger.fired must be a bool");
+
+        if fired {
+            assert_eq!(
+                chosen_action, "fallback",
+                "fallback trigger firing must force fallback action"
+            );
+        } else {
+            let mut min_loss: i64 = i64::MAX;
+            let mut expected_action = "fallback";
+            for action in ["continue", "canary_hold", "rollback", "fallback"] {
+                let loss = expected_loss_terms[action]
+                    .as_i64()
+                    .expect("expected loss terms must be numeric");
+                if loss < min_loss
+                    || (loss == min_loss
+                        && tie_break_rank(action) < tie_break_rank(expected_action))
+                {
+                    min_loss = loss;
+                    expected_action = action;
+                }
+            }
+
+            assert_eq!(
+                chosen_action, expected_action,
+                "chosen_action must match argmin_expected_loss with deterministic tie-breaker"
+            );
+        }
+    }
 }
 
 /// Validate G7 expected-loss docs cross-link to canonical artifacts.
@@ -1898,8 +2169,14 @@ fn g7_expected_loss_contract_docs_are_cross_linked() {
         "asupersync-m7o6i",
         "asupersync-2cyx5",
         "artifacts/raptorq_expected_loss_decision_contract_v1.json",
+        "artifacts/raptorq_replay_catalog_v1.json",
+        "closure_readiness",
+        "ready_to_close",
+        "asupersync-3ltrv",
+        "asupersync-2zu9p",
         "argmin_expected_loss",
         "deterministic_fallback_trigger",
+        "conflicting_evidence",
         "rch exec --",
         "C6",
         "F8",

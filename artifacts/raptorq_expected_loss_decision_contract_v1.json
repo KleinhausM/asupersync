@@ -262,6 +262,189 @@
       "seed",
       "scenario id"
     ],
+    "decision_replay_bundle": {
+      "artifact_path": "artifacts/raptorq_replay_catalog_v1.json",
+      "required_scenario_classes": [
+        "normal",
+        "edge",
+        "conflicting_evidence"
+      ],
+      "decision_samples": [
+        {
+          "scenario_class": "normal",
+          "scenario_id": "RQ-E2E-TYPICAL-RANDOM-LOSS",
+          "seed": 48879,
+          "replay_ref": "replay:rq-e2e-typical-random-loss-v1",
+          "state_posterior": {
+            "healthy": 900,
+            "degraded": 70,
+            "regression": 20,
+            "unknown": 10
+          },
+          "expected_loss_terms": {
+            "continue": 20,
+            "canary_hold": 31,
+            "rollback": 86,
+            "fallback": 111
+          },
+          "chosen_action": "continue",
+          "top_evidence_contributors": [
+            {
+              "name": "correctness_mismatch_signal",
+              "contribution_permille": 470
+            },
+            {
+              "name": "performance_budget_signal",
+              "contribution_permille": 300
+            },
+            {
+              "name": "instability_signal",
+              "contribution_permille": 230
+            }
+          ],
+          "confidence_score": 910,
+          "uncertainty_score": 90,
+          "deterministic_fallback_trigger": {
+            "fired": false,
+            "reason": "none"
+          }
+        },
+        {
+          "scenario_class": "edge",
+          "scenario_id": "RQ-E2E-INSUFFICIENT-SYMBOLS",
+          "seed": 53733,
+          "replay_ref": "replay:rq-e2e-insufficient-symbols-v1",
+          "state_posterior": {
+            "healthy": 10,
+            "degraded": 140,
+            "regression": 310,
+            "unknown": 540
+          },
+          "expected_loss_terms": {
+            "continue": 173,
+            "canary_hold": 99,
+            "rollback": 50,
+            "fallback": 40
+          },
+          "chosen_action": "fallback",
+          "top_evidence_contributors": [
+            {
+              "name": "correctness_mismatch_signal",
+              "contribution_permille": 520
+            },
+            {
+              "name": "policy_conflict_signal",
+              "contribution_permille": 280
+            },
+            {
+              "name": "instability_signal",
+              "contribution_permille": 200
+            }
+          ],
+          "confidence_score": 210,
+          "uncertainty_score": 790,
+          "deterministic_fallback_trigger": {
+            "fired": true,
+            "reason": "unknown_state_with_low_confidence"
+          }
+        },
+        {
+          "scenario_class": "conflicting_evidence",
+          "scenario_id": "RQ-U-PROOF-REPLAY-FAILURE",
+          "seed": 500,
+          "replay_ref": "replay:rq-u-proof-replay-failure-v1",
+          "state_posterior": {
+            "healthy": 50,
+            "degraded": 700,
+            "regression": 220,
+            "unknown": 30
+          },
+          "expected_loss_terms": {
+            "continue": 117,
+            "canary_hold": 56,
+            "rollback": 42,
+            "fallback": 43
+          },
+          "chosen_action": "rollback",
+          "top_evidence_contributors": [
+            {
+              "name": "correctness_mismatch_signal",
+              "contribution_permille": 340
+            },
+            {
+              "name": "performance_budget_signal",
+              "contribution_permille": 300
+            },
+            {
+              "name": "policy_conflict_signal",
+              "contribution_permille": 360
+            }
+          ],
+          "confidence_score": 640,
+          "uncertainty_score": 360,
+          "deterministic_fallback_trigger": {
+            "fired": false,
+            "reason": "none"
+          }
+        }
+      ]
+    },
     "replay_command": "rch exec -- cargo test --test raptorq_perf_invariants g7_expected_loss_contract_schema_and_coverage -- --nocapture"
+  },
+  "closure_readiness": {
+    "ready_to_close": false,
+    "dependencies": [
+      {
+        "bead_id": "asupersync-3ltrv",
+        "name": "G3 optimization decision records",
+        "required_status": "closed",
+        "current_status": "in_progress",
+        "evidence_refs": [
+          "artifacts/raptorq_optimization_decision_records_v1.json",
+          "thread:coord-2026-02-19"
+        ]
+      },
+      {
+        "bead_id": "asupersync-36m6p",
+        "name": "E5 high-confidence p95/p99 comparator corpus",
+        "required_status": "closed",
+        "current_status": "in_progress",
+        "evidence_refs": [
+          "artifacts/raptorq_track_e_gf256_p95p99_highconf_v1.json",
+          "thread:coord-2026-02-19"
+        ]
+      },
+      {
+        "bead_id": "asupersync-n5fk6",
+        "name": "F7 final closure evidence in G3 decision records",
+        "required_status": "closed",
+        "current_status": "in_progress",
+        "evidence_refs": [
+          "artifacts/raptorq_optimization_decision_records_v1.json"
+        ]
+      },
+      {
+        "bead_id": "asupersync-2zu9p",
+        "name": "F8 implementation and closure evidence in G3 decision records",
+        "required_status": "closed",
+        "current_status": "open",
+        "evidence_refs": [
+          "artifacts/raptorq_optimization_decision_records_v1.json"
+        ]
+      }
+    ],
+    "remaining_requirements": [
+      "Attach final G3 closure refs with high-confidence E5 comparator corpus anchor.",
+      "Attach final F7/F8 closure evidence refs from decision cards before setting ready_to_close=true."
+    ],
+    "track_g_handoff": {
+      "bead_id": "asupersync-2cyx5",
+      "required_packet_fields": [
+        "gate_verdict_table",
+        "artifact_replay_index",
+        "residual_risk_register",
+        "go_no_go_decision"
+      ]
+    }
   }
 }

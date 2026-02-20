@@ -91,7 +91,7 @@ Current artifact summary (`coverage_summary` in JSON):
 
 Closure blockers for `asupersync-3ltrv` remain:
 
-1. Finalize offline profile-pack comparator evidence for `E5` (`asupersync-36m6p`) with p95/p99 links.
+1. Finalize high-confidence offline profile-pack comparator evidence for `E5` (`asupersync-36m6p`) with p95/p99 links (directional p95/p99 corpus now exists; high-confidence run has started targeting `artifacts/raptorq_track_e_gf256_p95p99_highconf_v1.json` but publication/sign-off is still pending, and reruns are currently tracking transient compile-frontier remediation in coord msgs `#1493/#1504`).
 2. Promote `F7` from proposed to approved_guarded only after burst comparator evidence + rollback rehearsal outcomes are recorded.
 3. Keep `F8` as proposed/template until implementation exists, then attach overlap-vs-sequential evidence and rollback outcomes.
 
@@ -111,4 +111,7 @@ Recent evidence alignment updates (2026-02-20):
 - Added follow-up E5 fifth-slice reproducibility evidence (`asupersync-36m6p` comment `#1855`, agent-mail `#1422/#1424`): deterministic environment metadata now included in manifest snapshots and Track-E policy/probe logs.
 - Added sixth-slice comparator artifact `artifacts/raptorq_track_e_gf256_bench_v1.json`: baseline/auto/rollback Track-E capture with rollback rehearsal outcomes.
 - Added sixth-slice confirmation references (`agent-mail asupersync-3ltrv #1441`, `coord thread #1443`) to tie the new comparator artifact and rollback capture into G3 evidence flow.
+- Added seventh-slice p95/p99-oriented comparator corpus (`artifacts/raptorq_track_e_gf256_p95p99_v1.json`, bead comment `#1863`, agent-mail `#1461/#1465`) and updated blocker wording to reflect this as directional evidence pending final high-confidence corpus closure.
+- Added in-progress high-confidence run reference (`coord thread #1487`) with planned closure artifact target `artifacts/raptorq_track_e_gf256_p95p99_highconf_v1.json`.
+- Added ninth-slice run-state note (`coord thread #1493/#1504`): high-confidence reruns temporarily hit unrelated `src/combinator/retry.rs` compile-frontier issues while remediation is active.
 - Removed stale compile-mismatch blocker text; current E5 blocker is narrowed to missing final p95/p99 comparator corpus.

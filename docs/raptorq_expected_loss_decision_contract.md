@@ -86,6 +86,22 @@ Fallback is mandatory if any hard-trigger condition is true:
 Structured decision logs must include state posterior, loss terms, chosen action,
 contributors, confidence/uncertainty, and replay pointer.
 
+The contract artifact also defines a deterministic decision replay bundle linked
+to:
+
+- `artifacts/raptorq_replay_catalog_v1.json`
+
+The replay bundle must include fixed-input decision samples for:
+
+1. `normal`
+2. `edge`
+3. `conflicting_evidence`
+
+Each sample carries a full decision-output payload (`state_posterior`,
+`expected_loss_terms`, `chosen_action`, `top_evidence_contributors`,
+`confidence_score`, `uncertainty_score`, `deterministic_fallback_trigger`,
+`replay_ref`) so outcomes are reproducible from artifact-only inputs.
+
 Cargo-heavy validation and replay commands must use `rch`:
 
 - `rch exec -- cargo ...`
@@ -93,6 +109,21 @@ Cargo-heavy validation and replay commands must use `rch`:
 Primary replay anchor:
 
 - `rch exec -- cargo test --test raptorq_perf_invariants g7_expected_loss_contract_schema_and_coverage -- --nocapture`
+
+## Closure Readiness Contract
+
+The artifact includes a machine-checkable `closure_readiness` section to avoid
+hand-off ambiguity while dependencies are still active.
+
+Current dependency set in the artifact:
+
+1. `asupersync-3ltrv` (G3 decision records) must be `closed`
+2. `asupersync-36m6p` (E5 high-confidence p95/p99 corpus) must be `closed`
+3. `asupersync-n5fk6` (F7 final closure evidence in G3 cards) must be `closed`
+4. `asupersync-2zu9p` (F8 implementation + closure evidence) must be `closed`
+
+`ready_to_close` remains `false` until all dependencies are closed and the
+Track-G handoff packet fields are attached for `asupersync-2cyx5`.
 
 ## Closure Notes
 

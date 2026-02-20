@@ -126,6 +126,9 @@
           "2026-02-20 fourth E5 slice added deterministic profile-pack manifest snapshot API and manifest-level reproducibility fields in Track-E benchmark logs.",
           "2026-02-20 fifth E5 slice added deterministic environment metadata (arch/os/env/endian/pointer width) to manifest snapshots and Track-E policy logs.",
           "2026-02-20 sixth E5 slice added artifacts/raptorq_track_e_gf256_bench_v1.json with baseline/auto/rollback comparator capture and rollback rehearsal outcomes.",
+          "2026-02-20 seventh E5 slice added directional p95/p99 comparator corpus artifact (artifacts/raptorq_track_e_gf256_p95p99_v1.json) from Track-E baseline/auto/rollback captures.",
+          "2026-02-20 eighth E5 slice started high-confidence p95/p99 corpus generation targeting artifacts/raptorq_track_e_gf256_p95p99_highconf_v1.json (coord thread msg #1487).",
+          "2026-02-20 ninth E5 status update: high-confidence reruns hit transient unrelated retry.rs compile-frontier breakage; remediation is active (coord msgs #1493/#1504).",
           "Final offline tuner and p95/p99 comparator corpus remains in progress under asupersync-36m6p."
         ]
       },
@@ -150,11 +153,16 @@
           "asupersync-36m6p comments #1826 and #1834",
           "asupersync-36m6p comments #1848/#1855 (manifest snapshot and environment reproducibility metadata; all-targets checks pass)",
           "artifacts/raptorq_track_e_gf256_bench_v1.json",
+          "asupersync-36m6p comment #1863 (p95/p99-oriented comparator corpus + methodology/limitations)",
+          "artifacts/raptorq_track_e_gf256_p95p99_v1.json",
           "asupersync-2ncba notes benchmark corpus",
           "agent-mail thread asupersync-3ltrv msg #1383 (2026-02-19 E5 evidence sync)",
           "agent-mail thread coord-2026-02-19 msgs #1408/#1410 (compile-mismatch no longer reproduced)",
           "agent-mail thread asupersync-3ltrv msgs #1422/#1424 (E5 fifth-slice evidence + corrected anchor)",
-          "agent-mail thread asupersync-3ltrv msg #1441 and coord thread msg #1443 (sixth-slice comparator artifact + rollback capture confirmation)"
+          "agent-mail thread asupersync-3ltrv msg #1441 and coord thread msg #1443 (sixth-slice comparator artifact + rollback capture confirmation)",
+          "agent-mail thread asupersync-3ltrv msgs #1461/#1465 (seventh-slice p95/p99 artifact + corrected anchor)",
+          "agent-mail thread coord-2026-02-19 msg #1487 (high-confidence p95/p99 corpus run started; pending artifact publication)",
+          "agent-mail thread coord-2026-02-19 msgs #1493/#1504 (transient retry.rs compile-frontier blockage and active remediation while high-confidence run proceeds)"
         ]
       },
       "fallback_plan": {
@@ -190,7 +198,9 @@
         "status": "partial",
         "artifacts": [
           "asupersync-36m6p comments #1848/#1855",
-          "artifacts/raptorq_track_e_gf256_bench_v1.json"
+          "artifacts/raptorq_track_e_gf256_bench_v1.json",
+          "asupersync-36m6p comment #1863",
+          "artifacts/raptorq_track_e_gf256_p95p99_v1.json"
         ],
         "bench_repro_commands": [
           "rch exec -- cargo bench --bench raptorq_benchmark -- gf256_primitives",
@@ -200,10 +210,14 @@
           "Profile-pack and tuning-candidate provenance fields are now emitted in Track-E policy logs.",
           "Manifest snapshot metadata (schema/version/catalog counts/selected candidate details) is now emitted and covered by deterministic tests.",
           "Environment reproducibility metadata (target_arch/target_os/target_env/target_endian/target_pointer_width_bits) is now included in manifest snapshots and emitted in policy logs.",
-          "Comparator corpus is not final until p95/p99 summaries are attached."
+          "Directional p95/p99 summaries are now attached via artifacts/raptorq_track_e_gf256_p95p99_v1.json.",
+          "High-confidence p95/p99 corpus run is started (coord msg #1487) and targets artifacts/raptorq_track_e_gf256_p95p99_highconf_v1.json for closure-grade evidence.",
+          "High-confidence reruns currently depend on clearing transient unrelated retry.rs compile-frontier errors reported in coord msgs #1493/#1504.",
+          "Current p95/p99 corpus is derived from scenario-level medians with small-n operation groups; final high-confidence closure should include broader/raw-sample percentile evidence."
         ],
         "pending_blockers": [
-          "Final p95/p99 comparator corpus is still pending for full E5 closure."
+          "Publish artifacts/raptorq_track_e_gf256_p95p99_highconf_v1.json and link final sign-off outcomes for full E5 closure.",
+          "Keep shared compile frontier stable enough for full baseline/auto/rollback reruns during high-confidence corpus generation."
         ]
       },
       "deterministic_replay": {
@@ -587,7 +601,7 @@
     "cards_pending_measured_evidence": 3,
     "cards_with_replay_commands": 8,
     "closure_blockers": [
-      "Complete final offline comparator corpus for E5 (`asupersync-36m6p`) with p95/p99 and selected-profile vs scalar-conservative evidence links (rollback rehearsal outcomes are now captured in `artifacts/raptorq_track_e_gf256_bench_v1.json`).",
+      "Complete final high-confidence offline comparator corpus for E5 (`asupersync-36m6p`) with p95/p99 and selected-profile vs scalar-conservative evidence links (rollback rehearsal outcomes are captured in `artifacts/raptorq_track_e_gf256_bench_v1.json`; directional p95/p99 corpus exists in `artifacts/raptorq_track_e_gf256_p95p99_v1.json`; high-confidence run is in progress per coord msg #1487 targeting `artifacts/raptorq_track_e_gf256_p95p99_highconf_v1.json`, with transient compile-frontier remediation tracked in coord msgs #1493/#1504).",
       "Promote F7 from proposed to approved_guarded only after burst-workload comparator evidence and rollback rehearsal outcomes are attached.",
       "Keep F8 as template/proposed until implementation exists; then attach measured overlap-vs-sequential evidence and rollback rehearsal outcomes."
     ]
