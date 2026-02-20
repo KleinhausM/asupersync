@@ -641,12 +641,29 @@ mod tests {
 
     #[test]
     fn lt_tuple_debug_clone_copy_eq() {
-        let a = LtTuple { d: 3, a: 5, b: 2, d1: 2, a1: 7, b1: 1 };
+        let a = LtTuple {
+            d: 3,
+            a: 5,
+            b: 2,
+            d1: 2,
+            a1: 7,
+            b1: 1,
+        };
         let b = a; // Copy
         let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
-        assert_ne!(a, LtTuple { d: 0, a: 0, b: 0, d1: 0, a1: 0, b1: 0 });
+        assert_ne!(
+            a,
+            LtTuple {
+                d: 0,
+                a: 0,
+                b: 0,
+                d1: 0,
+                a1: 0,
+                b1: 0
+            }
+        );
         let dbg = format!("{a:?}");
         assert!(dbg.contains("LtTuple"));
     }

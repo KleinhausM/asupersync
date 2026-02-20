@@ -761,12 +761,21 @@ mod tests {
 
     #[test]
     fn epoch_window_debug_clone_copy_eq() {
-        let a = EpochWindow { start: EpochId(10), end: EpochId(20) };
+        let a = EpochWindow {
+            start: EpochId(10),
+            end: EpochId(20),
+        };
         let b = a; // Copy
         let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
-        assert_ne!(a, EpochWindow { start: EpochId(0), end: EpochId(5) });
+        assert_ne!(
+            a,
+            EpochWindow {
+                start: EpochId(0),
+                end: EpochId(5)
+            }
+        );
         let dbg = format!("{a:?}");
         assert!(dbg.contains("EpochWindow"));
     }

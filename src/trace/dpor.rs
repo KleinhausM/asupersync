@@ -783,7 +783,10 @@ mod tests {
     #[test]
     fn detected_race_debug_clone_eq() {
         let race = DetectedRace {
-            race: Race { earlier: 0, later: 1 },
+            race: Race {
+                earlier: 0,
+                later: 1,
+            },
             kind: RaceKind::Resource(Resource::GlobalClock),
             earlier_task: None,
             later_task: None,

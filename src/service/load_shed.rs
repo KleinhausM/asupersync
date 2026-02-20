@@ -563,8 +563,7 @@ mod tests {
         let err: &dyn std::error::Error = &overloaded;
         assert!(err.source().is_some()); // Overloaded implements Error
 
-        let inner: LoadShedError<io::Error> =
-            LoadShedError::Inner(io::Error::other("test"));
+        let inner: LoadShedError<io::Error> = LoadShedError::Inner(io::Error::other("test"));
         let err: &dyn std::error::Error = &inner;
         assert!(err.source().is_some());
     }

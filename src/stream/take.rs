@@ -223,7 +223,9 @@ mod tests {
 
     #[test]
     fn take_while_debug() {
-        fn pred(v: &i32) -> bool { *v < 5 }
+        fn pred(v: &i32) -> bool {
+            *v < 5
+        }
         let stream = TakeWhile::new(iter(vec![1, 2]), pred as fn(&i32) -> bool);
         let dbg = format!("{stream:?}");
         assert!(dbg.contains("TakeWhile"));

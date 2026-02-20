@@ -58,15 +58,15 @@ use core::arch::aarch64::{
 };
 #[cfg(all(feature = "simd-intrinsics", target_arch = "x86"))]
 use core::arch::x86::{
-    __m128i, __m256i, _mm256_and_si256, _mm256_broadcastsi128_si256, _mm256_loadu_si256,
-    _mm256_set1_epi8, _mm256_shuffle_epi8, _mm256_srli_epi16, _mm256_storeu_si256,
-    _mm256_xor_si256, _mm_loadu_si128,
+    __m128i, __m256i, _mm_loadu_si128, _mm256_and_si256, _mm256_broadcastsi128_si256,
+    _mm256_loadu_si256, _mm256_set1_epi8, _mm256_shuffle_epi8, _mm256_srli_epi16,
+    _mm256_storeu_si256, _mm256_xor_si256,
 };
 #[cfg(all(feature = "simd-intrinsics", target_arch = "x86_64"))]
 use core::arch::x86_64::{
-    __m128i, __m256i, _mm256_and_si256, _mm256_broadcastsi128_si256, _mm256_loadu_si256,
-    _mm256_set1_epi8, _mm256_shuffle_epi8, _mm256_srli_epi16, _mm256_storeu_si256,
-    _mm256_xor_si256, _mm_loadu_si128,
+    __m128i, __m256i, _mm_loadu_si128, _mm256_and_si256, _mm256_broadcastsi128_si256,
+    _mm256_loadu_si256, _mm256_set1_epi8, _mm256_shuffle_epi8, _mm256_srli_epi16,
+    _mm256_storeu_si256, _mm256_xor_si256,
 };
 
 /// The irreducible polynomial x^8 + x^4 + x^3 + x^2 + 1.
@@ -251,6 +251,7 @@ struct Gf256Dispatch {
 static DISPATCH: std::sync::OnceLock<Gf256Dispatch> = std::sync::OnceLock::new();
 static DUAL_POLICY: std::sync::OnceLock<DualKernelPolicy> = std::sync::OnceLock::new();
 const GF256_PROFILE_PACK_SCHEMA_VERSION: &str = "raptorq-gf256-profile-pack-v1";
+const GF256_PROFILE_PACK_MANIFEST_SCHEMA_VERSION: &str = "raptorq-gf256-profile-pack-manifest-v1";
 const GF256_PROFILE_PACK_REPLAY_POINTER: &str = "replay:rq-e-gf256-profile-pack-v1";
 const GF256_PROFILE_PACK_COMMAND_BUNDLE: &str =
     "rch exec -- cargo bench --bench raptorq_benchmark -- gf256_primitives";
@@ -369,6 +370,23 @@ pub struct DualKernelPolicySnapshot {
     pub addmul_max_total: usize,
     /// Maximum allowed lane length ratio (`max(len_a,len_b)/min(...)`) in auto mode.
     pub max_lane_ratio: usize,
+}
+
+/// Snapshot of deterministic profile-pack manifest plus active policy selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Gf256ProfilePackManifestSnapshot {
+    /// Version marker for serialized/structured manifest snapshots.
+    pub schema_version: &'static str,
+    /// Active runtime dual-kernel policy selection.
+    pub active_policy: DualKernelPolicySnapshot,
+    /// Active profile-pack metadata entry aligned with `active_policy.profile_pack`.
+    pub active_profile_metadata: &'static Gf256ProfilePackMetadata,
+    /// Active selected tuning candidate metadata, if catalog entry is available.
+    pub active_selected_tuning_candidate: Option<&'static Gf256TuningCandidateMetadata>,
+    /// Full deterministic profile-pack catalog used by runtime policy.
+    pub profile_pack_catalog: &'static [Gf256ProfilePackMetadata],
+    /// Full deterministic offline-tuning candidate catalog.
+    pub tuning_candidate_catalog: &'static [Gf256TuningCandidateMetadata],
 }
 
 /// Architecture class used to map profile-pack defaults.
@@ -645,6 +663,12 @@ const GF256_TUNING_CANDIDATE_CATALOG: [Gf256TuningCandidateMetadata; 8] = [
 #[must_use]
 pub const fn gf256_tuning_candidate_catalog() -> &'static [Gf256TuningCandidateMetadata] {
     &GF256_TUNING_CANDIDATE_CATALOG
+}
+
+fn tuning_candidate_metadata(candidate_id: &str) -> Option<&'static Gf256TuningCandidateMetadata> {
+    GF256_TUNING_CANDIDATE_CATALOG
+        .iter()
+        .find(|metadata| metadata.candidate_id == candidate_id)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -931,6 +955,22 @@ pub fn dual_kernel_policy_snapshot() -> DualKernelPolicySnapshot {
         addmul_min_total: policy.addmul_min_total,
         addmul_max_total: policy.addmul_max_total,
         max_lane_ratio: policy.max_lane_ratio,
+    }
+}
+
+/// Returns a deterministic snapshot of active profile-pack manifest and policy selection.
+#[must_use]
+pub fn gf256_profile_pack_manifest_snapshot() -> Gf256ProfilePackManifestSnapshot {
+    let active_policy = dual_kernel_policy_snapshot();
+    Gf256ProfilePackManifestSnapshot {
+        schema_version: GF256_PROFILE_PACK_MANIFEST_SCHEMA_VERSION,
+        active_profile_metadata: profile_pack_metadata(active_policy.profile_pack),
+        active_selected_tuning_candidate: tuning_candidate_metadata(
+            active_policy.selected_tuning_candidate_id,
+        ),
+        profile_pack_catalog: gf256_profile_pack_catalog(),
+        tuning_candidate_catalog: gf256_tuning_candidate_catalog(),
+        active_policy,
     }
 }
 
@@ -2844,6 +2884,56 @@ mod tests {
         if let Some(reason) = snapshot.fallback_reason {
             assert!(!reason.as_str().is_empty());
         }
+    }
+
+    #[test]
+    fn profile_pack_manifest_snapshot_debug_clone_copy_eq() {
+        let manifest = gf256_profile_pack_manifest_snapshot();
+        let copied = manifest;
+        let cloned = manifest;
+        assert_eq!(copied, cloned);
+        let dbg = format!("{manifest:?}");
+        assert!(dbg.contains("Gf256ProfilePackManifestSnapshot"));
+    }
+
+    #[test]
+    fn profile_pack_manifest_snapshot_is_deterministic_and_self_consistent() {
+        let manifest = gf256_profile_pack_manifest_snapshot();
+        let policy = manifest.active_policy;
+        assert_eq!(
+            manifest.schema_version,
+            GF256_PROFILE_PACK_MANIFEST_SCHEMA_VERSION
+        );
+        assert_eq!(policy.profile_schema_version, GF256_PROFILE_PACK_SCHEMA_VERSION);
+        assert_eq!(
+            manifest.active_profile_metadata.profile_pack,
+            policy.profile_pack
+        );
+        assert_eq!(
+            manifest.active_profile_metadata.architecture_class,
+            policy.architecture_class
+        );
+        assert_eq!(
+            manifest.active_profile_metadata.selected_tuning_candidate_id,
+            policy.selected_tuning_candidate_id
+        );
+        assert_eq!(
+            manifest.active_profile_metadata.rejected_tuning_candidate_ids,
+            policy.rejected_tuning_candidate_ids
+        );
+        assert!(
+            manifest
+                .profile_pack_catalog
+                .iter()
+                .any(|metadata| metadata.profile_pack == policy.profile_pack)
+        );
+        let selected = manifest
+            .active_selected_tuning_candidate
+            .expect("selected tuning candidate must exist in deterministic catalog");
+        assert_eq!(selected.candidate_id, policy.selected_tuning_candidate_id);
+        assert_eq!(selected.profile_pack, policy.profile_pack);
+        assert!(manifest.profile_pack_catalog.len() >= 3);
+        assert!(manifest.tuning_candidate_catalog.len() >= 3);
     }
 
     #[test]

@@ -18,8 +18,8 @@ mod common;
 
 use asupersync::raptorq::decoder::{DecodeStats, InactivationDecoder, ReceivedSymbol};
 use asupersync::raptorq::regression::{
-    emit_regression_log, RegressionMonitor, RegressionReport, RegressionVerdict, G8_REPLAY_REF,
-    G8_SCHEMA_VERSION,
+    G8_REPLAY_REF, G8_SCHEMA_VERSION, RegressionMonitor, RegressionReport, RegressionVerdict,
+    emit_regression_log,
 };
 use asupersync::raptorq::systematic::SystematicEncoder;
 use asupersync::util::DetRng;
