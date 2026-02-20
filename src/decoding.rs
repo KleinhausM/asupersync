@@ -678,7 +678,7 @@ fn decode_block(
 
     let decoder = InactivationDecoder::new(k, symbol_size, block_seed);
     let padding_rows = params.k_prime.saturating_sub(k);
-    
+
     // 1. Start with constraint symbols (LDPC + HDPC)
     let mut received = decoder.constraint_symbols();
     received.reserve(symbols.len() + padding_rows);
@@ -796,8 +796,6 @@ fn decode_block(
 
     Ok(decoded_symbols)
 }
-
-
 
 fn seed_for_block(object_id: ObjectId, sbn: u8) -> u64 {
     seed_for(object_id, sbn, 0)

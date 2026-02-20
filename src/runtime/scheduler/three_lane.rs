@@ -714,14 +714,12 @@ impl ThreeLaneScheduler {
             self.inject_global_ready_checked(task, priority);
             trace!(
                 ?task,
-                priority,
-                "inject_ready: task injected into global ready queue"
+                priority, "inject_ready: task injected into global ready queue"
             );
         } else {
             trace!(
                 ?task,
-                priority,
-                "inject_ready: task NOT scheduled (should_schedule=false)"
+                priority, "inject_ready: task NOT scheduled (should_schedule=false)"
             );
         }
     }
