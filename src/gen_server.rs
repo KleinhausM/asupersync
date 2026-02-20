@@ -856,7 +856,7 @@ impl<S: GenServer> GenServerHandle<S> {
             return Err(CallError::ServerStopped);
         }
 
-        let (reply_tx, reply_rx) = session::tracked_oneshot::<S::Reply>();
+        let (reply_tx, mut reply_rx) = session::tracked_oneshot::<S::Reply>();
         let reply_permit = reply_tx.reserve(cx);
         let envelope = Envelope::Call {
             request,
@@ -1064,7 +1064,7 @@ impl<S: GenServer> GenServerHandle<S> {
     }
 
     /// Wait for the server to finish and return its final state.
-    pub async fn join(&self, cx: &Cx) -> Result<S, JoinError> {
+    pub async fn join(&mut self, cx: &Cx) -> Result<S, JoinError> {
         self.receiver.recv(cx).await.unwrap_or_else(|_| {
             let reason = cx
                 .cancel_reason()
@@ -1122,7 +1122,7 @@ impl<S: GenServer> GenServerRef<S> {
             return Err(CallError::ServerStopped);
         }
 
-        let (reply_tx, reply_rx) = session::tracked_oneshot::<S::Reply>();
+        let (reply_tx, mut reply_rx) = session::tracked_oneshot::<S::Reply>();
         let reply_permit = reply_tx.reserve(cx);
         let envelope = Envelope::Call {
             request,
@@ -2018,7 +2018,7 @@ mod tests {
         runtime.state.store_spawned_task(server_task_id, stored);
 
         let server_ref = handle.server_ref();
-        let (client_handle, client_stored) = scope
+        let (mut client_handle, client_stored) = scope
             .spawn(&mut runtime.state, &cx, move |cx| async move {
                 server_ref.call(&cx, CounterCall::Add(5)).await.unwrap()
             })
@@ -2059,7 +2059,7 @@ mod tests {
         let client_cx_cell: Arc<Mutex<Option<Cx>>> = Arc::new(Mutex::new(None));
         let client_cx_cell_for_task = Arc::clone(&client_cx_cell);
 
-        let (client_handle, client_stored) = scope
+        let (mut client_handle, client_stored) = scope
             .spawn(&mut runtime.state, &cx, move |cx| async move {
                 *client_cx_cell_for_task.lock().unwrap() = Some(cx.clone());
                 server_ref.call(&cx, CounterCall::Get).await
@@ -2179,7 +2179,7 @@ mod tests {
         let client_cx_cell: Arc<Mutex<Option<Cx>>> = Arc::new(Mutex::new(None));
         let client_cx_cell_for_task = Arc::clone(&client_cx_cell);
 
-        let (client_handle, client_stored) = scope
+        let (mut client_handle, client_stored) = scope
             .spawn(&mut runtime.state, &cx, move |cx| async move {
                 *client_cx_cell_for_task.lock().unwrap() = Some(cx.clone());
                 server_ref.cast(&cx, CounterCast::Reset).await

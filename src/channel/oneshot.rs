@@ -369,9 +369,16 @@ impl<T> Drop for SendPermit<T> {
 
 /// Future returned by [`Receiver::recv`].
 pub struct RecvFuture<'a, T> {
-    receiver: &'a mut Receiver<T>,
+    receiver: &'a Receiver<T>,
     cx: &'a Cx,
     waiter_id: Option<u64>,
+}
+
+impl<T> RecvFuture<'_, T> {
+    #[must_use]
+    pub(crate) fn receiver_finished(&self) -> bool {
+        self.receiver.is_ready() || self.receiver.is_closed()
+    }
 }
 
 impl<T> Future for RecvFuture<'_, T> {
@@ -480,7 +487,7 @@ impl<T> Receiver<T> {
     ///
     /// Returns `Err(RecvError::Closed)` if the sender was dropped without sending.
     #[must_use]
-    pub fn recv<'a>(&'a mut self, cx: &'a Cx) -> RecvFuture<'a, T> {
+    pub fn recv<'a>(&'a self, cx: &'a Cx) -> RecvFuture<'a, T> {
         RecvFuture {
             receiver: self,
             cx,
@@ -494,7 +501,7 @@ impl<T> Receiver<T> {
     ///
     /// - `TryRecvError::Empty` if no value is available yet but sender exists
     /// - `TryRecvError::Closed` if the sender was dropped without sending
-    pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let mut inner = self.inner.lock();
 
         if let Some(value) = inner.value.take() {
