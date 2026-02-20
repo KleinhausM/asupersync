@@ -290,11 +290,11 @@ impl Events {
 
     /// Pushes an event.
     ///
-    /// Events beyond capacity are silently dropped to prevent unbounded growth.
+    /// The container will grow if necessary. Capacity limits should be enforced
+    /// by the reactor's poll batch size, not by dropping events here (which
+    /// would be fatal for edge-triggered notifications).
     pub(crate) fn push(&mut self, event: Event) {
-        if self.inner.len() < self.capacity {
-            self.inner.push(event);
-        }
+        self.inner.push(event);
     }
 
     /// Returns the number of events.
@@ -884,32 +884,34 @@ mod tests {
     }
 
     #[test]
-    fn events_capacity_limit_respected() {
-        init_test("events_capacity_limit_respected");
+    fn events_grow_beyond_capacity() {
+        init_test("events_grow_beyond_capacity");
         let mut events = Events::with_capacity(3);
         events.push(Event::readable(Token::new(1)));
         events.push(Event::readable(Token::new(2)));
         events.push(Event::readable(Token::new(3)));
-        // This should be silently dropped
+        // These should be retained (growing the vector)
         events.push(Event::readable(Token::new(4)));
         events.push(Event::readable(Token::new(5)));
 
-        crate::assert_with_log!(events.len() == 3, "len capped", 3usize, events.len());
+        crate::assert_with_log!(events.len() == 5, "len grew", 5usize, events.len());
+        
+        // Capacity might be larger due to Vec growth strategy
         crate::assert_with_log!(
             events.capacity() == 3,
-            "capacity",
+            "target capacity field remains unchanged",
             3usize,
             events.capacity()
         );
 
         let tokens: Vec<usize> = events.iter().map(|e| e.token.0).collect();
         crate::assert_with_log!(
-            tokens == vec![1, 2, 3],
-            "tokens retained",
-            vec![1, 2, 3],
+            tokens == vec![1, 2, 3, 4, 5],
+            "all tokens retained",
+            vec![1, 2, 3, 4, 5],
             tokens
         );
-        crate::test_complete!("events_capacity_limit_respected");
+        crate::test_complete!("events_grow_beyond_capacity");
     }
 
     #[test]

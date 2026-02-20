@@ -50,6 +50,7 @@ where
         pos: 0,
         cap: 0,
         total: 0,
+        yield_counter: 0,
     }
 }
 
@@ -62,6 +63,7 @@ pub struct Copy<'a, R: ?Sized, W: ?Sized> {
     pos: usize,
     cap: usize,
     total: u64,
+    yield_counter: u8,
 }
 
 impl<R, W> Future for Copy<'_, R, W>
@@ -75,6 +77,13 @@ where
         let this = self.get_mut();
 
         loop {
+            if this.yield_counter > 32 {
+                this.yield_counter = 0;
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            this.yield_counter += 1;
+
             // If we have buffered data, write it
             if this.pos < this.cap {
                 match Pin::new(&mut *this.writer).poll_write(cx, &this.buf[this.pos..this.cap]) {
@@ -175,6 +184,7 @@ where
         reader,
         writer,
         total: 0,
+        yield_counter: 0,
     }
 }
 
@@ -183,6 +193,7 @@ pub struct CopyBuf<'a, R: ?Sized, W: ?Sized> {
     reader: &'a mut R,
     writer: &'a mut W,
     total: u64,
+    yield_counter: u8,
 }
 
 impl<R, W> Future for CopyBuf<'_, R, W>
@@ -196,6 +207,13 @@ where
         let this = self.get_mut();
 
         loop {
+            if this.yield_counter > 32 {
+                this.yield_counter = 0;
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            this.yield_counter += 1;
+
             let buf = match Pin::new(&mut *this.reader).poll_fill_buf(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
@@ -259,6 +277,7 @@ where
         pos: 0,
         cap: 0,
         total: 0,
+        yield_counter: 0,
     }
 }
 
@@ -272,6 +291,7 @@ pub struct CopyWithProgress<'a, R: ?Sized, W: ?Sized, F> {
     pos: usize,
     cap: usize,
     total: u64,
+    yield_counter: u8,
 }
 
 impl<R, W, F> Future for CopyWithProgress<'_, R, W, F>
@@ -286,6 +306,13 @@ where
         let this = self.get_mut();
 
         loop {
+            if this.yield_counter > 32 {
+                this.yield_counter = 0;
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            this.yield_counter += 1;
+
             // If we have buffered data, write it
             if this.pos < this.cap {
                 match Pin::new(&mut *this.writer).poll_write(cx, &this.buf[this.pos..this.cap]) {
@@ -363,6 +390,7 @@ where
         b_to_a: TransferState::default(),
         a_to_b_total: 0,
         b_to_a_total: 0,
+        steps: 0,
     }
 }
 
@@ -385,7 +413,10 @@ pub struct CopyBidirectional<'a, A: ?Sized, B: ?Sized> {
     b_to_a: TransferState,
     a_to_b_total: u64,
     b_to_a_total: u64,
+    steps: usize,
 }
+
+const YIELD_BUDGET: usize = 64;
 
 /// Result of a single transfer step.
 enum TransferResult {
@@ -528,6 +559,13 @@ where
 
         // Poll both directions, interleaved, until both block or are done
         loop {
+            // Check yield budget to prevent starvation
+            if this.steps >= YIELD_BUDGET {
+                this.steps = 0;
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+
             let mut made_progress = false;
 
             // Step A->B
@@ -544,7 +582,9 @@ where
                 TransferResult::Done | TransferResult::Pending => {}
             }
 
-            if !made_progress {
+            if made_progress {
+                this.steps += 1;
+            } else {
                 // Check if both are done (read complete, buffer flushed, AND shutdown complete)
                 let a_to_b_done = this.a_to_b.read_done
                     && this.a_to_b.pos >= this.a_to_b.cap
@@ -894,5 +934,69 @@ mod tests {
         crate::assert_with_log!(a_shut, "a shutdown done", true, a_shut);
         crate::assert_with_log!(b_shut, "b shutdown done", true, b_shut);
         crate::test_complete!("copy_bidirectional_waits_for_shutdown_completion");
+    }
+
+    #[test]
+    fn copy_bidirectional_yields_on_fast_streams() {
+        init_test("copy_bidirectional_yields_on_fast_streams");
+        
+        // Use an infinitely fast, infinite stream.
+        struct InfiniteStream;
+        impl AsyncRead for InfiniteStream {
+            fn poll_read(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+                let space = buf.remaining();
+                let zeros = vec![0u8; space];
+                buf.put_slice(&zeros);
+                Poll::Ready(Ok(()))
+            }
+        }
+        impl AsyncWrite for InfiniteStream {
+            fn poll_write(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+                Poll::Ready(Ok(buf.len()))
+            }
+            fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> { Poll::Ready(Ok(())) }
+            fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> { Poll::Ready(Ok(())) }
+        }
+
+        let mut a = InfiniteStream;
+        let mut b = InfiniteStream;
+        let mut fut = copy_bidirectional(&mut a, &mut b);
+        let mut fut = Pin::new(&mut fut);
+        
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // Run poll() in a thread with timeout to detect infinite loop
+        let (tx, rx) = std::sync::mpsc::channel();
+        
+        // We need to move `fut` into the thread, but `Pin` makes it tricky.
+        // Actually, since `InfiniteStream` is ZST and `CopyBidirectional` owns `&mut`, 
+        // passing `&mut a` across thread boundary is hard.
+        // But we can just use `std::thread::scope` or rely on `poll` returning quickly.
+        // Or construct the future inside the thread? But `copy_bidirectional` takes lifetimes.
+        
+        // Let's just construct everything inside the thread.
+        std::thread::spawn(move || {
+            let mut a = InfiniteStream;
+            let mut b = InfiniteStream;
+            let mut fut = copy_bidirectional(&mut a, &mut b);
+            let mut fut = Pin::new(&mut fut);
+            
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            
+            // Should return Pending eventually due to yield
+            let _ = fut.poll(&mut cx);
+            tx.send(true).unwrap();
+        });
+
+        // Wait up to 100ms. If it loops forever, we timeout.
+        let result = rx.recv_timeout(std::time::Duration::from_millis(100));
+        
+        if result.is_err() {
+            panic!("copy_bidirectional failed to yield (infinite loop)");
+        }
+        
+        crate::test_complete!("copy_bidirectional_yields_on_fast_streams");
     }
 }

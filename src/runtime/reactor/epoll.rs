@@ -382,7 +382,14 @@ impl Reactor for EpollReactor {
         let requested_capacity =
             NonZeroUsize::new(events.capacity().max(1)).expect("capacity >= 1");
         let mut poll_events = self.poll_events.lock();
-        if poll_events.capacity().get() < requested_capacity.get() {
+        
+        let current = poll_events.capacity().get();
+        let target = requested_capacity.get();
+
+        // Resize if too small OR significantly too large (hysteresis to prevent thrashing).
+        // If we strictly enforced equality, allocators rounding up (e.g. 60 -> 64)
+        // would cause reallocation on every poll.
+        if current < target || current >= target * 4 {
             *poll_events = PollEvents::with_capacity(requested_capacity);
         } else {
             poll_events.clear();

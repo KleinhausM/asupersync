@@ -1956,6 +1956,7 @@ impl ThreeLaneWorker {
                 Waker::from(Arc::new(ThreeLaneLocalWaker {
                     task_id,
                     wake_state: Arc::clone(&wake_state),
+                    local: Arc::clone(&self.local),
                     local_ready: Arc::clone(&self.local_ready),
                     parker: self.parker.clone(),
                     cx_inner: weak_inner,
@@ -1967,6 +1968,7 @@ impl ThreeLaneWorker {
                     global: Arc::clone(&self.global),
                     coordinator: Arc::clone(&self.coordinator),
                     priority,
+                    cx_inner: weak_inner,
                 }))
             }
         };
@@ -2258,13 +2260,33 @@ struct ThreeLaneWaker {
     /// Cached priority to avoid `Weak::upgrade` + `RwLock::read` on every wake.
     /// Safe because `budget.priority` is immutable after task creation.
     priority: u8,
+    cx_inner: Weak<RwLock<CxInner>>,
 }
 
 impl ThreeLaneWaker {
     #[inline]
     fn schedule(&self) {
         if self.wake_state.notify() {
-            self.global.inject_ready(self.task_id, self.priority);
+            // Check for cancellation to route to correct lane (cancel > ready).
+            // This ensures "Losers are drained" with high priority even during I/O wakeups.
+            let mut priority = self.priority;
+            let mut is_cancelling = false;
+
+            if let Some(inner) = self.cx_inner.upgrade() {
+                let guard = inner.read();
+                if guard.cancel_requested {
+                    is_cancelling = true;
+                    if let Some(reason) = &guard.cancel_reason {
+                        priority = reason.cleanup_budget().priority;
+                    }
+                }
+            }
+
+            if is_cancelling {
+                self.global.inject_cancel(self.task_id, priority);
+            } else {
+                self.global.inject_ready(self.task_id, priority);
+            }
             self.coordinator.wake_one();
         }
     }
@@ -2285,6 +2307,7 @@ impl Wake for ThreeLaneWaker {
 struct ThreeLaneLocalWaker {
     task_id: TaskId,
     wake_state: Arc<crate::record::task::TaskWakeState>,
+    local: Arc<Mutex<PriorityScheduler>>,
     local_ready: Arc<LocalReadyQueue>,
     parker: Parker,
     cx_inner: Weak<RwLock<CxInner>>,
@@ -2294,11 +2317,34 @@ impl ThreeLaneLocalWaker {
     #[inline]
     fn schedule(&self) {
         if self.wake_state.notify() {
-            // Fast path: push to non-stealable local_ready queue via TLS.
-            if !schedule_local_task(self.task_id) {
-                // Cross-thread wake: push to the owner's non-stealable local_ready queue.
-                // Local tasks must never enter stealable structures.
-                self.local_ready.lock().push(self.task_id);
+            let mut is_cancelling = false;
+            let mut priority = 0;
+
+            if let Some(inner) = self.cx_inner.upgrade() {
+                let guard = inner.read();
+                if guard.cancel_requested {
+                    is_cancelling = true;
+                    if let Some(reason) = &guard.cancel_reason {
+                        priority = reason.cleanup_budget().priority;
+                    }
+                }
+            }
+
+            if is_cancelling {
+                // Route to local cancel lane (PriorityScheduler).
+                // Note: We don't need to remove from local_ready because it's not there yet
+                // (we are waking it). However, if it WAS in local_ready (rare race),
+                // PriorityScheduler::move_to_cancel_lane doesn't check local_ready.
+                // But since we successfully notified (state transition Idle->Notified),
+                // it shouldn't be in any queue unless logic is buggy.
+                let mut local = self.local.lock();
+                local.move_to_cancel_lane(self.task_id, priority);
+            } else {
+                // Fast path: push to non-stealable local_ready queue via TLS.
+                if !schedule_local_task(self.task_id) {
+                    // Cross-thread wake: push to the owner's non-stealable local_ready queue.
+                    self.local_ready.lock().push(self.task_id);
+                }
             }
             self.parker.unpark();
         }
@@ -4623,7 +4669,6 @@ mod tests {
         let waker = Waker::from(Arc::new(ThreeLaneLocalWaker {
             task_id,
             wake_state: Arc::clone(&wake_state),
-            local: Arc::clone(&priority_sched),
             local_ready: Arc::clone(&local_ready),
             parker,
             cx_inner: Weak::new(),
@@ -4654,7 +4699,6 @@ mod tests {
         // the owner's local_ready Arc directly.
         let task_id = TaskId::new_for_test(1, 1);
         let wake_state = Arc::new(crate::record::task::TaskWakeState::new());
-        let priority_sched = Arc::new(Mutex::new(PriorityScheduler::new()));
         let parker = Parker::new();
 
         let local_ready = Arc::new(LocalReadyQueue::new(Vec::new()));
@@ -4662,7 +4706,6 @@ mod tests {
         let waker = Waker::from(Arc::new(ThreeLaneLocalWaker {
             task_id,
             wake_state: Arc::clone(&wake_state),
-            local: Arc::clone(&priority_sched),
             local_ready: Arc::clone(&local_ready),
             parker,
             cx_inner: Weak::new(),
