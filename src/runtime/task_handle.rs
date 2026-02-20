@@ -124,7 +124,7 @@ impl<T> TaskHandle<T> {
     /// }
     /// ```
     #[must_use]
-    pub fn join<'a>(&'a mut self, cx: &'a Cx) -> JoinFuture<'a, T> {
+    pub fn join<'a>(&'a self, cx: &'a Cx) -> JoinFuture<'a, T> {
         let cx_inner = self.inner.clone();
         JoinFuture {
             inner: self.receiver.recv(cx),
@@ -142,7 +142,7 @@ impl<T> TaskHandle<T> {
     /// to "losing the race".
     #[must_use]
     pub fn join_with_drop_reason<'a>(
-        &'a mut self,
+        &'a self,
         cx: &'a Cx,
         reason: CancelReason,
     ) -> JoinFuture<'a, T> {
@@ -162,7 +162,7 @@ impl<T> TaskHandle<T> {
     /// - `Ok(Some(result))` if the task has completed
     /// - `Ok(None)` if the task is still running
     /// - `Err(JoinError)` if the task was cancelled or panicked
-    pub fn try_join(&mut self) -> Result<Option<T>, JoinError> {
+    pub fn try_join(&self) -> Result<Option<T>, JoinError> {
         match self.receiver.try_recv() {
             Ok(result) => Ok(Some(result?)),
             Err(oneshot::TryRecvError::Empty) => Ok(None),
