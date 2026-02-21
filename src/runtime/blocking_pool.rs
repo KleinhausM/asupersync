@@ -665,9 +665,11 @@ fn maybe_spawn_thread_on_inner(inner: &Arc<BlockingPoolInner>) {
 
     // Spawn a new thread if:
     // 1. We're below max_threads
-    // 2. All threads are busy
-    // 3. There's pending work
-    if active < inner.max_threads && busy >= active && pending > 0 {
+    // 2. The number of pending tasks exceeds the number of idle threads
+    //    (idle = active - busy). This handles bursts of tasks correctly
+    //    even before threads have woken up to increment `busy_threads`.
+    let idle = active.saturating_sub(busy);
+    if active < inner.max_threads && pending > idle {
         spawn_thread_on_inner(inner);
     }
 }

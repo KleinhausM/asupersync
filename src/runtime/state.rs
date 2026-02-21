@@ -850,7 +850,7 @@ impl RuntimeState {
         use crate::channel::oneshot;
 
         // Create oneshot channel for the result
-        let (result_tx, result_rx) =
+        let (result_tx, mut result_rx) =
             oneshot::channel::<Result<T, crate::runtime::task_handle::JoinError>>();
 
         // Create the TaskRecord
@@ -1805,8 +1805,8 @@ impl RuntimeState {
         &self,
         region_id: RegionId,
     ) -> Vec<CancelRegionNode> {
-        let mut result = Vec::with_capacity(self.regions_len());
-        let mut stack = Vec::with_capacity(self.regions_len());
+        let mut result = Vec::new();
+        let mut stack = Vec::new();
         let mut child_buf = Vec::new();
         stack.push((region_id, None, 0usize));
 

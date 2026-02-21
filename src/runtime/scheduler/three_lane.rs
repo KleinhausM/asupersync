@@ -1640,7 +1640,7 @@ impl ThreeLaneWorker {
 
                     // Push remaining stolen tasks to our fast queue
                     if stolen_count > 1 {
-                        for &(task, _priority) in self.steal_buffer.iter().skip(1) {
+                        for &(task, _priority) in self.steal_buffer[1..].iter().rev() {
                             self.fast_queue.push(task);
                         }
                     }
@@ -1973,15 +1973,15 @@ impl ThreeLaneWorker {
                 (w, priority)
             })
         };
-        let poll_result = {
-            let mut cx = Context::from_waker(&waker);
-            stored.poll(&mut cx)
-        };
-
         let mut guard = TaskExecutionGuard {
             worker: self,
             task_id,
             completed: false,
+        };
+
+        let poll_result = {
+            let mut cx = Context::from_waker(&waker);
+            stored.poll(&mut cx)
         };
 
         match poll_result {

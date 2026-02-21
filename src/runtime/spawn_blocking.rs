@@ -393,9 +393,9 @@ mod tests {
                 2
             });
 
-            // Note: awaiting is sequential, but the operations run in parallel threads.
-            let r1 = h1.await;
-            let r2 = h2.await;
+            // Since `spawn_blocking` is lazy, we must poll them concurrently
+            // to actually run the background threads in parallel.
+            let (r1, r2) = future::zip(h1, h2).await;
 
             let count = counter.load(Ordering::Relaxed);
             crate::assert_with_log!(count == 2, "both completed", 2u32, count);

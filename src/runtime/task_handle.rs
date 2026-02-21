@@ -256,9 +256,17 @@ impl<T> std::future::Future for JoinFuture<'_, T> {
                 this.completed = true;
                 std::task::Poll::Ready(res)
             }
-            std::task::Poll::Ready(Err(_)) => {
+            std::task::Poll::Ready(Err(e)) => {
                 this.completed = true;
-                std::task::Poll::Ready(Err(JoinError::Cancelled(this.closed_reason())))
+                let reason = match e {
+                    crate::channel::oneshot::RecvError::Closed => this.closed_reason(),
+                    crate::channel::oneshot::RecvError::Cancelled => {
+                        let r = CancelReason::user("join cancelled by caller");
+                        this.abort_with_reason(r.clone());
+                        r
+                    }
+                };
+                std::task::Poll::Ready(Err(JoinError::Cancelled(reason)))
             }
             std::task::Poll::Pending => std::task::Poll::Pending,
         }
@@ -328,7 +336,7 @@ mod tests {
         crate::test_section!("setup");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(1, 0));
-        let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
 
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
         crate::assert_with_log!(
@@ -362,7 +370,7 @@ mod tests {
         crate::test_section!("setup");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(1, 0));
-        let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
 
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
 
@@ -395,7 +403,7 @@ mod tests {
         init_test("join_closed_uses_cancel_reason");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(1, 0));
-        let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
 
         {
             let mut lock = cx.inner.write();
@@ -427,7 +435,7 @@ mod tests {
         crate::test_section!("setup");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(1, 0));
-        let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
 
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
 
@@ -495,7 +503,7 @@ mod tests {
         init_test("drop_join_does_not_abort_if_result_already_ready");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(9, 0));
-        let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
         tx.send(&cx, Ok::<i32, JoinError>(7))
             .expect("send should succeed");
 
@@ -526,7 +534,7 @@ mod tests {
         init_test("drop_join_does_not_abort_if_channel_already_closed");
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(10, 0));
-        let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
         drop(tx);
 
         let handle = TaskHandle::new(task_id, rx, std::sync::Arc::downgrade(&cx.inner));
@@ -597,7 +605,7 @@ mod tests {
     #[test]
     fn task_handle_debug() {
         let task_id = TaskId::from_arena(ArenaIndex::new(5, 0));
-        let (_tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (_tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
         let dbg = format!("{handle:?}");
         assert!(dbg.contains("TaskHandle"));
@@ -606,7 +614,7 @@ mod tests {
     #[test]
     fn try_join_not_ready() {
         let task_id = TaskId::from_arena(ArenaIndex::new(20, 0));
-        let (_tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (_tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
         let result = handle.try_join();
         assert!(matches!(result, Ok(None)));
@@ -616,7 +624,7 @@ mod tests {
     fn try_join_ready() {
         let cx = test_cx();
         let task_id = TaskId::from_arena(ArenaIndex::new(21, 0));
-        let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
         tx.send(&cx, Ok(99)).expect("send");
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
         let result = handle.try_join();
@@ -626,7 +634,7 @@ mod tests {
     #[test]
     fn try_join_closed_channel() {
         let task_id = TaskId::from_arena(ArenaIndex::new(22, 0));
-        let (tx, rx) = oneshot::channel::<Result<i32, JoinError>>();
+        let (tx, mut rx) = oneshot::channel::<Result<i32, JoinError>>();
         drop(tx);
         let handle = TaskHandle::new(task_id, rx, std::sync::Weak::new());
         let result = handle.try_join();
