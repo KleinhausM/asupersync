@@ -27,6 +27,7 @@ static START_TIME: OnceLock<Instant> = OnceLock::new();
 #[derive(Debug)]
 struct FallbackThread {
     stop: Arc<AtomicBool>,
+    completed: Arc<AtomicBool>,
     thread: std::thread::Thread,
     join: std::thread::JoinHandle<()>,
 }
@@ -36,22 +37,46 @@ fn request_stop_fallback(fallback: &FallbackThread) {
     fallback.thread.unpark();
 }
 
-fn take_finished_fallback(state: &mut SleepState) -> Option<std::thread::JoinHandle<()>> {
-    let finished = state
+fn take_finished_fallbacks(state: &mut SleepState) -> Vec<std::thread::JoinHandle<()>> {
+    let mut finished = Vec::new();
+
+    // Move logically completed but not yet fully exited threads to zombies
+    if state
         .fallback
         .as_ref()
-        .is_some_and(|fallback| fallback.join.is_finished());
-    if finished {
-        Some(
+        .is_some_and(|fallback| fallback.completed.load(Ordering::Acquire))
+    {
+        state.zombie_fallbacks.push(
+            state
+                .fallback
+                .take()
+                .expect("completed implies fallback exists")
+                .join,
+        );
+    } else if state
+        .fallback
+        .as_ref()
+        .is_some_and(|fallback| fallback.join.is_finished())
+    {
+        finished.push(
             state
                 .fallback
                 .take()
                 .expect("finished implies fallback exists")
                 .join,
-        )
-    } else {
-        None
+        );
     }
+    
+    let mut i = 0;
+    while i < state.zombie_fallbacks.len() {
+        if state.zombie_fallbacks[i].is_finished() {
+            finished.push(state.zombie_fallbacks.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    
+    finished
 }
 
 fn duration_to_nanos(duration: Duration) -> u64 {
@@ -82,6 +107,8 @@ struct SleepState {
     waker: Option<Waker>,
     /// Background timing thread used when no timer driver is present.
     fallback: Option<FallbackThread>,
+    /// Threads that have been asked to stop but haven't been joined yet.
+    zombie_fallbacks: Vec<std::thread::JoinHandle<()>>,
     /// Handle to the registered timer in the timer driver.
     timer_handle: Option<TimerHandle>,
     /// Timer driver used to register the current handle.
@@ -160,6 +187,7 @@ impl Sleep {
             state: Arc::new(Mutex::new(SleepState {
                 waker: None,
                 fallback: None,
+                zombie_fallbacks: Vec::new(),
                 timer_handle: None,
                 timer_driver: None,
             })),
@@ -207,6 +235,7 @@ impl Sleep {
             state: Arc::new(Mutex::new(SleepState {
                 waker: None,
                 fallback: None,
+                zombie_fallbacks: Vec::new(),
                 timer_handle: None,
                 timer_driver: None,
             })),
@@ -253,20 +282,21 @@ impl Sleep {
     pub fn reset(&mut self, deadline: Time) {
         self.deadline = deadline;
         self.polled.set(false);
-        let (handle, driver, fallback_handle) = {
+        let (handle, driver, mut fallback_handles) = {
             let mut state = self.state.lock();
-            let fallback_handle = state.fallback.take().map(|fallback| {
+            let mut handles = std::mem::take(&mut state.zombie_fallbacks);
+            if let Some(fallback) = state.fallback.take() {
                 request_stop_fallback(&fallback);
-                fallback.join
-            });
+                handles.push(fallback.join);
+            }
             (
                 state.timer_handle.take(),
                 state.timer_driver.take(),
-                fallback_handle,
+                handles,
             )
         };
 
-        if let Some(handle) = fallback_handle {
+        for handle in fallback_handles {
             let _ = handle.join();
         }
 
@@ -288,20 +318,21 @@ impl Sleep {
     pub fn reset_after(&mut self, now: Time, duration: Duration) {
         self.deadline = now.saturating_add_nanos(duration_to_nanos(duration));
         self.polled.set(false);
-        let (handle, driver, fallback_handle) = {
+        let (handle, driver, mut fallback_handles) = {
             let mut state = self.state.lock();
-            let fallback_handle = state.fallback.take().map(|fallback| {
+            let mut handles = std::mem::take(&mut state.zombie_fallbacks);
+            if let Some(fallback) = state.fallback.take() {
                 request_stop_fallback(&fallback);
-                fallback.join
-            });
+                handles.push(fallback.join);
+            }
             (
                 state.timer_handle.take(),
                 state.timer_driver.take(),
-                fallback_handle,
+                handles,
             )
         };
 
-        if let Some(handle) = fallback_handle {
+        for handle in fallback_handles {
             let _ = handle.join();
         }
 
@@ -384,7 +415,7 @@ impl Future for Sleep {
                 }
 
                 let mut state = self.state.lock();
-                let finished_handle = take_finished_fallback(&mut state);
+                let finished_handles = take_finished_fallbacks(&mut state);
                 if !state
                     .waker
                     .as_ref()
@@ -397,8 +428,9 @@ impl Future for Sleep {
                 if let Some(timer) = timer_driver.as_ref() {
                     // If a fallback thread exists, request it stop. We don't join here
                     // (poll must not block); Drop/reset will join.
-                    if let Some(fallback) = state.fallback.as_ref() {
-                        request_stop_fallback(fallback);
+                    if let Some(fallback) = state.fallback.take() {
+                        request_stop_fallback(&fallback);
+                        state.zombie_fallbacks.push(fallback.join);
                     }
 
                     // If we switched drivers, cancel the old timer handle first.
@@ -487,6 +519,8 @@ impl Future for Sleep {
 
                         let stop = Arc::new(AtomicBool::new(false));
                         let stop_for_thread = Arc::clone(&stop);
+                        let completed = Arc::new(AtomicBool::new(false));
+                        let completed_for_thread = Arc::clone(&completed);
                         let handle = std::thread::spawn(move || {
                             // Allow prompt cancellation via `unpark()`.
                             let start = Instant::now();
@@ -507,10 +541,12 @@ impl Future for Sleep {
                             if let Some(waker) = state.waker.take() {
                                 waker.wake();
                             }
+                            completed_for_thread.store(true, Ordering::Release);
                         });
                         let thread = handle.thread().clone();
                         state.fallback = Some(FallbackThread {
                             stop,
+                            completed,
                             thread,
                             join: handle,
                         });
@@ -518,7 +554,7 @@ impl Future for Sleep {
                 }
 
                 drop(state);
-                if let Some(handle) = finished_handle {
+                for handle in finished_handles {
                     let _ = handle.join();
                 }
 
@@ -530,23 +566,24 @@ impl Future for Sleep {
 
 impl Drop for Sleep {
     fn drop(&mut self) {
-        let (handle, driver, fallback_handle) = {
+        let (handle, driver, mut fallback_handles) = {
             let mut state = self.state.lock();
             // Clear waker to release task reference immediately, preventing
             // unbounded lifetime extension if background thread is running.
             state.waker = None;
-            let fallback_handle = state.fallback.take().map(|fallback| {
+            let mut handles = std::mem::take(&mut state.zombie_fallbacks);
+            if let Some(fallback) = state.fallback.take() {
                 request_stop_fallback(&fallback);
-                fallback.join
-            });
+                handles.push(fallback.join);
+            }
             (
                 state.timer_handle.take(),
                 state.timer_driver.take(),
-                fallback_handle,
+                handles,
             )
         };
 
-        if let Some(handle) = fallback_handle {
+        for handle in fallback_handles {
             let _ = handle.join();
         }
 
@@ -571,6 +608,7 @@ impl Clone for Sleep {
             state: Arc::new(Mutex::new(SleepState {
                 waker: None,
                 fallback: None,
+                zombie_fallbacks: Vec::new(),
                 timer_handle: None, // Fresh clone has no timer registration
                 timer_driver: None,
             })),

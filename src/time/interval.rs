@@ -264,6 +264,7 @@ impl Interval {
     /// ```
     pub fn poll_tick(&mut self, now: Time) -> Option<Time> {
         if now >= self.deadline {
+            self.first_tick_done = true;
             let tick_time = self.deadline;
             self.advance_deadline(now);
             Some(tick_time)
@@ -295,18 +296,13 @@ impl Interval {
     /// assert_eq!(interval.tick(Time::from_secs(2)), Time::from_secs(2));
     /// ```
     pub fn tick(&mut self, now: Time) -> Time {
-        // For the first tick, if now < deadline, we still return deadline
-        // (the start time) so the first tick is immediate.
-        if !self.first_tick_done {
-            self.first_tick_done = true;
-            let tick_time = self.deadline;
-            self.deadline = self
-                .deadline
-                .saturating_add_nanos(duration_as_nanos_u64_saturating(self.period));
-            return tick_time;
+        // If we're called before the deadline, just return the deadline without advancing.
+        // This prevents consuming the tick prematurely or calculating incorrect delays.
+        if now < self.deadline {
+            return self.deadline;
         }
 
-        // Subsequent ticks: if we're past deadline, return it and advance
+        self.first_tick_done = true;
         let tick_time = self.deadline;
         self.advance_deadline(now);
         tick_time
