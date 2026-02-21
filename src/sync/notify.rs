@@ -351,8 +351,9 @@ impl Future for Notified<'_> {
 
                     if index < waiters.entries.len() {
                         if waiters.entries[index].notified {
-                            drop(waiters); // Release lock before cleanup.
-                            self.cleanup();
+                            waiters.remove(index);
+                            drop(waiters);
+                            self.waiter_index = None;
                             self.state = NotifiedState::Done;
                             return Poll::Ready(());
                         }
@@ -425,6 +426,7 @@ impl Drop for Notified<'_> {
                         if !entry.notified && entry.waker.is_some() {
                             entry.notified = true;
                             if let Some(waker) = entry.waker.take() {
+                                waiters.active -= 1;
                                 drop(waiters);
                                 waker.wake();
                                 return;

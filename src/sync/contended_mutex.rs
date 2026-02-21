@@ -170,13 +170,16 @@ mod inner {
                 Err(std::sync::TryLockError::WouldBlock) => {
                     Err(std::sync::TryLockError::WouldBlock)
                 }
-                Err(std::sync::TryLockError::Poisoned(poison)) => Err(
-                    std::sync::TryLockError::Poisoned(PoisonError::new(ContendedMutexGuard {
-                        guard: Some(poison.into_inner()),
-                        acquired_at: Instant::now(),
-                        metrics: &self.metrics,
-                    })),
-                ),
+                Err(std::sync::TryLockError::Poisoned(poison)) => {
+                    self.metrics.acquisitions.fetch_add(1, Ordering::Relaxed);
+                    Err(std::sync::TryLockError::Poisoned(PoisonError::new(
+                        ContendedMutexGuard {
+                            guard: Some(poison.into_inner()),
+                            acquired_at: Instant::now(),
+                            metrics: &self.metrics,
+                        },
+                    )))
+                }
             }
         }
 

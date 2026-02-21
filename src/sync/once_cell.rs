@@ -153,8 +153,8 @@ impl<T> OnceCell<T> {
                     let value = value_opt.take().expect("set value available");
                     let _ = self.value.set(value);
                     self.state.store(INITIALIZED, Ordering::Release);
-                    self.cvar.notify_all();
                     self.wake_all();
+                    self.cvar.notify_all();
                     return Ok(());
                 }
                 Err(INITIALIZED) => {
@@ -207,8 +207,8 @@ impl<T> OnceCell<T> {
                     self.state.store(INITIALIZED, Ordering::Release);
                     guard.completed = true;
                     drop(guard);
-                    self.cvar.notify_all();
                     self.wake_all();
+                    self.cvar.notify_all();
                     return self.value.get().expect("just initialized");
                 }
                 Err(INITIALIZED) => {
@@ -275,8 +275,8 @@ impl<T> OnceCell<T> {
                     guard.completed = true;
                     drop(guard); // Guard checks `completed` — won't reset state.
 
-                    self.cvar.notify_all();
                     self.wake_all();
+                    self.cvar.notify_all();
                     return self.value.get().expect("just initialized");
                 }
                 Err(INITIALIZED) => {
@@ -350,8 +350,8 @@ impl<T> OnceCell<T> {
                             guard.completed = true;
                             drop(guard); // Guard checks `completed` — won't reset state.
 
-                            self.cvar.notify_all();
                             self.wake_all();
+                            self.cvar.notify_all();
                             return Ok(self.value.get().expect("just initialized"));
                         }
                         Err(e) => {
@@ -410,11 +410,10 @@ impl<T> OnceCell<T> {
         };
 
         while self.state.load(Ordering::Acquire) == INITIALIZING {
-            let (new_guard, _) = self
+            guard = self
                 .cvar
-                .wait_timeout(guard, std::time::Duration::from_millis(10))
+                .wait(guard)
                 .expect("condvar wait failed");
-            guard = new_guard;
         }
         drop(guard);
     }
@@ -525,8 +524,8 @@ impl<T> Drop for InitGuard<'_, T> {
             // Reset state to allow another attempt.
             self.cell.state.store(UNINIT, Ordering::Release);
             // Wake all waiters so they can retry instead of hanging forever.
-            self.cell.cvar.notify_all();
             self.cell.wake_all();
+            self.cell.cvar.notify_all();
         }
     }
 }
@@ -549,6 +548,9 @@ impl<T> Future for WaitInit<'_, T> {
             if self.cell.state.load(Ordering::Acquire) == INITIALIZING {
                 Poll::Pending
             } else {
+                // Do not clear waiter_id here. If state changed after register_waker
+                // but before wake_all drained the queue, Drop must remove it to
+                // prevent memory leaks.
                 Poll::Ready(())
             }
         } else {

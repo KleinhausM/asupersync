@@ -779,16 +779,16 @@ struct GenericPoolState<R> {
 }
 
 /// Future that waits for a resource notification.
-struct WaitForNotification<'a, R, F>
+struct WaitForNotification<'a, 'b, R, F>
 where
     R: Send + 'static,
     F: AsyncResourceFactory<Resource = R>,
 {
     pool: &'a GenericPool<R, F>,
-    waiter_id: Option<u64>,
+    waiter_id: &'b mut Option<u64>,
 }
 
-impl<R, F> Future for WaitForNotification<'_, R, F>
+impl<R, F> Future for WaitForNotification<'_, '_, R, F>
 where
     R: Send + 'static,
     F: AsyncResourceFactory<Resource = R>,
@@ -796,10 +796,6 @@ where
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Drain the mpsc return channel first so idle/active counts
-        // reflect resources that were returned since the last poll.
-        // Without this, a resource sitting in the channel is invisible
-        // and the waiter would remain Pending even though a slot freed.
         self.pool.process_returns();
 
         let mut state = self.pool.state.lock();
@@ -808,23 +804,32 @@ where
             return Poll::Ready(());
         }
 
-        // If resources are available, we are ready.
         let total_including_creating = state.active + state.idle.len() + state.creating;
-        if !state.idle.is_empty() || total_including_creating < self.pool.config.max_size {
-            // If we were waiting, remove ourselves
-            if let Some(id) = self.waiter_id {
-                state.waiters.retain(|w| w.id != id);
+        let available = state.idle.len() + self.pool.config.max_size.saturating_sub(total_including_creating);
+
+        let position = match *self.waiter_id {
+            Some(id) => state.waiters.iter().position(|w| w.id == id),
+            None => {
+                if state.waiters.is_empty() {
+                    Some(0)
+                } else {
+                    Some(state.waiters.len())
+                }
             }
-            return Poll::Ready(());
+        };
+
+        if let Some(pos) = position {
+            if pos < available {
+                return Poll::Ready(());
+            }
         }
 
         // Single-pass: check if already queued and update waker, or register.
-        let found = self
-            .waiter_id
-            .and_then(|id| state.waiters.iter_mut().find(|w| w.id == id));
-        if let Some(w) = found {
-            if !w.waker.will_wake(cx.waker()) {
-                w.waker.clone_from(cx.waker());
+        if let Some(id) = *self.waiter_id {
+            if let Some(w) = state.waiters.iter_mut().find(|w| w.id == id) {
+                if !w.waker.will_wake(cx.waker()) {
+                    w.waker.clone_from(cx.waker());
+                }
             }
         } else {
             let id = state.next_waiter_id;
@@ -833,13 +838,10 @@ where
                 id,
                 waker: cx.waker().clone(),
             });
-            self.waiter_id = Some(id);
+            *self.waiter_id = Some(id);
         }
 
-        // Also register in the return_wakers list so that
-        // PooledResource::return_inner / discard_inner can wake us
-        // directly.  Without this, a return that arrives while no other
-        // code calls process_returns would leave us stuck until timeout.
+        // Also register in the return_wakers list
         {
             let mut wakers = self.pool.return_wakers.lock();
             let id = self.waiter_id.expect("waiter_id assigned above");
@@ -855,19 +857,6 @@ where
 
         drop(state);
         Poll::Pending
-    }
-}
-
-impl<R, F> Drop for WaitForNotification<'_, R, F>
-where
-    R: Send + 'static,
-    F: AsyncResourceFactory<Resource = R>,
-{
-    fn drop(&mut self) {
-        if let Some(id) = self.waiter_id {
-            self.pool.state.lock().waiters.retain(|w| w.id != id);
-            self.pool.return_wakers.lock().retain(|(wid, _)| *wid != id);
-        }
     }
 }
 
@@ -1141,16 +1130,21 @@ where
     /// pops an idle entry. If health-check rejects that entry we must undo
     /// those counters, and (when metrics are enabled) record a destroy event.
     fn reject_unhealthy_idle_resource(&self) {
-        let waiter = {
+        let waker = {
             let mut state = self.state.lock();
             state.active = state.active.saturating_sub(1);
             state.total_acquisitions = state.total_acquisitions.saturating_sub(1);
-            // A slot just freed up — wake one blocked acquirer so it can
-            // try to create or grab another idle resource.
-            state.waiters.pop_front()
+            
+            let total = state.active + state.idle.len() + state.creating;
+            let available = state.idle.len() + self.config.max_size.saturating_sub(total);
+            if available > 0 && available - 1 < state.waiters.len() {
+                Some(state.waiters[available - 1].waker.clone())
+            } else {
+                None
+            }
         };
-        if let Some(waiter) = waiter {
-            waiter.waker.wake();
+        if let Some(waker) = waker {
+            waker.wake();
         }
 
         #[cfg(feature = "metrics")]
@@ -1165,6 +1159,7 @@ where
     fn process_returns(&self) {
         let rx = self.return_rx.lock();
         let mut waiters_to_wake: SmallVec<[Waker; 4]> = SmallVec::new();
+        let mut wake_count = 0;
         while let Ok(ret) = rx.try_recv() {
             match ret {
                 PoolReturn::Return {
@@ -1178,25 +1173,17 @@ where
                         metrics.record_released(hold_duration);
                     }
 
-                    let waiter = {
-                        let mut state = self.state.lock();
-                        state.active = state.active.saturating_sub(1);
+                    let mut state = self.state.lock();
+                    state.active = state.active.saturating_sub(1);
 
-                        if state.closed {
-                            None
-                        } else {
-                            state.idle.push_back(IdleResource {
-                                resource,
-                                idle_since: Instant::now(),
-                                created_at,
-                            });
-                            state.waiters.pop_front()
-                        }
-                    };
-                    if let Some(waiter) = waiter {
-                        waiters_to_wake.push(waiter.waker);
+                    if !state.closed {
+                        state.idle.push_back(IdleResource {
+                            resource,
+                            idle_since: Instant::now(),
+                            created_at,
+                        });
+                        wake_count += 1;
                     }
-                    // If closed, just drop the resource
                 }
                 PoolReturn::Discard { hold_duration } => {
                     // Record metrics for the discard (destroyed as unhealthy)
@@ -1206,18 +1193,24 @@ where
                         metrics.record_destroyed(DestroyReason::Unhealthy);
                     }
 
-                    let waiter = {
-                        let mut state = self.state.lock();
-                        state.active = state.active.saturating_sub(1);
-                        state.waiters.pop_front()
-                    };
-                    if let Some(waiter) = waiter {
-                        waiters_to_wake.push(waiter.waker);
-                    }
+                    let mut state = self.state.lock();
+                    state.active = state.active.saturating_sub(1);
+                    wake_count += 1;
                 }
             }
         }
         drop(rx);
+        
+        if wake_count > 0 {
+            let state = self.state.lock();
+            let total = state.active + state.idle.len() + state.creating;
+            let available = state.idle.len() + self.config.max_size.saturating_sub(total);
+            let start = available.saturating_sub(wake_count);
+            for w in state.waiters.iter().skip(start).take(wake_count) {
+                waiters_to_wake.push(w.waker.clone());
+            }
+        }
+        
         for waker in waiters_to_wake {
             waker.wake();
         }
@@ -1234,6 +1227,8 @@ where
         #[cfg(feature = "metrics")]
         let mut max_lifetime_evictions = 0u64;
 
+        let before_len = state.idle.len();
+
         state.idle.retain(|idle| {
             let idle_ok = now.duration_since(idle.idle_since) < self.config.idle_timeout;
             let lifetime_ok = now.duration_since(idle.created_at) < self.config.max_lifetime;
@@ -1249,6 +1244,12 @@ where
 
             idle_ok && lifetime_ok
         });
+
+        let evictions = before_len - state.idle.len();
+        
+        // Evictions don't increase `available` window, so we don't need to wake anyone.
+        // The slot is just converted from idle to can_create, so the currently
+        // authorized task will just create instead of reusing.
 
         // Record eviction metrics
         #[cfg(feature = "metrics")]
@@ -1269,6 +1270,7 @@ where
             None
         };
         drop(state);
+
         result
     }
 
@@ -1291,13 +1293,19 @@ where
 
     /// Release an uncommitted creation slot and notify one waiter.
     fn release_create_slot(&self) {
-        let waiter = {
+        let waker = {
             let mut state = self.state.lock();
             state.creating = state.creating.saturating_sub(1);
-            state.waiters.pop_front()
+            let total = state.active + state.idle.len() + state.creating;
+            let available = state.idle.len() + self.config.max_size.saturating_sub(total);
+            if available > 0 && available - 1 < state.waiters.len() {
+                Some(state.waiters[available - 1].waker.clone())
+            } else {
+                None
+            }
         };
-        if let Some(waiter) = waiter {
-            waiter.waker.wake();
+        if let Some(waker) = waker {
+            waker.wake();
         }
     }
 
@@ -1314,7 +1322,7 @@ where
     /// Unlike `commit_create_slot`, this does NOT increment `active` or
     /// `total_acquisitions` — the resource goes straight to the idle queue.
     fn commit_create_slot_as_idle(&self, resource: R) {
-        let waiter = {
+        let waker = {
             let mut state = self.state.lock();
             state.creating = state.creating.saturating_sub(1);
             state.idle.push_back(IdleResource {
@@ -1323,11 +1331,18 @@ where
                 created_at: Instant::now(),
             });
             state.total_created += 1;
-            state.waiters.pop_front()
+            
+            let total = state.active + state.idle.len() + state.creating;
+            let available = state.idle.len() + self.config.max_size.saturating_sub(total);
+            if available > 0 && available - 1 < state.waiters.len() {
+                Some(state.waiters[available - 1].waker.clone())
+            } else {
+                None
+            }
         };
 
-        if let Some(waiter) = waiter {
-            waiter.waker.wake();
+        if let Some(waker) = waker {
+            waker.wake();
         }
     }
 
@@ -1409,6 +1424,58 @@ where
         Box::pin(async move {
             let acquire_start = Instant::now();
 
+            struct WaiterCleanup<'a, R, F>
+            where
+                R: Send + 'static,
+                F: AsyncResourceFactory<Resource = R>,
+            {
+                pool: &'a GenericPool<R, F>,
+                waiter_id: Option<u64>,
+            }
+
+            impl<R, F> Drop for WaiterCleanup<'_, R, F>
+            where
+                R: Send + 'static,
+                F: AsyncResourceFactory<Resource = R>,
+            {
+                fn drop(&mut self) {
+                    if let Some(id) = self.waiter_id {
+                        let waker = {
+                            let mut state = self.pool.state.lock();
+                            let pos = state.waiters.iter().position(|w| w.id == id);
+                            state.waiters.retain(|w| w.id != id);
+
+                            if !state.closed {
+                                let total_including_creating = state.active + state.idle.len() + state.creating;
+                                let available = state.idle.len() + self.pool.config.max_size.saturating_sub(total_including_creating);
+                                
+                                if let Some(p) = pos {
+                                    if p < available && available > 0 && available - 1 < state.waiters.len() {
+                                        Some(state.waiters[available - 1].waker.clone())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some(w) = waker {
+                            w.wake();
+                        }
+                        self.pool.return_wakers.lock().retain(|(wid, _)| *wid != id);
+                    }
+                }
+            }
+
+            let mut cleanup = WaiterCleanup {
+                pool: self,
+                waiter_id: None,
+            };
+
             loop {
                 // Process any pending returns
                 self.process_returns();
@@ -1423,6 +1490,13 @@ where
                     if self.config.health_check_on_acquire && !self.is_healthy(&resource) {
                         self.reject_unhealthy_idle_resource();
                         continue;
+                    }
+
+                    if let Some(id) = cleanup.waiter_id.take() {
+                        let mut state = self.state.lock();
+                        state.waiters.retain(|w| w.id != id);
+                        drop(state);
+                        self.return_wakers.lock().retain(|(wid, _)| *wid != id);
                     }
 
                     let acquire_duration = acquire_start.elapsed();
@@ -1444,6 +1518,13 @@ where
 
                 // Try to create a new resource if under capacity
                 if let Some(create_slot) = CreateSlotReservation::try_reserve(self) {
+                    if let Some(id) = cleanup.waiter_id.take() {
+                        let mut state = self.state.lock();
+                        state.waiters.retain(|w| w.id != id);
+                        drop(state);
+                        self.return_wakers.lock().retain(|(wid, _)| *wid != id);
+                    }
+
                     let resource = self.create_resource().await?;
                     create_slot.commit();
                     let acquire_duration = acquire_start.elapsed();
@@ -1479,7 +1560,7 @@ where
                 let wait_started = Instant::now();
                 WaitForNotification {
                     pool: self,
-                    waiter_id: None,
+                    waiter_id: &mut cleanup.waiter_id,
                 }
                 .await;
                 self.record_wait_time(wait_started.elapsed());

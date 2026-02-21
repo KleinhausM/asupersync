@@ -58,12 +58,13 @@
 
 use parking_lot::Mutex as ParkingMutex;
 use smallvec::SmallVec;
+use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use crate::cx::Cx;
@@ -172,9 +173,12 @@ struct Waiter {
 #[derive(Debug)]
 pub struct RwLock<T> {
     state: ParkingMutex<State>,
-    data: StdRwLock<T>,
+    data: UnsafeCell<T>,
     poisoned: AtomicBool,
 }
+
+unsafe impl<T: Send> Send for RwLock<T> {}
+unsafe impl<T: Send + Sync> Sync for RwLock<T> {}
 
 impl<T> RwLock<T> {
     /// Creates a new lock containing the given value.
@@ -182,7 +186,7 @@ impl<T> RwLock<T> {
     pub fn new(value: T) -> Self {
         Self {
             state: ParkingMutex::new(State::default()),
-            data: StdRwLock::new(value),
+            data: UnsafeCell::new(value),
             poisoned: AtomicBool::new(false),
         }
     }
@@ -194,7 +198,8 @@ impl<T> RwLock<T> {
     /// Panics if the lock is poisoned.
     #[must_use]
     pub fn into_inner(self) -> T {
-        self.data.into_inner().expect("rwlock poisoned")
+        assert!(!self.is_poisoned(), "rwlock poisoned");
+        self.data.into_inner()
     }
 }
 
@@ -221,19 +226,7 @@ impl<T> RwLock<T> {
     /// Tries to acquire a read guard without waiting.
     pub fn try_read(&self) -> Result<RwLockReadGuard<'_, T>, TryReadError> {
         self.try_acquire_read_state()?;
-
-        match self.data.read() {
-            Ok(guard) => Ok(RwLockReadGuard {
-                lock: self,
-                guard: Some(guard),
-            }),
-            Err(poisoned) => {
-                self.poisoned.store(true, Ordering::Release);
-                self.release_reader();
-                drop(poisoned.into_inner());
-                Err(TryReadError::Poisoned)
-            }
-        }
+        Ok(RwLockReadGuard { lock: self })
     }
 
     /// Acquires a write guard asynchronously, waiting if necessary.
@@ -252,19 +245,7 @@ impl<T> RwLock<T> {
     /// Tries to acquire a write guard without waiting.
     pub fn try_write(&self) -> Result<RwLockWriteGuard<'_, T>, TryWriteError> {
         self.try_acquire_write_state()?;
-
-        match self.data.write() {
-            Ok(guard) => Ok(RwLockWriteGuard {
-                lock: self,
-                guard: Some(guard),
-            }),
-            Err(poisoned) => {
-                self.poisoned.store(true, Ordering::Release);
-                self.release_writer();
-                drop(poisoned.into_inner());
-                Err(TryWriteError::Poisoned)
-            }
-        }
+        Ok(RwLockWriteGuard { lock: self })
     }
 
     /// Returns a mutable reference to the inner value.
@@ -273,7 +254,8 @@ impl<T> RwLock<T> {
     ///
     /// Panics if the lock is poisoned.
     pub fn get_mut(&mut self) -> &mut T {
-        self.data.get_mut().expect("rwlock poisoned")
+        assert!(!self.is_poisoned(), "rwlock poisoned");
+        self.data.get_mut()
     }
 
     #[inline]
@@ -361,28 +343,7 @@ impl<T> RwLock<T> {
     }
 }
 
-// Guards used during acquisition to restore counters if the underlying std lock panics.
-struct ReaderCountGuard<'a, T> {
-    lock: &'a RwLock<T>,
-}
-
-impl<T> Drop for ReaderCountGuard<'_, T> {
-    #[inline]
-    fn drop(&mut self) {
-        self.lock.release_reader();
-    }
-}
-
-struct WriterActiveGuard<'a, T> {
-    lock: &'a RwLock<T>,
-}
-
-impl<T> Drop for WriterActiveGuard<'_, T> {
-    #[inline]
-    fn drop(&mut self) {
-        self.lock.release_writer();
-    }
-}
+// Guards removed.
 
 /// Future returned by `RwLock::read`.
 pub struct ReadFuture<'a, 'b, T> {
@@ -409,27 +370,8 @@ impl<'a, T> Future for ReadFuture<'a, '_, T> {
         if !state.writer_active && state.writer_waiters == 0 {
             state.readers += 1;
             drop(state);
-
-            let guard = ReaderCountGuard { lock: self.lock };
-
-            let result = match self.lock.data.read() {
-                Ok(read_guard) => Poll::Ready(Ok(RwLockReadGuard {
-                    lock: self.lock,
-                    guard: Some(read_guard),
-                })),
-                Err(poisoned) => {
-                    self.lock.poisoned.store(true, Ordering::Release);
-                    // release_reader is called by guard drop
-                    drop(poisoned.into_inner());
-                    Poll::Ready(Err(RwLockError::Poisoned))
-                }
-            };
-
-            if matches!(&result, Poll::Ready(Ok(_))) {
-                std::mem::forget(guard);
-            }
-
-            return result;
+            self.waiter_id = None;
+            return Poll::Ready(Ok(RwLockReadGuard { lock: self.lock }));
         }
 
         if let Some(waiter_id) = self.waiter_id {
@@ -527,27 +469,7 @@ impl<'a, T> Future for WriteFuture<'a, '_, T> {
                 self.counted = false;
             }
             drop(state);
-
-            let guard = WriterActiveGuard { lock: self.lock };
-
-            let result = match self.lock.data.write() {
-                Ok(write_guard) => Poll::Ready(Ok(RwLockWriteGuard {
-                    lock: self.lock,
-                    guard: Some(write_guard),
-                })),
-                Err(poisoned) => {
-                    self.lock.poisoned.store(true, Ordering::Release);
-                    // release_writer is called by guard drop
-                    drop(poisoned.into_inner());
-                    Poll::Ready(Err(RwLockError::Poisoned))
-                }
-            };
-
-            if matches!(&result, Poll::Ready(Ok(_))) {
-                std::mem::forget(guard);
-            }
-
-            return result;
+            return Poll::Ready(Ok(RwLockWriteGuard { lock: self.lock }));
         }
 
         if let Some(waiter_id) = self.waiter_id {
@@ -626,28 +548,23 @@ impl<T> Drop for WriteFuture<'_, '_, T> {
 #[must_use = "guard will be immediately released if not held"]
 pub struct RwLockReadGuard<'a, T> {
     lock: &'a RwLock<T>,
-    guard: Option<std::sync::RwLockReadGuard<'a, T>>,
 }
+
+unsafe impl<T: Send + Sync> Send for RwLockReadGuard<'_, T> {}
+unsafe impl<T: Send + Sync> Sync for RwLockReadGuard<'_, T> {}
 
 impl<T> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.guard.as_ref().expect("guard accessed after drop")
+        unsafe { &*self.lock.data.get() }
     }
 }
 
 impl<T> Drop for RwLockReadGuard<'_, T> {
     #[inline]
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            self.lock.poisoned.store(true, Ordering::Release);
-        }
-        // Drop the StdRwLockReadGuard BEFORE notifying waiting writers,
-        // otherwise a woken writer blocks on data.write() because the
-        // std read guard is still held.
-        drop(self.guard.take());
         self.lock.release_reader();
     }
 }
@@ -656,22 +573,24 @@ impl<T> Drop for RwLockReadGuard<'_, T> {
 #[must_use = "guard will be immediately released if not held"]
 pub struct RwLockWriteGuard<'a, T> {
     lock: &'a RwLock<T>,
-    guard: Option<std::sync::RwLockWriteGuard<'a, T>>,
 }
+
+unsafe impl<T: Send> Send for RwLockWriteGuard<'_, T> {}
+unsafe impl<T: Sync> Sync for RwLockWriteGuard<'_, T> {}
 
 impl<T> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.guard.as_ref().expect("guard accessed after drop")
+        unsafe { &*self.lock.data.get() }
     }
 }
 
 impl<T> DerefMut for RwLockWriteGuard<'_, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.guard.as_mut().expect("guard accessed after drop")
+        unsafe { &mut *self.lock.data.get() }
     }
 }
 
@@ -681,9 +600,6 @@ impl<T> Drop for RwLockWriteGuard<'_, T> {
         if std::thread::panicking() {
             self.lock.poisoned.store(true, Ordering::Release);
         }
-        // Drop the StdRwLockWriteGuard BEFORE notifying waiters,
-        // otherwise a woken reader/writer blocks on the std lock.
-        drop(self.guard.take());
         self.lock.release_writer();
     }
 }
@@ -715,17 +631,14 @@ impl<T> OwnedRwLockReadGuard<T> {
     where
         F: FnOnce(&T) -> R,
     {
-        let guard = self.lock.data.read().expect("rwlock poisoned");
-        f(&guard)
+        assert!(!self.lock.is_poisoned(), "rwlock poisoned");
+        f(unsafe { &*self.lock.data.get() })
     }
 }
 
 impl<T> Drop for OwnedRwLockReadGuard<T> {
     #[inline]
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            self.lock.poisoned.store(true, Ordering::Release);
-        }
         self.lock.release_reader();
     }
 }
@@ -758,8 +671,8 @@ impl<T> OwnedRwLockWriteGuard<T> {
     where
         F: FnOnce(&mut T) -> R,
     {
-        let mut guard = self.lock.data.write().expect("rwlock poisoned");
-        f(&mut guard)
+        assert!(!self.lock.is_poisoned(), "rwlock poisoned");
+        f(unsafe { &mut *self.lock.data.get() })
     }
 }
 
@@ -797,6 +710,7 @@ impl<T> Future for OwnedReadFuture<'_, T> {
         if !state.writer_active && state.writer_waiters == 0 {
             state.readers += 1;
             drop(state);
+            self.waiter_id = None;
             return Poll::Ready(Ok(OwnedRwLockReadGuard {
                 lock: Arc::clone(&self.lock),
             }));

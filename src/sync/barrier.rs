@@ -39,7 +39,8 @@ impl std::error::Error for BarrierWaitError {}
 struct BarrierState {
     arrived: usize,
     generation: u64,
-    waiters: SmallVec<[Waker; 7]>,
+    next_waiter_id: u64,
+    waiters: SmallVec<[(u64, Waker); 7]>,
 }
 
 /// Barrier for N-way rendezvous.
@@ -62,6 +63,7 @@ impl Barrier {
             state: Mutex::new(BarrierState {
                 arrived: 0,
                 generation: 0,
+                next_waiter_id: 0,
                 waiters: SmallVec::new(),
             }),
         }
@@ -92,13 +94,9 @@ impl Barrier {
 enum WaitState {
     Init,
     /// Waiting for the barrier to trip.
-    ///
-    /// `slot` is the index into `BarrierState::waiters` where our waker was
-    /// pushed.  On re-poll we try an O(1) indexed lookup first; if the slot
-    /// has been invalidated by another waiter's cancellation (which uses
-    /// `swap_remove`), we fall back to a linear scan.
     Waiting {
         generation: u64,
+        id: u64,
         slot: usize,
     },
 }
@@ -118,7 +116,7 @@ impl Future for BarrierWaitFuture<'_> {
         // 1. Check cancellation first.
         if let Err(_e) = self.cx.checkpoint() {
             // If we were waiting, we need to unregister.
-            if let WaitState::Waiting { generation, slot } = self.state {
+            if let WaitState::Waiting { generation, id, slot } = self.state {
                 let mut state = self.barrier.state.lock();
 
                 // Only decrement if the generation hasn't changed (barrier hasn't tripped).
@@ -128,11 +126,10 @@ impl Future for BarrierWaitFuture<'_> {
                     }
                     // Remove our waker via O(1) swap_remove when possible,
                     // falling back to O(N) retain for robustness.
-                    let waker = cx.waker();
-                    if slot < state.waiters.len() && state.waiters[slot].will_wake(waker) {
+                    if slot < state.waiters.len() && state.waiters[slot].0 == id {
                         state.waiters.swap_remove(slot);
                     } else {
-                        state.waiters.retain(|w| !w.will_wake(waker));
+                        state.waiters.retain(|w| w.0 != id);
                     }
                     drop(state);
 
@@ -162,9 +159,9 @@ impl Future for BarrierWaitFuture<'_> {
 
                     // Drain wakers and release lock before waking to
                     // avoid wake-under-lock contention.
-                    let wakers: SmallVec<[Waker; 7]> = state.waiters.drain(..).collect();
+                    let wakers: SmallVec<[(u64, Waker); 7]> = state.waiters.drain(..).collect();
                     drop(state);
-                    for waker in wakers {
+                    for (_, waker) in wakers {
                         waker.wake();
                     }
 
@@ -173,30 +170,37 @@ impl Future for BarrierWaitFuture<'_> {
                     // Not full yet. Arrive and wait.
                     state.arrived += 1;
                     let generation = state.generation;
+                    let id = state.next_waiter_id;
+                    state.next_waiter_id = state.next_waiter_id.wrapping_add(1);
                     let slot = state.waiters.len();
-                    state.waiters.push(cx.waker().clone());
+                    state.waiters.push((id, cx.waker().clone()));
                     drop(state);
-                    self.state = WaitState::Waiting { generation, slot };
+                    self.state = WaitState::Waiting { generation, id, slot };
                     Poll::Pending
                 }
             }
-            WaitState::Waiting { generation, slot } => {
+            WaitState::Waiting { generation, id, slot } => {
                 if state.generation == generation {
                     // Still waiting. Update waker if changed.
                     // O(1) fast path: use the remembered slot index.
                     let waker = cx.waker();
-                    if slot < state.waiters.len() && state.waiters[slot].will_wake(waker) {
-                        // Slot still valid and waker unchanged — nothing to do.
+                    if slot < state.waiters.len() && state.waiters[slot].0 == id {
+                        if !state.waiters[slot].1.will_wake(waker) {
+                            state.waiters[slot].1.clone_from(waker);
+                        }
                     } else {
                         // Slot invalidated by a concurrent cancellation's
                         // swap_remove.  Fall back to linear scan + push.
                         let mut found = false;
                         for (i, w) in state.waiters.iter_mut().enumerate() {
-                            if w.will_wake(waker) {
-                                w.clone_from(waker);
+                            if w.0 == id {
+                                if !w.1.will_wake(waker) {
+                                    w.1.clone_from(waker);
+                                }
                                 // Update slot for next re-poll.
                                 self.state = WaitState::Waiting {
                                     generation,
+                                    id,
                                     slot: i,
                                 };
                                 found = true;
@@ -205,9 +209,10 @@ impl Future for BarrierWaitFuture<'_> {
                         }
                         if !found {
                             let new_slot = state.waiters.len();
-                            state.waiters.push(waker.clone());
+                            state.waiters.push((id, waker.clone()));
                             self.state = WaitState::Waiting {
                                 generation,
+                                id,
                                 slot: new_slot,
                             };
                         }
@@ -228,7 +233,7 @@ impl Future for BarrierWaitFuture<'_> {
 
 impl Drop for BarrierWaitFuture<'_> {
     fn drop(&mut self) {
-        if let WaitState::Waiting { generation, slot } = self.state {
+        if let WaitState::Waiting { generation, id, slot } = self.state {
             let mut state = self.barrier.state.lock();
 
             // Only clean up if the generation hasn't changed (barrier hasn't tripped).
@@ -237,8 +242,11 @@ impl Drop for BarrierWaitFuture<'_> {
                     state.arrived -= 1;
                 }
                 // Remove the dead waker to avoid spurious wake overhead on trip.
-                if slot < state.waiters.len() {
+                // O(1) fast path if slot is still valid
+                if slot < state.waiters.len() && state.waiters[slot].0 == id {
                     state.waiters.swap_remove(slot);
+                } else if let Some(idx) = state.waiters.iter().position(|w| w.0 == id) {
+                    state.waiters.swap_remove(idx);
                 }
             }
         }
