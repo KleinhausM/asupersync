@@ -1113,6 +1113,7 @@ mod tests {
         let tx_thread = tx.clone();
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let (go_tx, go_rx) = std::sync::mpsc::sync_channel(1);
+        let (send_entered_tx, send_entered_rx) = std::sync::mpsc::sync_channel(1);
 
         let handle = std::thread::spawn(move || {
             let cx = test_cx();
@@ -1121,14 +1122,14 @@ mod tests {
                 .expect("reserve should succeed before receiver drop");
             ready_tx.send(()).expect("ready send");
             go_rx.recv().expect("go recv");
+            // Synchronize with the main thread so we avoid timing-based sleeps.
+            send_entered_tx.send(()).expect("send_entered send");
             permit.send(99)
         });
 
         ready_rx.recv().expect("ready recv");
         go_tx.send(()).expect("go send");
-
-        // Give sender thread a chance to enter `send` while lock is held.
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        send_entered_rx.recv().expect("send_entered recv");
         drop(rx);
         drop(lock_guard);
 
