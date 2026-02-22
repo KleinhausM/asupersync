@@ -493,9 +493,9 @@ impl TimerWheel {
         }
 
         let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
+        self.next_id = self.next_id.wrapping_add(1);
         let generation = self.next_generation;
-        self.next_generation = self.next_generation.saturating_add(1);
+        self.next_generation = self.next_generation.wrapping_add(1);
 
         self.active.insert(id, generation);
 

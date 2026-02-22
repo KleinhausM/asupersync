@@ -4486,7 +4486,7 @@ mod tests {
         for batch_size in [1, 2, 4, 8, 16, 0] {
             let wavefront = decoder
                 .decode_wavefront(&received, batch_size)
-                .expect(&format!("wavefront decode batch_size={batch_size}"));
+                .unwrap_or_else(|_| panic!("wavefront decode batch_size={batch_size}"));
 
             for (i, (seq_sym, wf_sym)) in sequential
                 .source
@@ -4538,7 +4538,7 @@ mod tests {
         for batch_size in [1, 4, 8] {
             let wavefront = decoder
                 .decode_wavefront(&received, batch_size)
-                .expect(&format!("wavefront batch_size={batch_size}"));
+                .unwrap_or_else(|_| panic!("wavefront batch_size={batch_size}"));
 
             for (i, (seq_sym, wf_sym)) in sequential
                 .source

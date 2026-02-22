@@ -32,7 +32,7 @@
 //! use asupersync::channel::oneshot;
 //!
 //! // Create a oneshot channel
-//! let (tx, rx) = oneshot::channel::<i32>();
+//! let (tx, mut rx) = oneshot::channel::<i32>();
 //!
 //! // Two-phase send pattern (explicit reserve)
 //! let permit = tx.reserve(&cx);
@@ -175,8 +175,8 @@ impl<T> OneShotInner<T> {
 /// # Example
 ///
 /// ```ignore
-/// let (tx, rx) = oneshot::channel::<i32>();
-/// tx.send(42);
+/// let (tx, mut rx) = oneshot::channel::<i32>();
+/// tx.send(&cx, 42);
 /// let value = rx.recv(&cx).await?;
 /// ```
 #[must_use]

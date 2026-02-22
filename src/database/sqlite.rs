@@ -782,19 +782,13 @@ impl<'a> SqliteTransaction<'a> {
 impl Drop for SqliteTransaction<'_> {
     fn drop(&mut self) {
         if !self.finished {
-            // Best-effort rollback on drop
-            // We can't await here, so we do a blocking operation
-            let inner = Arc::clone(&self.conn.inner);
-            let pool = self.conn.pool.clone();
-
-            let _rollback_handle = pool.spawn(move || {
-                let guard = inner.lock();
-                if let Ok(conn) = guard.get() {
-                    let _ = conn.execute("ROLLBACK", []);
-                }
-            });
-
-            // Fire and forget best-effort rollback
+            // Synchronous best-effort rollback on drop.
+            // This must complete before the connection is reusable to prevent
+            // a race where a subsequent BEGIN arrives before the ROLLBACK.
+            let guard = self.conn.inner.lock();
+            if let Ok(conn) = guard.get() {
+                let _ = conn.execute("ROLLBACK", []);
+            }
         }
     }
 }

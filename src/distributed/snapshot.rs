@@ -261,7 +261,10 @@ impl RegionSnapshot {
 
         // Tasks
         let task_count = cursor.read_u32()?;
-        let mut tasks = Vec::with_capacity(task_count as usize);
+        // Each task reads at least 10 bytes (8 id + 1 state + 1 priority).
+        // Cap pre-allocation to remaining data to prevent OOM from crafted payloads.
+        let max_tasks = cursor.remaining() / 10;
+        let mut tasks = Vec::with_capacity((task_count as usize).min(max_tasks));
         for _ in 0..task_count {
             let task_id = cursor.read_task_id()?;
             let task_state_byte = cursor.read_u8()?;
@@ -277,7 +280,9 @@ impl RegionSnapshot {
 
         // Children
         let children_count = cursor.read_u32()?;
-        let mut children = Vec::with_capacity(children_count as usize);
+        // Each child reads 8 bytes (4 index + 4 generation).
+        let max_children = cursor.remaining() / 8;
+        let mut children = Vec::with_capacity((children_count as usize).min(max_children));
         for _ in 0..children_count {
             children.push(cursor.read_region_id()?);
         }
@@ -471,6 +476,10 @@ struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     fn new(data: &'a [u8]) -> Self {
         Self { data, pos: 0 }
+    }
+
+    fn remaining(&self) -> usize {
+        self.data.len() - self.pos
     }
 
     fn read_exact(&mut self, n: usize) -> Result<&'a [u8], SnapshotError> {
