@@ -1,0 +1,302 @@
+{
+  "artifact_id": "raptorq-program-closure-signoff-packet-v1",
+  "schema_version": "raptorq-h2-program-closure-signoff-packet-v1",
+  "track_bead_id": "asupersync-2f71w",
+  "parent_track_bead_id": "asupersync-p8o9m",
+  "external_ref": "bd-23cxf",
+  "generated_at_utc": "2026-02-22T18:35:00Z",
+  "packet_state": {
+    "status": "draft_blocked",
+    "go_no_go_decision": "no_go_pending_dependency_closure",
+    "blocking_dependencies": [
+      "asupersync-346lm",
+      "asupersync-p8o9m",
+      "asupersync-2cyx5"
+    ],
+    "readiness_rule": "all required_beads must be closed before final sign-off"
+  },
+  "command_policy": {
+    "cargo_heavy_commands_must_use_rch": true,
+    "required_prefix": "rch exec --"
+  },
+  "claim_boundaries": {
+    "permitted_claims": [
+      "RaptorQ closure claims apply only to scenario families with linked deterministic unit and E2E evidence.",
+      "Runtime optimization claims require side-by-side conservative fallback comparators with replayable artifacts.",
+      "Residual risks are explicitly listed in residual_risk_register and are not implicitly waived."
+    ],
+    "prohibited_claims": [
+      "Do not claim RFC-complete interoperability for unsupported or unverified surfaces.",
+      "Do not claim rollout safety for radical runtime levers without closed governance evidence.",
+      "Do not claim durability of performance gains without budgeted CI regression coverage."
+    ]
+  },
+  "signoff_dependency_matrix": {
+    "required_beads": [
+      {
+        "bead_id": "asupersync-1xbzk",
+        "name": "G6 validation report and triage playbook",
+        "required_status": "closed",
+        "evidence_anchor": "docs/raptorq_unit_test_matrix.md"
+      },
+      {
+        "bead_id": "asupersync-1gbx5",
+        "name": "G5 one-command validation UX",
+        "required_status": "closed",
+        "evidence_anchor": "scripts/run_raptorq_e2e.sh"
+      },
+      {
+        "bead_id": "asupersync-35hiq",
+        "name": "D8 soak/stress deterministic E2E coverage",
+        "required_status": "closed",
+        "evidence_anchor": "tests/raptorq_conformance.rs"
+      },
+      {
+        "bead_id": "asupersync-346lm",
+        "name": "H1 self-contained RaptorQ dossier",
+        "required_status": "closed",
+        "evidence_anchor": ".beads/issues.jsonl#asupersync-346lm"
+      },
+      {
+        "bead_id": "asupersync-23kd4",
+        "name": "G4 controlled rollout policy",
+        "required_status": "closed",
+        "evidence_anchor": "artifacts/raptorq_controlled_rollout_policy_v1.json"
+      },
+      {
+        "bead_id": "asupersync-387as",
+        "name": "H3 post-closure opportunity backlog",
+        "required_status": "closed",
+        "evidence_anchor": "artifacts/raptorq_post_closure_opportunity_backlog_v1.json"
+      }
+    ]
+  },
+  "evidence_bundle_index": {
+    "conformance": [
+      "docs/raptorq_rfc6330_clause_matrix.md",
+      "tests/raptorq_conformance.rs",
+      "docs/raptorq_unit_test_matrix.md"
+    ],
+    "correctness_and_replay": [
+      "artifacts/raptorq_replay_catalog_v1.json",
+      "tests/raptorq_perf_invariants.rs",
+      "artifacts/raptorq_gap_taxonomy_v1.json"
+    ],
+    "performance_and_budgets": [
+      "docs/raptorq_baseline_bench_profile.md",
+      "artifacts/raptorq_optimization_decision_records_v1.json",
+      "tests/ci_regression_gates.rs"
+    ],
+    "governance_and_rollout": [
+      "artifacts/raptorq_controlled_rollout_policy_v1.json",
+      "artifacts/raptorq_expected_loss_decision_contract_v1.json",
+      "docs/raptorq_controlled_rollout_policy.md",
+      "docs/raptorq_expected_loss_decision_contract.md"
+    ],
+    "dossier_and_backlog": [
+      ".beads/issues.jsonl#asupersync-346lm",
+      "artifacts/raptorq_post_closure_opportunity_backlog_v1.json",
+      "docs/raptorq_post_closure_opportunity_backlog.md"
+    ]
+  },
+  "radical_runtime_lever_coverage": [
+    {
+      "lever_code": "E4",
+      "bead_id": "asupersync-348uw",
+      "conservative_fallback_comparator": "sequential kernels",
+      "unit_test_evidence_refs": [
+        "tests/ci_regression_gates.rs::g2_e4_kernel_closure_evidence"
+      ],
+      "deterministic_e2e_evidence_refs": [
+        "RQ-E2E-TYPICAL-RANDOM-LOSS"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates g2_e4_kernel_closure_evidence -- --nocapture"
+      ]
+    },
+    {
+      "lever_code": "E5",
+      "bead_id": "asupersync-36m6p",
+      "conservative_fallback_comparator": "scalar-conservative-v1 profile pack",
+      "unit_test_evidence_refs": [
+        "tests/ci_regression_gates.rs::g2_e5_profile_pack_closure_evidence"
+      ],
+      "deterministic_e2e_evidence_refs": [
+        "RQ-E2E-BOUNDARY-K1"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates g2_e5_profile_pack_closure_evidence -- --nocapture"
+      ]
+    },
+    {
+      "lever_code": "C5",
+      "bead_id": "asupersync-zfn8v",
+      "conservative_fallback_comparator": "baseline dense elimination path",
+      "unit_test_evidence_refs": [
+        "tests/ci_regression_gates.rs::g2_c5_schur_closure_evidence"
+      ],
+      "deterministic_e2e_evidence_refs": [
+        "RQ-E2E-BURST-LOSS-LATE"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates g2_c5_schur_closure_evidence -- --nocapture"
+      ]
+    },
+    {
+      "lever_code": "C6",
+      "bead_id": "asupersync-2qfjd",
+      "conservative_fallback_comparator": "direct conservative dense solve without peeling",
+      "unit_test_evidence_refs": [
+        "tests/ci_regression_gates.rs::g2_c6_peeling_closure_evidence"
+      ],
+      "deterministic_e2e_evidence_refs": [
+        "RQ-E2E-INSUFFICIENT-SYMBOLS"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates g2_c6_peeling_closure_evidence -- --nocapture"
+      ]
+    },
+    {
+      "lever_code": "F5",
+      "bead_id": "asupersync-324sc",
+      "conservative_fallback_comparator": "static baseline policy",
+      "unit_test_evidence_refs": [
+        "tests/ci_regression_gates.rs::g2_f5_policy_engine_closure_evidence"
+      ],
+      "deterministic_e2e_evidence_refs": [
+        "RQ-E2E-TYPICAL-RANDOM-LOSS"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates g2_f5_policy_engine_closure_evidence -- --nocapture"
+      ]
+    },
+    {
+      "lever_code": "F6",
+      "bead_id": "asupersync-j96j4",
+      "conservative_fallback_comparator": "static policy with retuning disabled",
+      "unit_test_evidence_refs": [
+        "tests/ci_regression_gates.rs::g2_f6_regime_shift_closure_evidence"
+      ],
+      "deterministic_e2e_evidence_refs": [
+        "RQ-E2E-BURST-LOSS-LATE"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates g2_f6_regime_shift_closure_evidence -- --nocapture"
+      ]
+    },
+    {
+      "lever_code": "F7",
+      "bead_id": "asupersync-n5fk6",
+      "conservative_fallback_comparator": "no-cache rebuild path",
+      "unit_test_evidence_refs": [
+        "tests/ci_regression_gates.rs::g2_f7_burst_cache_closure_evidence_v3"
+      ],
+      "deterministic_e2e_evidence_refs": [
+        "RQ-E2E-TYPICAL-RANDOM-LOSS"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates g2_f7_burst_cache_closure_evidence_v3 -- --nocapture"
+      ]
+    },
+    {
+      "lever_code": "F8",
+      "bead_id": "asupersync-2zu9p",
+      "conservative_fallback_comparator": "sequential assembly->GF256->solve pipeline",
+      "unit_test_evidence_refs": [
+        "tests/ci_regression_gates.rs::g2_f8_wavefront_closure_evidence"
+      ],
+      "deterministic_e2e_evidence_refs": [
+        "RQ-E2E-BURST-LOSS-LATE"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates g2_f8_wavefront_closure_evidence -- --nocapture"
+      ]
+    }
+  ],
+  "structured_logging_contract": {
+    "schema_reference": "docs/raptorq_unit_test_matrix.md",
+    "replay_catalog_artifact": "artifacts/raptorq_replay_catalog_v1.json",
+    "required_fields": [
+      "scenario_id",
+      "seed",
+      "replay_ref",
+      "artifact_path",
+      "status"
+    ]
+  },
+  "signoff_checklist": [
+    {
+      "check_id": "h2-claim-boundary-contract",
+      "state": "ready",
+      "required_artifacts": [
+        "artifacts/raptorq_program_closure_signoff_packet_v1.json"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test raptorq_perf_invariants h2_closure_packet_schema_and_lever_coverage -- --nocapture"
+      ]
+    },
+    {
+      "check_id": "h2-comprehensive-unit-and-e2e-evidence",
+      "state": "ready",
+      "required_artifacts": [
+        "docs/raptorq_unit_test_matrix.md",
+        "artifacts/raptorq_replay_catalog_v1.json"
+      ],
+      "replay_commands": [
+        "rch exec -- ./scripts/run_raptorq_e2e.sh --profile full --bundle"
+      ]
+    },
+    {
+      "check_id": "h2-radical-runtime-lever-comparator-coverage",
+      "state": "ready",
+      "required_artifacts": [
+        "artifacts/raptorq_controlled_rollout_policy_v1.json",
+        "artifacts/raptorq_expected_loss_decision_contract_v1.json"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test ci_regression_gates -- --nocapture"
+      ]
+    },
+    {
+      "check_id": "h2-residual-risk-and-follow-up-ownership",
+      "state": "blocked",
+      "required_artifacts": [
+        ".beads/issues.jsonl#asupersync-346lm",
+        "asupersync-p8o9m"
+      ],
+      "replay_commands": [
+        "rch exec -- cargo test --test raptorq_perf_invariants h2_closure_packet_docs_are_cross_linked -- --nocapture"
+      ]
+    }
+  ],
+  "residual_risk_register": [
+    {
+      "risk_id": "RQ-H2-R1",
+      "severity": "medium",
+      "status": "open",
+      "description": "Track-H final dossier (`asupersync-346lm`) remains in progress; final sign-off narrative may drift until closed.",
+      "mitigation": "Require closed status and final evidence refresh before moving packet_state.status to ready_for_signoff.",
+      "owner_bead_id": "asupersync-346lm"
+    },
+    {
+      "risk_id": "RQ-H2-R2",
+      "severity": "medium",
+      "status": "open",
+      "description": "Track-G aggregation (`asupersync-2cyx5`) is still in progress and may update lever governance fields.",
+      "mitigation": "Re-run lever matrix and claim-boundary checklist once Track-G reaches closure.",
+      "owner_bead_id": "asupersync-2cyx5"
+    }
+  ],
+  "follow_up_ownership": [
+    {
+      "bead_id": "asupersync-p8o9m",
+      "role": "track_signoff_owner",
+      "handoff_expectation": "Finalize go/no-go decision and publish closure communication."
+    },
+    {
+      "bead_id": "asupersync-2f71w",
+      "role": "packet_curator",
+      "handoff_expectation": "Keep evidence pointers and replay commands synchronized until closure."
+    }
+  ]
+}

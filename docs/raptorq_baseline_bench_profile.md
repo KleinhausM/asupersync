@@ -164,6 +164,43 @@ Coverage intent:
 - asymmetric lanes near and beyond ratio threshold
 - deterministic evidence for when auto policy selects fused vs sequential dual kernels
 
+### E5 Profile-Pack Capture (`asupersync-36m6p.1`, 2026-02-22)
+
+Deterministic evidence packet for profile-pack behavior and dual-policy throughput deltas:
+
+- `artifacts/raptorq_e5_profile_pack_benchmark_summary.md`
+- `artifacts/e5_profile_pack_auto_capture.log`
+- `artifacts/e5_profile_pack_sequential_capture.log`
+- `artifacts/e5_profile_pack_fused_capture.log`
+
+Capture command bundle (rch-only):
+
+```bash
+rch exec -- env ASUPERSYNC_GF256_DUAL_POLICY=auto ASUPERSYNC_GF256_PROFILE_PACK=auto \
+  CARGO_TARGET_DIR=/tmp/rch-e5-qd cargo bench --bench raptorq_benchmark -- gf256_dual_policy \
+  --sample-size 10 --warm-up-time 0.05 --measurement-time 0.08 \
+  > artifacts/e5_profile_pack_auto_capture.log 2>&1
+
+rch exec -- env ASUPERSYNC_GF256_DUAL_POLICY=sequential ASUPERSYNC_GF256_PROFILE_PACK=auto \
+  CARGO_TARGET_DIR=/tmp/rch-e5-qd cargo bench --bench raptorq_benchmark -- gf256_dual_policy \
+  --sample-size 10 --warm-up-time 0.05 --measurement-time 0.08 \
+  > artifacts/e5_profile_pack_sequential_capture.log 2>&1
+
+rch exec -- env ASUPERSYNC_GF256_DUAL_POLICY=fused ASUPERSYNC_GF256_PROFILE_PACK=auto \
+  CARGO_TARGET_DIR=/tmp/rch-e5-qd cargo bench --bench raptorq_benchmark -- gf256_dual_policy \
+  --sample-size 10 --warm-up-time 0.05 --measurement-time 0.08 \
+  > artifacts/e5_profile_pack_fused_capture.log 2>&1
+```
+
+Observed host/profile snapshot in all three runs:
+
+- `kernel = Scalar`
+- `architecture_class = generic-scalar`
+- `profile_pack = scalar-conservative-v1`
+- `replay_pointer = replay:rq-e-gf256-profile-pack-v1`
+
+Track-E/E5 interpretation: this packet validates deterministic profile-pack policy wiring and mode forcing, but does not yet prove SIMD-profile-pack material uplift because the active kernel path was scalar on these runs.
+
 ## Calibration Checklist for Closure
 
 Before closing `bd-3v1cs`, run this checklist and record evidence paths in bead comments:

@@ -24,6 +24,10 @@ const G1_BUDGET_SCHEMA_VERSION: &str = "raptorq-g1-budget-draft-v1";
 const G3_DECISION_RECORDS_SCHEMA_VERSION: &str = "raptorq-optimization-decision-records-v1";
 const G4_ROLLOUT_POLICY_SCHEMA_VERSION: &str = "raptorq-controlled-rollout-policy-v1";
 const G7_EXPECTED_LOSS_CONTRACT_SCHEMA_VERSION: &str = "raptorq-g7-expected-loss-contract-v1";
+const H3_POST_CLOSURE_BACKLOG_SCHEMA_VERSION: &str =
+    "raptorq-h3-post-closure-opportunity-backlog-v1";
+const H2_PROGRAM_CLOSURE_PACKET_SCHEMA_VERSION: &str =
+    "raptorq-h2-program-closure-signoff-packet-v1";
 const BEADS_ISSUES_JSONL: &str = include_str!("../.beads/issues.jsonl");
 const RAPTORQ_BASELINE_PROFILE_MD: &str = include_str!("../docs/raptorq_baseline_bench_profile.md");
 const RAPTORQ_UNIT_MATRIX_MD: &str = include_str!("../docs/raptorq_unit_test_matrix.md");
@@ -39,6 +43,14 @@ const RAPTORQ_G7_EXPECTED_LOSS_MD: &str =
     include_str!("../docs/raptorq_expected_loss_decision_contract.md");
 const RAPTORQ_G7_EXPECTED_LOSS_JSON: &str =
     include_str!("../artifacts/raptorq_expected_loss_decision_contract_v1.json");
+const RAPTORQ_H3_POST_CLOSURE_BACKLOG_MD: &str =
+    include_str!("../docs/raptorq_post_closure_opportunity_backlog.md");
+const RAPTORQ_H3_POST_CLOSURE_BACKLOG_JSON: &str =
+    include_str!("../artifacts/raptorq_post_closure_opportunity_backlog_v1.json");
+const RAPTORQ_H2_CLOSURE_PACKET_MD: &str =
+    include_str!("../docs/raptorq_program_closure_signoff_packet.md");
+const RAPTORQ_H2_CLOSURE_PACKET_JSON: &str =
+    include_str!("../artifacts/raptorq_program_closure_signoff_packet_v1.json");
 const RAPTORQ_BENCH_RS: &str = include_str!("../benches/raptorq_benchmark.rs");
 const REPLAY_CATALOG_ARTIFACT_PATH: &str = "artifacts/raptorq_replay_catalog_v1.json";
 const REPLAY_FIXTURE_REF: &str = "RQ-D9-REPLAY-CATALOG-V1";
@@ -2315,6 +2327,491 @@ fn g7_expected_loss_contract_docs_are_cross_linked() {
         assert!(
             RAPTORQ_G7_EXPECTED_LOSS_MD.contains(required),
             "G7 expected-loss doc must mention {required}"
+        );
+    }
+}
+
+/// Validate H3 post-closure backlog artifact schema and deterministic ranking.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn h3_post_closure_backlog_schema_and_ranking() {
+    let artifact: serde_json::Value = serde_json::from_str(RAPTORQ_H3_POST_CLOSURE_BACKLOG_JSON)
+        .expect("H3 post-closure backlog artifact must be valid JSON");
+
+    assert_eq!(
+        artifact["schema_version"].as_str(),
+        Some(H3_POST_CLOSURE_BACKLOG_SCHEMA_VERSION),
+        "unexpected H3 post-closure backlog schema version"
+    );
+    assert_eq!(
+        artifact["track_bead_id"].as_str(),
+        Some("asupersync-387as"),
+        "H3 backlog must stay anchored to asupersync-387as"
+    );
+    assert_eq!(
+        artifact["parent_track_bead_id"].as_str(),
+        Some("asupersync-p8o9m"),
+        "H3 backlog must stay anchored to asupersync-p8o9m"
+    );
+    assert_eq!(
+        artifact["command_policy"]["cargo_heavy_commands_must_use_rch"].as_bool(),
+        Some(true),
+        "H3 command policy must require rch for cargo-heavy commands"
+    );
+    assert_eq!(
+        artifact["command_policy"]["required_prefix"].as_str(),
+        Some("rch exec --"),
+        "H3 command policy must enforce rch command prefix"
+    );
+
+    let opportunities = artifact["opportunities"]
+        .as_array()
+        .expect("opportunities must be an array");
+    assert!(
+        opportunities.len() >= 5,
+        "H3 backlog must include at least five ranked opportunities"
+    );
+
+    let mut scores_by_id = BTreeMap::new();
+    for entry in opportunities {
+        let id = entry["opportunity_id"]
+            .as_str()
+            .expect("opportunity_id must be present")
+            .to_string();
+        let expected_value = entry["expected_value_score"]
+            .as_i64()
+            .expect("expected_value_score must be numeric");
+        let strategic_fit = entry["strategic_fit_score"]
+            .as_i64()
+            .expect("strategic_fit_score must be numeric");
+        let composite = entry["composite_score"]
+            .as_i64()
+            .expect("composite_score must be numeric");
+        assert!(
+            (0..=100).contains(&expected_value),
+            "expected_value_score must be in [0, 100]"
+        );
+        assert!(
+            (0..=100).contains(&strategic_fit),
+            "strategic_fit_score must be in [0, 100]"
+        );
+        assert!(
+            (0..=100).contains(&composite),
+            "composite_score must be in [0, 100]"
+        );
+        let recomputed = ((expected_value * 6) + (strategic_fit * 4) + 5) / 10;
+        assert_eq!(
+            composite, recomputed,
+            "composite_score must match configured scoring formula"
+        );
+
+        let deps = &entry["dependency_anchors"];
+        assert!(
+            !deps["bead_prerequisites"]
+                .as_array()
+                .expect("bead_prerequisites must be an array")
+                .is_empty(),
+            "each H3 opportunity must include bead prerequisites"
+        );
+        assert!(
+            !deps["artifact_prerequisites"]
+                .as_array()
+                .expect("artifact_prerequisites must be an array")
+                .is_empty(),
+            "each H3 opportunity must include artifact prerequisites"
+        );
+        for key in [
+            "unit_test_expectations",
+            "deterministic_e2e_expectations",
+            "structured_logging_expectations",
+            "success_metrics",
+            "starter_repro_commands",
+        ] {
+            assert!(
+                !entry[key]
+                    .as_array()
+                    .expect("expectation fields must be arrays")
+                    .is_empty(),
+                "each H3 opportunity must include non-empty {key}"
+            );
+        }
+        for cmd in entry["starter_repro_commands"]
+            .as_array()
+            .expect("starter_repro_commands must be an array")
+        {
+            let cmd = cmd
+                .as_str()
+                .expect("starter_repro_commands entries must be strings");
+            assert!(
+                cmd.contains("rch exec --"),
+                "starter_repro_commands must use rch"
+            );
+        }
+
+        scores_by_id.insert(id, (composite, strategic_fit));
+    }
+
+    let ranked_queue = artifact["ranked_queue"]
+        .as_array()
+        .expect("ranked_queue must be an array")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("ranked_queue entries must be strings")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranked_queue.len(),
+        opportunities.len(),
+        "ranked_queue length must match opportunities length"
+    );
+
+    for window in ranked_queue.windows(2) {
+        let left = scores_by_id
+            .get(&window[0])
+            .expect("ranked_queue entry must exist in opportunities");
+        let right = scores_by_id
+            .get(&window[1])
+            .expect("ranked_queue entry must exist in opportunities");
+        assert!(
+            left.0 > right.0 || (left.0 == right.0 && left.1 >= right.1),
+            "ranked_queue must be sorted by composite_score then strategic_fit_score"
+        );
+    }
+}
+
+/// Validate H3 post-closure backlog docs cross-link to canonical artifacts.
+#[test]
+fn h3_post_closure_backlog_docs_are_cross_linked() {
+    for required in [
+        "asupersync-387as",
+        "asupersync-p8o9m",
+        "artifacts/raptorq_post_closure_opportunity_backlog_v1.json",
+        "artifacts/raptorq_optimization_decision_records_v1.json",
+        "artifacts/raptorq_expected_loss_decision_contract_v1.json",
+        "artifacts/raptorq_track_f_wavefront_pipeline_v1.json",
+        "RQ-H3-001",
+        "RQ-H3-005",
+        "rch exec --",
+    ] {
+        assert!(
+            RAPTORQ_H3_POST_CLOSURE_BACKLOG_MD.contains(required),
+            "H3 post-closure backlog doc must mention {required}"
+        );
+    }
+}
+
+/// Validate H2 closure packet schema and radical runtime lever coverage contract.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn h2_closure_packet_schema_and_lever_coverage() {
+    let artifact: serde_json::Value = serde_json::from_str(RAPTORQ_H2_CLOSURE_PACKET_JSON)
+        .expect("H2 closure packet artifact must be valid JSON");
+
+    assert_eq!(
+        artifact["schema_version"].as_str(),
+        Some(H2_PROGRAM_CLOSURE_PACKET_SCHEMA_VERSION),
+        "unexpected H2 closure packet schema version"
+    );
+    assert_eq!(
+        artifact["track_bead_id"].as_str(),
+        Some("asupersync-2f71w"),
+        "H2 closure packet must stay anchored to asupersync-2f71w"
+    );
+    assert_eq!(
+        artifact["parent_track_bead_id"].as_str(),
+        Some("asupersync-p8o9m"),
+        "H2 closure packet must stay anchored to asupersync-p8o9m"
+    );
+    assert_eq!(
+        artifact["command_policy"]["cargo_heavy_commands_must_use_rch"].as_bool(),
+        Some(true),
+        "H2 command policy must require rch for cargo-heavy commands"
+    );
+    assert_eq!(
+        artifact["command_policy"]["required_prefix"].as_str(),
+        Some("rch exec --"),
+        "H2 command policy must enforce rch command prefix"
+    );
+
+    let packet_status = artifact["packet_state"]["status"]
+        .as_str()
+        .expect("packet_state.status must be present");
+    assert!(
+        ["draft_blocked", "ready_for_signoff", "signed_off"].contains(&packet_status),
+        "packet_state.status must remain in allowed lifecycle states"
+    );
+
+    let required_beads = artifact["signoff_dependency_matrix"]["required_beads"]
+        .as_array()
+        .expect("required_beads must be an array");
+    assert!(
+        required_beads.len() >= 6,
+        "H2 closure packet must track required dependency beads"
+    );
+
+    let mut required_ids = BTreeSet::new();
+    for dep in required_beads {
+        required_ids.insert(
+            dep["bead_id"]
+                .as_str()
+                .expect("dependency bead_id must be present")
+                .to_string(),
+        );
+        assert_eq!(
+            dep["required_status"].as_str(),
+            Some("closed"),
+            "each H2 dependency entry must require closed status"
+        );
+        assert!(
+            dep["evidence_anchor"]
+                .as_str()
+                .expect("dependency evidence anchor must be present")
+                .contains('/')
+                || dep["evidence_anchor"]
+                    .as_str()
+                    .expect("dependency evidence anchor must be present")
+                    .contains('#'),
+            "dependency evidence anchor must point to an artifact/doc/bead reference"
+        );
+    }
+    for expected in [
+        "asupersync-1xbzk",
+        "asupersync-1gbx5",
+        "asupersync-35hiq",
+        "asupersync-346lm",
+        "asupersync-23kd4",
+        "asupersync-387as",
+    ] {
+        assert!(
+            required_ids.contains(expected),
+            "H2 dependency matrix must include {expected}"
+        );
+    }
+
+    let levers = artifact["radical_runtime_lever_coverage"]
+        .as_array()
+        .expect("radical_runtime_lever_coverage must be an array");
+    assert_eq!(
+        levers.len(),
+        8,
+        "H2 closure packet must cover exactly 8 radical runtime levers"
+    );
+
+    let expected_levers: BTreeSet<&str> = ["E4", "E5", "C5", "C6", "F5", "F6", "F7", "F8"]
+        .into_iter()
+        .collect();
+    let mut observed_levers = BTreeSet::new();
+
+    for lever in levers {
+        let code = lever["lever_code"]
+            .as_str()
+            .expect("lever_code must be present");
+        observed_levers.insert(code);
+        assert!(
+            !lever["conservative_fallback_comparator"]
+                .as_str()
+                .expect("conservative_fallback_comparator must be present")
+                .is_empty(),
+            "each lever must include a non-empty conservative comparator"
+        );
+        for key in [
+            "unit_test_evidence_refs",
+            "deterministic_e2e_evidence_refs",
+            "replay_commands",
+        ] {
+            assert!(
+                !lever[key]
+                    .as_array()
+                    .expect("lever evidence fields must be arrays")
+                    .is_empty(),
+                "each lever must include non-empty {key}"
+            );
+        }
+        for cmd in lever["replay_commands"]
+            .as_array()
+            .expect("replay_commands must be an array")
+        {
+            assert!(
+                cmd.as_str()
+                    .expect("replay command entries must be strings")
+                    .contains("rch exec --"),
+                "lever replay commands must use rch"
+            );
+        }
+    }
+    assert_eq!(
+        observed_levers, expected_levers,
+        "lever coverage must include exactly E4/E5/C5/C6/F5/F6/F7/F8"
+    );
+
+    let required_fields = artifact["structured_logging_contract"]["required_fields"]
+        .as_array()
+        .expect("structured_logging_contract.required_fields must be an array")
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .expect("structured logging fields must be strings")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    for field in [
+        "scenario_id",
+        "seed",
+        "replay_ref",
+        "artifact_path",
+        "status",
+    ] {
+        assert!(
+            required_fields.contains(field),
+            "structured logging contract must include {field}"
+        );
+    }
+
+    let checklist = artifact["signoff_checklist"]
+        .as_array()
+        .expect("signoff_checklist must be an array");
+    assert!(
+        !checklist.is_empty(),
+        "H2 closure packet must include signoff checklist entries"
+    );
+    for item in checklist {
+        assert!(
+            !item["check_id"]
+                .as_str()
+                .expect("check_id must be present")
+                .is_empty(),
+            "checklist entries must include check_id"
+        );
+        assert!(
+            !item["state"]
+                .as_str()
+                .expect("state must be present")
+                .is_empty(),
+            "checklist entries must include state"
+        );
+        assert!(
+            !item["required_artifacts"]
+                .as_array()
+                .expect("required_artifacts must be an array")
+                .is_empty(),
+            "checklist entries must include required artifacts"
+        );
+        assert!(
+            !item["replay_commands"]
+                .as_array()
+                .expect("replay_commands must be an array")
+                .is_empty(),
+            "checklist entries must include replay commands"
+        );
+    }
+}
+
+/// Validate H2 closure packet dependency status fields stay aligned with Beads state.
+#[test]
+fn h2_closure_packet_dependency_status_alignment() {
+    let artifact: serde_json::Value = serde_json::from_str(RAPTORQ_H2_CLOSURE_PACKET_JSON)
+        .expect("H2 closure packet artifact must be valid JSON");
+
+    let mut issue_status_by_id = BTreeMap::new();
+    for line in BEADS_ISSUES_JSONL.lines() {
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(id) = entry["id"].as_str() else {
+            continue;
+        };
+        let Some(status) = entry["status"].as_str() else {
+            continue;
+        };
+        issue_status_by_id.insert(id.to_string(), status.to_string());
+    }
+
+    let blocking_dependencies = artifact["packet_state"]["blocking_dependencies"]
+        .as_array()
+        .expect("packet_state.blocking_dependencies must be an array")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("blocking dependency entries must be strings")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+
+    let required_beads = artifact["signoff_dependency_matrix"]["required_beads"]
+        .as_array()
+        .expect("signoff_dependency_matrix.required_beads must be an array");
+    for dep in required_beads {
+        let bead_id = dep["bead_id"]
+            .as_str()
+            .expect("required bead entry must include bead_id");
+        let required_status = dep["required_status"]
+            .as_str()
+            .expect("required bead entry must include required_status");
+        let current_status = issue_status_by_id
+            .get(bead_id)
+            .unwrap_or_else(|| panic!("missing dependency bead {bead_id} in .beads/issues.jsonl"));
+        if required_status == "closed" && current_status != "closed" {
+            assert!(
+                blocking_dependencies.contains(bead_id),
+                "dependency {bead_id} is not closed ({current_status}) and must be listed in packet_state.blocking_dependencies"
+            );
+        }
+    }
+
+    for blocking in &blocking_dependencies {
+        let current_status = issue_status_by_id.get(blocking).unwrap_or_else(|| {
+            panic!("missing blocking dependency {blocking} in .beads/issues.jsonl")
+        });
+        assert_ne!(
+            current_status, "closed",
+            "blocking dependency {blocking} is already closed; remove it from packet_state.blocking_dependencies"
+        );
+    }
+
+    let risk_register = artifact["residual_risk_register"]
+        .as_array()
+        .expect("residual_risk_register must be an array");
+    assert!(
+        !risk_register.is_empty(),
+        "residual_risk_register must include at least one explicit residual risk"
+    );
+    for risk in risk_register {
+        let owner_bead_id = risk["owner_bead_id"]
+            .as_str()
+            .expect("each residual risk must include owner_bead_id");
+        let owner_status = issue_status_by_id.get(owner_bead_id).unwrap_or_else(|| {
+            panic!("missing residual-risk owner bead {owner_bead_id} in issues")
+        });
+        if risk["status"].as_str() == Some("open") {
+            assert_ne!(
+                owner_status, "closed",
+                "residual risk owner {owner_bead_id} is closed but risk remains open; reconcile risk register state"
+            );
+        }
+    }
+}
+
+/// Validate H2 closure packet docs cross-link to canonical artifacts.
+#[test]
+fn h2_closure_packet_docs_are_cross_linked() {
+    for required in [
+        "asupersync-2f71w",
+        "asupersync-p8o9m",
+        "artifacts/raptorq_program_closure_signoff_packet_v1.json",
+        "artifacts/raptorq_controlled_rollout_policy_v1.json",
+        "artifacts/raptorq_expected_loss_decision_contract_v1.json",
+        "artifacts/raptorq_replay_catalog_v1.json",
+        "E4",
+        "F8",
+        "rch exec --",
+    ] {
+        assert!(
+            RAPTORQ_H2_CLOSURE_PACKET_MD.contains(required),
+            "H2 closure packet doc must mention {required}"
         );
     }
 }
