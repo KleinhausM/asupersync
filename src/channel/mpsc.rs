@@ -345,10 +345,10 @@ impl<'a, T> Future for Reserve<'a, T> {
             return Poll::Ready(Err(SendError::Disconnected(())));
         }
 
-        let is_first = match self.waiter_id {
-            Some(id) => inner.send_wakers.front().is_some_and(|w| w.id == id),
-            None => inner.send_wakers.is_empty(),
-        };
+        let is_first = self.waiter_id.map_or_else(
+            || inner.send_wakers.is_empty(),
+            |id| inner.send_wakers.front().is_some_and(|w| w.id == id),
+        );
 
         if is_first && inner.has_capacity(self.sender.shared.capacity) {
             inner.reserved += 1;
@@ -373,7 +373,7 @@ impl<'a, T> Future for Reserve<'a, T> {
                 if let Some(w) = cascade_waker {
                     w.wake();
                 }
-                
+
                 // Clear waiter_id so Drop doesn't uselessly lock and search the queue
                 self.waiter_id = None;
             } else {
@@ -640,6 +640,39 @@ impl<T> Receiver<T> {
         Recv { receiver: self, cx }
     }
 
+    /// Polls the receive operation directly without constructing a temporary future.
+    ///
+    /// This is useful in manual `poll_*` implementations that need to avoid
+    /// creating-and-dropping transient `Recv` futures each poll cycle.
+    pub fn poll_recv(&mut self, cx: &Cx, task_cx: &mut Context<'_>) -> Poll<Result<T, RecvError>> {
+        if cx.checkpoint().is_err() {
+            cx.trace("mpsc::recv cancelled");
+            return Poll::Ready(Err(RecvError::Cancelled));
+        }
+
+        let mut inner = self.shared.inner.lock();
+
+        if let Some(value) = inner.queue.pop_front() {
+            let next_waker = inner.take_next_sender_waker();
+            drop(inner);
+            if let Some(w) = next_waker {
+                w.wake();
+            }
+            return Poll::Ready(Ok(value));
+        }
+
+        if self.shared.sender_count.load(Ordering::Acquire) == 0 {
+            return Poll::Ready(Err(RecvError::Disconnected));
+        }
+
+        // Skip waker clone if unchanged — common on re-poll.
+        match &inner.recv_waker {
+            Some(existing) if existing.will_wake(task_cx.waker()) => {}
+            _ => inner.recv_waker = Some(task_cx.waker().clone()),
+        }
+        Poll::Pending
+    }
+
     /// Attempts to receive a value without blocking.
     #[inline]
     pub fn try_recv(&self) -> Result<T, RecvError> {
@@ -705,32 +738,8 @@ impl<T> Future for Recv<'_, T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.cx.checkpoint().is_err() {
-            self.cx.trace("mpsc::recv cancelled");
-            return Poll::Ready(Err(RecvError::Cancelled));
-        }
-
-        let mut inner = self.receiver.shared.inner.lock();
-
-        if let Some(value) = inner.queue.pop_front() {
-            let next_waker = inner.take_next_sender_waker();
-            drop(inner);
-            if let Some(w) = next_waker {
-                w.wake();
-            }
-            return Poll::Ready(Ok(value));
-        }
-
-        if self.receiver.shared.sender_count.load(Ordering::Acquire) == 0 {
-            return Poll::Ready(Err(RecvError::Disconnected));
-        }
-
-        // Skip waker clone if unchanged — common on re-poll.
-        match &inner.recv_waker {
-            Some(existing) if existing.will_wake(ctx.waker()) => {}
-            _ => inner.recv_waker = Some(ctx.waker().clone()),
-        }
-        Poll::Pending
+        let this = self.get_mut();
+        this.receiver.poll_recv(this.cx, ctx)
     }
 }
 
@@ -748,6 +757,9 @@ impl<T> Drop for Receiver<T> {
         let wakers: SmallVec<[Waker; 4]> = {
             let mut inner = self.shared.inner.lock();
             self.shared.receiver_dropped.store(true, Ordering::Release);
+            // Clear any pending recv waker so a dropped receiver does not
+            // retain executor task state indefinitely.
+            inner.recv_waker = None;
             // Drain queued items to prevent memory leaks when senders are
             // long-lived (they hold Arc refs that keep the queue alive).
             inner.queue.clear();
@@ -1571,6 +1583,42 @@ mod tests {
 
         permit.abort();
         crate::test_complete!("receiver_drop_unblocks_pending_reserve_without_leak");
+    }
+
+    #[test]
+    fn receiver_drop_clears_registered_recv_waker() {
+        init_test("receiver_drop_clears_registered_recv_waker");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(1);
+
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+        let first_poll = rx.poll_recv(&cx, &mut task_cx);
+        crate::assert_with_log!(
+            matches!(first_poll, Poll::Pending),
+            "recv poll pending on empty channel",
+            "Pending",
+            format!("{:?}", first_poll)
+        );
+
+        let has_waker_before_drop = tx.shared.inner.lock().recv_waker.is_some();
+        crate::assert_with_log!(
+            has_waker_before_drop,
+            "recv waker registered",
+            true,
+            has_waker_before_drop
+        );
+
+        drop(rx);
+
+        let has_waker_after_drop = tx.shared.inner.lock().recv_waker.is_some();
+        crate::assert_with_log!(
+            !has_waker_after_drop,
+            "recv waker cleared on receiver drop",
+            true,
+            !has_waker_after_drop
+        );
+        crate::test_complete!("receiver_drop_clears_registered_recv_waker");
     }
 
     #[test]

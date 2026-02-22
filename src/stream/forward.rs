@@ -96,8 +96,8 @@ mod tests {
     #[test]
     fn into_sink_creates_sink_stream() {
         init_test("into_sink_creates_sink_stream");
-        let (_tx, _rx) = mpsc::channel::<i32>(4);
-        let _sink = into_sink(_tx);
+        let (tx, _rx) = mpsc::channel::<i32>(4);
+        let _sink = into_sink(tx);
         // Construction succeeded — SinkStream wraps the sender.
         crate::test_complete!("into_sink_creates_sink_stream");
     }

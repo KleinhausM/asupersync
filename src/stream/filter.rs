@@ -495,6 +495,7 @@ mod tests {
 
     #[test]
     fn filter_debug() {
+        #[allow(clippy::trivially_copy_pass_by_ref)]
         fn pred(x: &i32) -> bool {
             *x > 1
         }
@@ -505,6 +506,7 @@ mod tests {
 
     #[test]
     fn filter_map_debug() {
+        #[allow(clippy::unnecessary_wraps)]
         fn mapper(x: i32) -> Option<i32> {
             Some(x)
         }

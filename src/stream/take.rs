@@ -230,6 +230,7 @@ mod tests {
 
     #[test]
     fn take_while_debug() {
+        #[allow(clippy::trivially_copy_pass_by_ref)]
         fn pred(v: &i32) -> bool {
             *v < 5
         }

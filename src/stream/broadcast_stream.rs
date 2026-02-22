@@ -3,7 +3,7 @@
 use crate::channel::broadcast;
 use crate::cx::Cx;
 use crate::stream::Stream;
-use std::future::Future;
+use crate::util::ArenaIndex;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -13,6 +13,7 @@ pub struct BroadcastStream<T> {
     inner: broadcast::Receiver<T>,
     cx: Cx,
     terminated: bool,
+    waiter: Option<ArenaIndex>,
 }
 
 impl<T: Clone> BroadcastStream<T> {
@@ -23,6 +24,7 @@ impl<T: Clone> BroadcastStream<T> {
             inner: recv,
             cx,
             terminated: false,
+            waiter: None,
         }
     }
 }
@@ -43,14 +45,10 @@ impl<T: Clone + Send> Stream for BroadcastStream<T> {
         }
 
         let this = self.as_mut().get_mut();
-        // Poll within an inner scope so the borrow from recv() is released
-        // before we potentially update termination state.
-        let poll = {
-            let recv_future = this.inner.recv(&this.cx);
-            let mut pinned = std::pin::pin!(recv_future);
-            pinned.as_mut().poll(poll_cx)
-        };
-        match poll {
+        match this
+            .inner
+            .poll_recv_with_waiter(&this.cx, poll_cx, &mut this.waiter)
+        {
             Poll::Ready(Ok(item)) => Poll::Ready(Some(Ok(item))),
             Poll::Ready(Err(broadcast::RecvError::Lagged(n))) => {
                 Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n))))
@@ -64,10 +62,17 @@ impl<T: Clone + Send> Stream for BroadcastStream<T> {
     }
 }
 
+impl<T> Drop for BroadcastStream<T> {
+    fn drop(&mut self) {
+        self.inner.clear_waiter_registration(&mut self.waiter);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Wake, Waker};
 
     struct NoopWaker;
@@ -78,6 +83,22 @@ mod tests {
 
     fn noop_waker() -> Waker {
         Waker::from(Arc::new(NoopWaker))
+    }
+
+    struct CountWaker(Arc<AtomicUsize>);
+
+    impl Wake for CountWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn counting_waker(counter: Arc<AtomicUsize>) -> Waker {
+        Waker::from(Arc::new(CountWaker(counter)))
     }
 
     fn init_test(name: &str) {
@@ -162,6 +183,33 @@ mod tests {
         crate::assert_with_log!(is_none, "terminated after sender drop", true, is_none);
 
         crate::test_complete!("broadcast_stream_terminated_after_sender_drop");
+    }
+
+    #[test]
+    fn broadcast_stream_pending_poll_keeps_waker_registration() {
+        init_test("broadcast_stream_pending_poll_keeps_waker_registration");
+        let cx_send: Cx = Cx::for_testing();
+        let cx_recv: Cx = Cx::for_testing();
+        let (tx, rx) = broadcast::channel::<i32>(4);
+        let mut stream = BroadcastStream::new(cx_recv, rx);
+
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let waker = counting_waker(Arc::clone(&wake_count));
+        let mut task_cx = Context::from_waker(&waker);
+
+        let first = Pin::new(&mut stream).poll_next(&mut task_cx);
+        let first_pending = matches!(first, Poll::Pending);
+        crate::assert_with_log!(first_pending, "first poll pending", true, first_pending);
+
+        tx.send(&cx_send, 33).expect("send");
+        let wake_total = wake_count.load(Ordering::SeqCst);
+        crate::assert_with_log!(wake_total == 1, "single wake after send", 1, wake_total);
+
+        let second = Pin::new(&mut stream).poll_next(&mut task_cx);
+        let second_ready = matches!(second, Poll::Ready(Some(Ok(33))));
+        crate::assert_with_log!(second_ready, "second poll has item", true, second_ready);
+
+        crate::test_complete!("broadcast_stream_pending_poll_keeps_waker_registration");
     }
 
     /// Invariant: BroadcastStreamRecvError::Lagged preserves the count.

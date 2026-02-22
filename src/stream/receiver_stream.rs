@@ -13,7 +13,6 @@ use crate::channel::mpsc;
 use crate::channel::mpsc::RecvError;
 use crate::cx::Cx;
 use crate::stream::Stream;
-use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -70,10 +69,7 @@ impl<T> Stream for ReceiverStream<T> {
             return Poll::Ready(None);
         }
 
-        // Poll the recv future using std::pin::pin! for safe pinning
-        let recv_future = this.inner.recv(&this.cx);
-        let mut pinned = std::pin::pin!(recv_future);
-        match pinned.as_mut().poll(poll_cx) {
+        match this.inner.poll_recv(&this.cx, poll_cx) {
             Poll::Ready(Ok(item)) => {
                 this.cx.trace("stream::ReceiverStream yielded item");
                 Poll::Ready(Some(item))
@@ -91,6 +87,7 @@ impl<T> Stream for ReceiverStream<T> {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Wake, Waker};
 
     struct NoopWaker;
@@ -101,6 +98,22 @@ mod tests {
 
     fn noop_waker() -> Waker {
         Waker::from(Arc::new(NoopWaker))
+    }
+
+    struct CountWaker(Arc<AtomicUsize>);
+
+    impl Wake for CountWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn counting_waker(counter: Arc<AtomicUsize>) -> Waker {
+        Waker::from(Arc::new(CountWaker(counter)))
     }
 
     fn init_test(name: &str) {
@@ -181,6 +194,32 @@ mod tests {
         crate::assert_with_log!(is_pending, "empty channel is Pending", true, is_pending);
 
         crate::test_complete!("receiver_stream_pending_when_empty");
+    }
+
+    #[test]
+    fn receiver_stream_pending_poll_keeps_waker_registration() {
+        init_test("receiver_stream_pending_poll_keeps_waker_registration");
+        let cx_recv: Cx = Cx::for_testing();
+        let (tx, rx) = mpsc::channel::<i32>(4);
+        let mut stream = ReceiverStream::new(cx_recv, rx);
+
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let waker = counting_waker(Arc::clone(&wake_count));
+        let mut task_cx = Context::from_waker(&waker);
+
+        let first = Pin::new(&mut stream).poll_next(&mut task_cx);
+        let first_pending = matches!(first, Poll::Pending);
+        crate::assert_with_log!(first_pending, "first poll pending", true, first_pending);
+
+        tx.try_send(7).expect("send");
+        let wake_total = wake_count.load(Ordering::SeqCst);
+        crate::assert_with_log!(wake_total == 1, "single wake after send", 1, wake_total);
+
+        let second = Pin::new(&mut stream).poll_next(&mut task_cx);
+        let second_ready = matches!(second, Poll::Ready(Some(7)));
+        crate::assert_with_log!(second_ready, "second poll has item", true, second_ready);
+
+        crate::test_complete!("receiver_stream_pending_poll_keeps_waker_registration");
     }
 
     /// Invariant: accessors (get_ref, cx, into_inner) work correctly

@@ -238,13 +238,14 @@ impl<T: Clone> SendPermit<'_, T> {
     /// If all receivers drop after reservation but before commit, this returns
     /// `0` and does not mutate channel state.
     pub fn send(self, msg: T) -> usize {
-        // Check receiver count atomically before locking.
-        let receiver_count = self.sender.channel.receiver_count.load(Ordering::Acquire);
-        if receiver_count == 0 {
+        let mut inner = self.sender.channel.inner.lock();
+
+        // Re-check receiver liveness under the same lock used for commit.
+        // This closes the race where the last receiver drops while a sender
+        // is waiting to acquire `inner`.
+        if self.sender.channel.receiver_count.load(Ordering::Acquire) == 0 {
             return 0;
         }
-
-        let mut inner = self.sender.channel.inner.lock();
 
         if inner.buffer.len() == inner.capacity {
             inner.buffer.pop_front();
@@ -276,6 +277,15 @@ pub struct Receiver<T> {
     next_index: u64,
 }
 
+impl<T> Receiver<T> {
+    pub(crate) fn clear_waiter_registration(&self, waiter: &mut Option<ArenaIndex>) {
+        if let Some(token) = waiter.take() {
+            let mut inner = self.channel.inner.lock();
+            inner.wakers.remove(token);
+        }
+    }
+}
+
 impl<T: Clone> Receiver<T> {
     /// Receives the next message.
     ///
@@ -290,6 +300,77 @@ impl<T: Clone> Receiver<T> {
             waiter: None,
         }
     }
+
+    pub(crate) fn poll_recv_with_waiter(
+        &mut self,
+        cx: &Cx,
+        task_cx: &Context<'_>,
+        waiter: &mut Option<ArenaIndex>,
+    ) -> Poll<Result<T, RecvError>> {
+        if cx.checkpoint().is_err() {
+            cx.trace("broadcast::recv cancelled");
+            self.clear_waiter_registration(waiter);
+            return Poll::Ready(Err(RecvError::Cancelled));
+        }
+
+        let mut inner = self.channel.inner.lock();
+
+        // 1. Check for lag
+        let earliest = inner.buffer.front().map_or(inner.total_sent, |s| s.index);
+
+        if self.next_index < earliest {
+            let missed = earliest - self.next_index;
+            self.next_index = earliest;
+            if let Some(token) = waiter.take() {
+                inner.wakers.remove(token);
+            }
+            return Poll::Ready(Err(RecvError::Lagged(missed)));
+        }
+
+        // 2. Try to get message.
+        //
+        // Use checked conversion to avoid `u64 -> usize` truncation on 32-bit
+        // targets. A large `next_index - earliest` delta must not wrap and
+        // incorrectly index into the front of the ring buffer.
+        let delta = self.next_index.saturating_sub(earliest);
+        if let Ok(offset) = usize::try_from(delta) {
+            if let Some(slot) = inner.buffer.get(offset) {
+                let msg = slot.msg.clone();
+                self.next_index += 1;
+                if let Some(token) = waiter.take() {
+                    inner.wakers.remove(token);
+                }
+                return Poll::Ready(Ok(msg));
+            }
+        }
+
+        // 3. Check if closed
+        if self.channel.sender_count.load(Ordering::Acquire) == 0 {
+            if let Some(token) = waiter.take() {
+                inner.wakers.remove(token);
+            }
+            return Poll::Ready(Err(RecvError::Closed));
+        }
+
+        // 4. Wait - register or update waker
+        let current_waker = task_cx.waker();
+        if let Some(token) = *waiter {
+            if let Some(waker) = inner.wakers.get_mut(token) {
+                if !waker.will_wake(current_waker) {
+                    waker.clone_from(current_waker);
+                }
+            } else {
+                let token = inner.wakers.insert(current_waker.clone());
+                *waiter = Some(token);
+            }
+        } else {
+            let token = inner.wakers.insert(current_waker.clone());
+            *waiter = Some(token);
+        }
+
+        drop(inner);
+        Poll::Pending
+    }
 }
 
 /// Future returned by [`Receiver::recv`].
@@ -302,10 +383,7 @@ pub struct Recv<'a, T> {
 
 impl<T> Recv<'_, T> {
     fn clear_waiter_registration(&mut self) {
-        if let Some(token) = self.waiter.take() {
-            let mut inner = self.receiver.channel.inner.lock();
-            inner.wakers.remove(token);
-        }
+        self.receiver.clear_waiter_registration(&mut self.waiter);
     }
 }
 
@@ -314,80 +392,8 @@ impl<T: Clone> Future for Recv<'_, T> {
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = &mut *self;
-
-        if this.cx.checkpoint().is_err() {
-            this.cx.trace("broadcast::recv cancelled");
-            this.clear_waiter_registration();
-            return Poll::Ready(Err(RecvError::Cancelled));
-        }
-
-        let mut inner = this.receiver.channel.inner.lock();
-
-        // 1. Check for lag
-        let earliest = inner.buffer.front().map_or(inner.total_sent, |s| s.index);
-
-        if this.receiver.next_index < earliest {
-            let missed = earliest - this.receiver.next_index;
-            this.receiver.next_index = earliest;
-            // Clear waiter if we had one
-            if let Some(token) = this.waiter.take() {
-                inner.wakers.remove(token);
-            }
-            return Poll::Ready(Err(RecvError::Lagged(missed)));
-        }
-
-        // 2. Try to get message.
-        //
-        // Use checked conversion to avoid `u64 -> usize` truncation on 32-bit
-        // targets. A large `next_index - earliest` delta must not wrap and
-        // incorrectly index into the front of the ring buffer.
-        let delta = this.receiver.next_index.saturating_sub(earliest);
-        if let Ok(offset) = usize::try_from(delta) {
-            if let Some(slot) = inner.buffer.get(offset) {
-                let msg = slot.msg.clone();
-                this.receiver.next_index += 1;
-                // Clear waiter
-                if let Some(token) = this.waiter.take() {
-                    inner.wakers.remove(token);
-                }
-                return Poll::Ready(Ok(msg));
-            }
-        }
-
-        // 3. Check if closed
-        if this.receiver.channel.sender_count.load(Ordering::Acquire) == 0 {
-            // Clear waiter before returning (matches other Ready paths).
-            // When the last Sender drops, retain() already removed our
-            // entry and bumped the arena generation, so this is a no-op,
-            // but clearing the token avoids a redundant remove in Drop.
-            if let Some(token) = this.waiter.take() {
-                inner.wakers.remove(token);
-            }
-            return Poll::Ready(Err(RecvError::Closed));
-        }
-
-        // 4. Wait - register or update waker
-        let current_waker = ctx.waker();
-
-        if let Some(token) = this.waiter {
-            if let Some(waker) = inner.wakers.get_mut(token) {
-                // If waker changed, update it in place
-                if !waker.will_wake(current_waker) {
-                    waker.clone_from(current_waker);
-                }
-            } else {
-                // Token invalid (woken and removed from arena), re-register
-                let token = inner.wakers.insert(current_waker.clone());
-                this.waiter = Some(token);
-            }
-        } else {
-            // Not registered
-            let token = inner.wakers.insert(current_waker.clone());
-            this.waiter = Some(token);
-        }
-
-        drop(inner);
-        Poll::Pending
+        this.receiver
+            .poll_recv_with_waiter(this.cx, ctx, &mut this.waiter)
     }
 }
 
@@ -1092,6 +1098,65 @@ mod tests {
         crate::assert_with_log!(total_sent == 0, "total_sent", 0u64, total_sent);
         crate::assert_with_log!(buffer_empty, "buffer empty", true, buffer_empty);
         crate::test_complete!("permit_send_returns_zero_after_all_receivers_drop");
+    }
+
+    #[test]
+    fn permit_send_does_not_commit_if_last_receiver_drops_while_waiting_for_lock() {
+        // Regression: if `SendPermit::send` checks receiver_count before taking
+        // the channel lock, it can commit after the last receiver has dropped.
+        init_test("permit_send_does_not_commit_if_last_receiver_drops_while_waiting_for_lock");
+        let (tx, rx) = channel::<i32>(4);
+
+        // Hold the channel lock so the sender thread blocks in `send`.
+        let lock_guard = tx.channel.inner.lock();
+
+        let tx_thread = tx.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let (go_tx, go_rx) = std::sync::mpsc::sync_channel(1);
+
+        let handle = std::thread::spawn(move || {
+            let cx = test_cx();
+            let permit = tx_thread
+                .reserve(&cx)
+                .expect("reserve should succeed before receiver drop");
+            ready_tx.send(()).expect("ready send");
+            go_rx.recv().expect("go recv");
+            permit.send(99)
+        });
+
+        ready_rx.recv().expect("ready recv");
+        go_tx.send(()).expect("go send");
+
+        // Give sender thread a chance to enter `send` while lock is held.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        drop(rx);
+        drop(lock_guard);
+
+        let delivered = handle.join().expect("sender thread panicked");
+        crate::assert_with_log!(
+            delivered == 0,
+            "delivered count after last receiver drop",
+            0usize,
+            delivered
+        );
+
+        let inner = tx.channel.inner.lock();
+        crate::assert_with_log!(
+            inner.total_sent == 0,
+            "total_sent unchanged after lock-contention drop race",
+            0u64,
+            inner.total_sent
+        );
+        crate::assert_with_log!(
+            inner.buffer.is_empty(),
+            "buffer remains empty after lock-contention drop race",
+            true,
+            inner.buffer.is_empty()
+        );
+
+        crate::test_complete!(
+            "permit_send_does_not_commit_if_last_receiver_drops_while_waiting_for_lock"
+        );
     }
 
     #[test]

@@ -12,7 +12,6 @@
 //! - [`ChunkedEncoder`]: Encoder for HTTP/1.1 chunked transfer encoding
 //! - [`BodyKind`]: Body length determination (fixed vs chunked)
 
-use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -142,9 +141,7 @@ impl Body for IncomingBody {
         }
 
         let cx = self.cx.clone();
-        let recv_future = self.receiver.recv(&cx);
-        let mut pinned = std::pin::pin!(recv_future);
-        match pinned.as_mut().poll(poll_cx) {
+        match self.receiver.poll_recv(&cx, poll_cx) {
             Poll::Ready(Ok(frame)) => {
                 if let Ok(ref f) = frame {
                     if f.is_trailers() {
@@ -670,9 +667,7 @@ impl Body for OutgoingBody {
         }
 
         let cx = self.cx.clone();
-        let recv_future = self.receiver.recv(&cx);
-        let mut pinned = std::pin::pin!(recv_future);
-        match pinned.as_mut().poll(poll_cx) {
+        match self.receiver.poll_recv(&cx, poll_cx) {
             Poll::Ready(Ok(frame)) => Poll::Ready(Some(frame)),
             Poll::Ready(Err(RecvError::Cancelled)) => {
                 self.done = true;
@@ -1027,8 +1022,8 @@ impl StreamingResponse {
 mod tests {
     use super::*;
     use crate::types::CancelKind;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::{Wake, Waker};
 
     struct NoopWaker;
@@ -1039,6 +1034,24 @@ mod tests {
 
     fn noop_waker() -> Waker {
         Waker::from(Arc::new(NoopWaker))
+    }
+
+    fn counting_waker(counter: Arc<AtomicUsize>) -> Waker {
+        struct CountingWaker {
+            counter: Arc<AtomicUsize>,
+        }
+
+        impl Wake for CountingWaker {
+            fn wake(self: Arc<Self>) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        Waker::from(Arc::new(CountingWaker { counter }))
     }
 
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -1109,6 +1122,30 @@ mod tests {
         assert_eq!(trailers.len(), 1);
 
         assert!(body.is_end_stream());
+    }
+
+    #[test]
+    fn incoming_body_pending_poll_keeps_waker_registration() {
+        let cx: Cx = Cx::for_testing();
+        let (mut writer, mut body) = IncomingBody::channel(&cx, BodyKind::ContentLength(1));
+
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let frame_waker = counting_waker(Arc::clone(&wake_count));
+        let mut task_cx = Context::from_waker(&frame_waker);
+
+        let first = Pin::new(&mut body).poll_frame(&mut task_cx);
+        assert!(matches!(first, Poll::Pending));
+
+        block_on(writer.push_bytes(&cx, b"x")).expect("push bytes");
+        assert_eq!(wake_count.load(Ordering::SeqCst), 1);
+
+        let second = Pin::new(&mut body).poll_frame(&mut task_cx);
+        let frame = match second {
+            Poll::Ready(Some(Ok(frame))) => frame,
+            other => panic!("expected ready data frame, got {other:?}"),
+        };
+        let data = frame.into_data().expect("data frame");
+        assert_eq!(data.chunk(), b"x");
     }
 
     #[test]
@@ -1218,6 +1255,30 @@ mod tests {
     }
 
     #[test]
+    fn outgoing_body_pending_poll_keeps_waker_registration() {
+        let cx: Cx = Cx::for_testing();
+        let (mut sender, mut body) = OutgoingBody::channel(&cx, BodyKind::Chunked);
+
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let frame_waker = counting_waker(Arc::clone(&wake_count));
+        let mut task_cx = Context::from_waker(&frame_waker);
+
+        let first = Pin::new(&mut body).poll_frame(&mut task_cx);
+        assert!(matches!(first, Poll::Pending));
+
+        block_on(sender.send_bytes(&cx, Bytes::from_static(b"x"))).expect("send bytes");
+        assert_eq!(wake_count.load(Ordering::SeqCst), 1);
+
+        let second = Pin::new(&mut body).poll_frame(&mut task_cx);
+        let frame = match second {
+            Poll::Ready(Some(Ok(frame))) => frame,
+            other => panic!("expected ready outgoing frame, got {other:?}"),
+        };
+        let data = frame.into_data().expect("data frame");
+        assert_eq!(data.chunk(), b"x");
+    }
+
+    #[test]
     fn outgoing_body_send_cancelled() {
         let cx_base: Cx = Cx::for_testing();
         let (mut sender, _body) = OutgoingBody::channel(&cx_base, BodyKind::Chunked);
@@ -1307,11 +1368,12 @@ mod tests {
     fn streaming_response_chunked() {
         let cx: Cx = Cx::for_testing();
         let (resp, _sender) = StreamingResponse::chunked(&cx, 4, 200, "OK");
-        assert!(resp
-            .head
-            .headers
-            .iter()
-            .any(|(n, v)| { n.eq_ignore_ascii_case("transfer-encoding") && v == "chunked" }));
+        assert!(
+            resp.head
+                .headers
+                .iter()
+                .any(|(n, v)| { n.eq_ignore_ascii_case("transfer-encoding") && v == "chunked" })
+        );
         assert!(resp.body.kind().is_chunked());
     }
 
@@ -1319,11 +1381,12 @@ mod tests {
     fn streaming_response_content_length() {
         let cx: Cx = Cx::for_testing();
         let (resp, _sender) = StreamingResponse::with_content_length(&cx, 4, 200, "OK", 100);
-        assert!(resp
-            .head
-            .headers
-            .iter()
-            .any(|(n, v)| { n.eq_ignore_ascii_case("content-length") && v == "100" }));
+        assert!(
+            resp.head
+                .headers
+                .iter()
+                .any(|(n, v)| { n.eq_ignore_ascii_case("content-length") && v == "100" })
+        );
         assert_eq!(resp.body.kind(), BodyKind::ContentLength(100));
     }
 
