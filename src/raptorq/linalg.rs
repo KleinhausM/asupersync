@@ -488,6 +488,17 @@ pub fn row_scale(row: &mut [u8], c: Gf256) {
     super::gf256::gf256_mul_slice(row, c);
 }
 
+/// Tiny slices are faster with a direct XOR loop than dispatching kernels.
+const XOR_TINY_FAST_PATH_MAX_BYTES: usize = 32;
+
+#[inline]
+fn row_xor_tiny(dst: &mut [u8], src: &[u8]) {
+    debug_assert_eq!(dst.len(), src.len(), "row length mismatch");
+    for (d, s) in dst.iter_mut().zip(src) {
+        *d ^= *s;
+    }
+}
+
 // ============================================================================
 // Pivot Selection Helpers
 // ============================================================================
@@ -907,7 +918,11 @@ impl GaussianSolver {
             let rhs_target = &mut lower.as_mut_slice()[..rhs_len];
             let rhs_pivot = &upper.as_slice()[..rhs_len];
             if factor_is_one {
-                gf256_add_slice(rhs_target, rhs_pivot);
+                if rhs_len <= XOR_TINY_FAST_PATH_MAX_BYTES {
+                    row_xor_tiny(rhs_target, rhs_pivot);
+                } else {
+                    gf256_add_slice(rhs_target, rhs_pivot);
+                }
             } else {
                 gf256_addmul_slice(rhs_target, rhs_pivot, factor);
             }
@@ -940,12 +955,16 @@ impl GaussianSolver {
             let rhs_pivot = &upper.as_slice()[..rhs_len];
             debug_assert!(tail_start < cols);
             if factor_is_one {
-                gf256_add_slices2(
-                    &mut target_row[tail_start..],
-                    &pivot_row[tail_start..],
-                    rhs_target,
-                    rhs_pivot,
-                );
+                let tail_target = &mut target_row[tail_start..];
+                let tail_pivot = &pivot_row[tail_start..];
+                if tail_target.len() <= XOR_TINY_FAST_PATH_MAX_BYTES
+                    && rhs_len <= XOR_TINY_FAST_PATH_MAX_BYTES
+                {
+                    row_xor_tiny(tail_target, tail_pivot);
+                    row_xor_tiny(rhs_target, rhs_pivot);
+                } else {
+                    gf256_add_slices2(tail_target, tail_pivot, rhs_target, rhs_pivot);
+                }
             } else {
                 gf256_addmul_slices2(
                     &mut target_row[tail_start..],
@@ -956,7 +975,13 @@ impl GaussianSolver {
                 );
             }
         } else if factor_is_one {
-            gf256_add_slice(&mut target_row[tail_start..], &pivot_row[tail_start..]);
+            let tail_target = &mut target_row[tail_start..];
+            let tail_pivot = &pivot_row[tail_start..];
+            if tail_target.len() <= XOR_TINY_FAST_PATH_MAX_BYTES {
+                row_xor_tiny(tail_target, tail_pivot);
+            } else {
+                gf256_add_slice(tail_target, tail_pivot);
+            }
         } else {
             gf256_addmul_slice(
                 &mut target_row[tail_start..],
@@ -1615,6 +1640,20 @@ mod tests {
         solver.eliminate_row(0, 1, factor);
 
         let expected_rhs = Gf256::new(0x55) + (factor * Gf256::new(0x23));
+        assert_eq!(solver.matrix[0], vec![0]);
+        assert_eq!(solver.rhs[0].as_slice(), &[expected_rhs.raw()]);
+        assert_eq!(solver.stats.scale_adds, 1);
+    }
+
+    #[test]
+    fn eliminate_row_pivot_only_with_rhs_one_updates_rhs_only() {
+        let mut solver = GaussianSolver::new(2, 1);
+        solver.set_row(0, &[7], DenseRow::new(vec![0x55]));
+        solver.set_row(1, &[1], DenseRow::new(vec![0x23]));
+
+        solver.eliminate_row(0, 1, Gf256::ONE);
+
+        let expected_rhs = Gf256::new(0x55) + Gf256::new(0x23);
         assert_eq!(solver.matrix[0], vec![0]);
         assert_eq!(solver.rhs[0].as_slice(), &[expected_rhs.raw()]);
         assert_eq!(solver.stats.scale_adds, 1);

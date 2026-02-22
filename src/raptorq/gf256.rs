@@ -571,7 +571,9 @@ const GF256_PROFILE_PACK_CATALOG: [Gf256ProfilePackMetadata; 3] = [
         // Conservative tuned windows from Track-E benchmark evidence.
         mul_min_total: 8 * 1024,
         mul_max_total: 24 * 1024,
-        addmul_min_total: 8 * 1024,
+        // Keep 4KiB+4KiB lanes on the sequential path; Track-E evidence
+        // showed fused addmul regressed at that footprint.
+        addmul_min_total: 12 * 1024,
         addmul_max_total: 16 * 1024,
         max_lane_ratio: 8,
         replay_pointer: GF256_PROFILE_PACK_REPLAY_POINTER,
@@ -587,7 +589,9 @@ const GF256_PROFILE_PACK_CATALOG: [Gf256ProfilePackMetadata; 3] = [
         // Conservative tuned windows from Track-E benchmark evidence.
         mul_min_total: 8 * 1024,
         mul_max_total: 24 * 1024,
-        addmul_min_total: 8 * 1024,
+        // Keep 4KiB+4KiB lanes on the sequential path; Track-E evidence
+        // showed fused addmul regressed at that footprint.
+        addmul_min_total: 12 * 1024,
         addmul_max_total: 16 * 1024,
         max_lane_ratio: 8,
         replay_pointer: GF256_PROFILE_PACK_REPLAY_POINTER,
@@ -2850,7 +2854,7 @@ mod tests {
             mode: DualKernelMode::Auto,
             mul_min_total: 8192,
             mul_max_total: 24576,
-            addmul_min_total: 8192,
+            addmul_min_total: 12288,
             addmul_max_total: 16384,
             max_lane_ratio: 8,
         };
@@ -2909,6 +2913,16 @@ mod tests {
             }
             assert!(!metadata.command_bundle.is_empty());
             assert!(metadata.command_bundle.contains("rch exec --"));
+        }
+    }
+
+    #[test]
+    fn simd_profile_packs_raise_addmul_floor_for_small_lane_regression_guard() {
+        let catalog = gf256_profile_pack_catalog();
+        for metadata in &catalog[1..] {
+            assert_eq!(metadata.addmul_min_total, 12 * 1024);
+            assert!(metadata.addmul_min_total > (4096 + 4096));
+            assert!(metadata.addmul_max_total >= 16 * 1024);
         }
     }
 
