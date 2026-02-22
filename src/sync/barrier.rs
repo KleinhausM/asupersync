@@ -174,12 +174,18 @@ impl Future for BarrierWaitFuture<'_> {
                     Poll::Ready(Ok(BarrierWaitResult { is_leader: true }))
                 } else {
                     // Not full yet. Arrive and wait.
-                    state.arrived += 1;
+                    let waker = cx.waker().clone();
                     let generation = state.generation;
                     let id = state.next_waiter_id;
-                    state.next_waiter_id = state.next_waiter_id.wrapping_add(1);
                     let slot = state.waiters.len();
-                    state.waiters.push((id, cx.waker().clone()));
+
+                    // Do fallible operations first to ensure exception safety
+                    state.waiters.push((id, waker));
+
+                    // Now commit infallible state changes
+                    state.next_waiter_id = state.next_waiter_id.wrapping_add(1);
+                    state.arrived += 1;
+
                     drop(state);
                     self.state = WaitState::Waiting {
                         generation,

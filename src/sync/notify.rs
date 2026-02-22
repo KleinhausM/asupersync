@@ -82,17 +82,19 @@ impl WaiterSlab {
     /// Insert a waiter entry, reusing a free slot if available.
     #[inline]
     fn insert(&mut self, entry: WaiterEntry) -> usize {
-        if entry.waker.is_some() {
+        let is_active = entry.waker.is_some();
+        let index = if let Some(idx) = self.free_slots.pop() {
+            self.entries[idx] = entry;
+            idx
+        } else {
+            let idx = self.entries.len();
+            self.entries.push(entry);
+            idx
+        };
+        if is_active {
             self.active += 1;
         }
-        if let Some(index) = self.free_slots.pop() {
-            self.entries[index] = entry;
-            index
-        } else {
-            let index = self.entries.len();
-            self.entries.push(entry);
-            index
-        }
+        index
     }
 
     /// Remove a waiter entry by index, returning its slot to the free list.
@@ -205,15 +207,16 @@ impl Notify {
                 .filter_map(|entry| {
                     // Only mark active waiters as notified. Marking free slab slots
                     // (`waker == None`) can pin tail entries and prevent shrinking.
-                    if let Some(waker) = entry.waker.take() {
-                        entry.notified = true;
-                        // Mark this waiter as broadcast-notified to avoid turning
-                        // a cancelled broadcast waiter into a stored notify_one token.
-                        entry.generation = new_generation;
-                        Some(waker)
-                    } else {
-                        None
+                    if entry.generation < new_generation {
+                        if let Some(waker) = entry.waker.take() {
+                            entry.notified = true;
+                            // Mark this waiter as broadcast-notified to avoid turning
+                            // a cancelled broadcast waiter into a stored notify_one token.
+                            entry.generation = new_generation;
+                            return Some(waker);
+                        }
                     }
+                    None
                 })
                 .collect();
             waiters.active -= wakers.len();
