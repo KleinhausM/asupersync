@@ -324,6 +324,10 @@ impl LoadBalancer {
         endpoints: &'a [Arc<Endpoint>],
         object_id: Option<ObjectId>,
     ) -> Option<&'a Arc<Endpoint>> {
+        if matches!(self.strategy, LoadBalanceStrategy::Random) {
+            return self.select_random_single_without_materializing(endpoints);
+        }
+
         let available: SmallVec<[&Arc<Endpoint>; 8]> = endpoints
             .iter()
             .filter(|e| e.state().can_receive())
@@ -368,11 +372,9 @@ impl LoadBalancer {
                 .min_by(|a, b| Self::compare_weighted_load(a, b)),
 
             LoadBalanceStrategy::Random => {
-                // Simple LCG random
-                let seed = self.random_seed.fetch_add(1, Ordering::Relaxed);
-                let random = Self::next_lcg(seed);
-                let idx = (random as usize) % available.len();
-                Some(available[idx])
+                // Random is handled before healthy-endpoint materialization.
+                // Keep this branch as a conservative fallback.
+                self.select_random_single_without_materializing(endpoints)
             }
 
             LoadBalanceStrategy::HashBased => object_id.map_or_else(
@@ -482,44 +484,31 @@ impl LoadBalancer {
 
     /// Allocation-free random single-endpoint selection.
     ///
-    /// This preserves the same result as materializing all healthy endpoints
-    /// and choosing one by index, while avoiding per-call vector allocation.
+    /// Uses one-pass reservoir sampling over healthy endpoints, avoiding the
+    /// old two-pass "count then index-select" scan while keeping uniform
+    /// selection among observed healthy endpoints.
     fn select_random_single_without_materializing<'a>(
         &self,
         endpoints: &'a [Arc<Endpoint>],
     ) -> Option<&'a Arc<Endpoint>> {
-        let mut healthy_count = 0usize;
-        let mut first_healthy: Option<&Arc<Endpoint>> = None;
-        for endpoint in endpoints {
-            if endpoint.state().can_receive() {
-                healthy_count += 1;
-                if first_healthy.is_none() {
-                    first_healthy = Some(endpoint);
-                }
-            }
-        }
-        if healthy_count == 0 {
-            return None;
-        }
-
-        let seed = self.random_seed.fetch_add(1, Ordering::Relaxed);
-        let random = Self::next_lcg(seed);
-        let mut target = (random as usize) % healthy_count;
+        let mut seed = self.random_seed.fetch_add(1, Ordering::Relaxed);
+        let mut selected: Option<&Arc<Endpoint>> = None;
+        let mut healthy_seen = 0usize;
 
         for endpoint in endpoints {
             if !endpoint.state().can_receive() {
                 continue;
             }
-            if target == 0 {
-                return Some(endpoint);
+
+            healthy_seen += 1;
+            // Reservoir update: replace with probability 1 / healthy_seen.
+            seed = Self::next_lcg(seed);
+            if (seed as usize).is_multiple_of(healthy_seen) {
+                selected = Some(endpoint);
             }
-            target -= 1;
         }
 
-        // Endpoint health is read atomically and may change between passes.
-        // If the target index disappears due to concurrent transitions, fall
-        // back to a healthy endpoint observed in the first pass.
-        first_healthy
+        selected
     }
 
     /// Small-n random selection using Floyd sampling over healthy ranks.
@@ -1894,6 +1883,40 @@ mod tests {
                 .first()
                 .map(|endpoint| endpoint.id);
             assert_eq!(selected, selected_n);
+        }
+    }
+
+    #[test]
+    fn test_load_balancer_random_select_single_is_uniform_over_healthy() {
+        let lb = LoadBalancer::new(LoadBalanceStrategy::Random);
+        let endpoints = vec![
+            Arc::new(test_endpoint(0).with_state(EndpointState::Healthy)),
+            Arc::new(test_endpoint(100).with_state(EndpointState::Unhealthy)),
+            Arc::new(test_endpoint(1).with_state(EndpointState::Healthy)),
+            Arc::new(test_endpoint(101).with_state(EndpointState::Draining)),
+            Arc::new(test_endpoint(2).with_state(EndpointState::Healthy)),
+        ];
+
+        let mut counts = [0usize; 3];
+        for _ in 0..3000 {
+            let selected = lb.select_n(&endpoints, 1, None);
+            assert_eq!(selected.len(), 1);
+            let id = selected[0].id;
+            if id == EndpointId::new(0) {
+                counts[0] += 1;
+            } else if id == EndpointId::new(1) {
+                counts[1] += 1;
+            } else if id == EndpointId::new(2) {
+                counts[2] += 1;
+            } else {
+                panic!("selected unhealthy endpoint: {id:?}");
+            }
+        }
+
+        assert_eq!(counts.iter().sum::<usize>(), 3000);
+        // 3000 draws over 3 healthy endpoints should stay close to 1000 each.
+        for count in counts {
+            assert!((900..=1100).contains(&count), "non-uniform count: {count}");
         }
     }
 
