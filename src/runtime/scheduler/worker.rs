@@ -14,7 +14,7 @@ use crate::types::{TaskId, Time};
 use crate::util::DetRng;
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
@@ -587,6 +587,7 @@ impl Wake for WorkStealingWaker {
 #[derive(Debug)]
 struct ParkerInner {
     notified: AtomicBool,
+    waiting: AtomicUsize,
     mutex: Mutex<()>,
     cvar: Condvar,
 }
@@ -612,6 +613,7 @@ impl Parker {
         Self {
             inner: Arc::new(ParkerInner {
                 notified: AtomicBool::new(false),
+                waiting: AtomicUsize::new(0),
                 mutex: Mutex::new(()),
                 cvar: Condvar::new(),
             }),
@@ -621,35 +623,69 @@ impl Parker {
     /// Parks the current thread until notified.
     #[inline]
     pub fn park(&self) {
-        if self.inner.notified.swap(false, Ordering::Acquire) {
+        if self
+            .inner
+            .notified
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             return;
         }
 
         let mut guard = self.lock_unpoisoned();
-        while !self.inner.notified.swap(false, Ordering::Acquire) {
+        self.inner.waiting.fetch_add(1, Ordering::SeqCst);
+        while self
+            .inner
+            .notified
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             guard = self
                 .inner
                 .cvar
                 .wait(guard)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
+        self.inner.waiting.fetch_sub(1, Ordering::SeqCst);
         drop(guard);
     }
 
     /// Parks the current thread with a timeout.
     #[inline]
     pub fn park_timeout(&self, duration: Duration) {
-        if self.inner.notified.swap(false, Ordering::Acquire) {
+        if self
+            .inner
+            .notified
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             return;
         }
 
+        if duration.is_zero() {
+            // Preserve best-effort permit consumption if an unpark races
+            // immediately after the initial fast-path check.
+            let _ = self.inner.notified.compare_exchange(
+                true,
+                false,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            );
+            return;
+        }
+
+        self.inner.waiting.fetch_add(1, Ordering::SeqCst);
         let (guard, _timeout) = self
             .inner
             .cvar
             .wait_timeout_while(self.lock_unpoisoned(), duration, |()| {
-                !self.inner.notified.swap(false, Ordering::Acquire)
+                self.inner
+                    .notified
+                    .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
             })
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.inner.waiting.fetch_sub(1, Ordering::SeqCst);
         drop(guard);
     }
 
@@ -662,9 +698,19 @@ impl Parker {
     /// the only case where the thread might actually be parked.
     #[inline]
     pub fn unpark(&self) {
-        if self.inner.notified.swap(true, Ordering::Release) {
+        if self
+            .inner
+            .notified
+            .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed)
+            .is_err()
+        {
             // Already notified — the thread will see it on the next
             // park() fast-path check.  No mutex or condvar needed.
+            return;
+        }
+        // No waiter currently parked or preparing to park under the mutex.
+        // The permit has been published, so the next park() will consume it.
+        if self.inner.waiting.load(Ordering::SeqCst) == 0 {
             return;
         }
         // Was not notified: the thread may be parked. We must acquire the
