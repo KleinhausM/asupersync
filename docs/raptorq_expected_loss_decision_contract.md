@@ -122,13 +122,21 @@ Current dependency set in the artifact:
 3. `asupersync-n5fk6` (F7 final closure evidence in G3 cards) must be `closed`
 4. `asupersync-2zu9p` (F8 implementation + closure evidence) must be `closed`
 
-`ready_to_close` remains `false` until all dependencies are closed and the
-Track-G handoff packet fields are attached for `asupersync-2cyx5`.
+Current closure-readiness status (2026-02-22 refresh):
+
+- `asupersync-3ltrv`: `closed`
+- `asupersync-n5fk6`: `closed`
+- `asupersync-2zu9p`: `closed`
+- `asupersync-36m6p`: still `in_progress`
+
+`ready_to_close` remains `false` because `asupersync-36m6p` has not yet reached
+`closed`, and Track-G handoff packet fields are still required for
+`asupersync-2cyx5`.
 
 ## Closure Notes
 
 `asupersync-m7o6i` can close after:
 
-1. final G3 decision-card closure refs are attached,
-2. deterministic E2E decision-path scenarios are attached for conflicting evidence,
+1. `asupersync-36m6p` reaches `closed` (dependency status requirement),
+2. Track-G summary packet for `asupersync-2cyx5` includes required fields (`gate_verdict_table`, `artifact_replay_index`, `residual_risk_register`, `go_no_go_decision`),
 3. Track-G summary packet references this contract artifact as the canonical G7 source.

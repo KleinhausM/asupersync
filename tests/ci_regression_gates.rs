@@ -1956,6 +1956,8 @@ fn g2_gate_runtime_bounded() {
 ///
 /// Repro: `cargo test --test ci_regression_gates g2_f8_wavefront_closure_evidence -- --nocapture`
 #[test]
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::cast_precision_loss)]
 fn g2_f8_wavefront_closure_evidence() {
     use asupersync::raptorq::systematic::SystematicEncoder;
     use std::time::Instant;
@@ -2052,21 +2054,18 @@ fn g2_f8_wavefront_closure_evidence() {
             }
 
             // Sequential decode (rollback proxy: batch_size=0).
-            match decoder.decode_wavefront(&received, 0) {
-                Ok(result) => {
-                    let mut correct = true;
-                    for (i, original) in source_data.iter().enumerate() {
-                        if result.source[i] != *original {
-                            correct = false;
-                            break;
-                        }
-                    }
-                    if correct {
-                        rollback_passed = true;
+            if let Ok(result) = decoder.decode_wavefront(&received, 0) {
+                let mut correct = true;
+                for (i, original) in source_data.iter().enumerate() {
+                    if result.source[i] != *original {
+                        correct = false;
                         break;
                     }
                 }
-                Err(_) => continue,
+                if correct {
+                    rollback_passed = true;
+                    break;
+                }
             }
         }
         rollback_outcomes.push(serde_json::json!({
@@ -2094,7 +2093,6 @@ fn g2_f8_wavefront_closure_evidence() {
             let mut times_us = Vec::new();
             let mut overlap_peeled_total = 0usize;
             let mut batches_total = 0usize;
-            let mut sample_stats = Vec::new();
 
             for sample_idx in 0..scenario.sample_count {
                 let seed = scenario.seed_base.wrapping_add(sample_idx as u64);
@@ -2136,8 +2134,14 @@ fn g2_f8_wavefront_closure_evidence() {
                 let mut sample_time_sum = 0u128;
                 for _ in 0..repetitions {
                     let start = Instant::now();
-                    let result = decoder.decode_wavefront(&received, batch_size)
-                        .expect(&format!("F8 decode failed: scenario={}, batch_size={batch_size}, sample={sample_idx}", scenario.id));
+                    let result = decoder
+                        .decode_wavefront(&received, batch_size)
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "F8 decode failed: scenario={}, batch_size={batch_size}, sample={sample_idx}",
+                                scenario.id
+                            )
+                        });
                     let elapsed = start.elapsed().as_micros();
                     sample_time_sum += elapsed;
 
@@ -2157,10 +2161,6 @@ fn g2_f8_wavefront_closure_evidence() {
                 }
                 let avg_time_us = sample_time_sum as f64 / repetitions as f64;
                 times_us.push(avg_time_us);
-                sample_stats.push(serde_json::json!({
-                    "sample": sample_idx,
-                    "avg_time_us": avg_time_us,
-                }));
             }
 
             // Compute percentiles.

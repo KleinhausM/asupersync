@@ -4,7 +4,7 @@
   "track_bead_id": "asupersync-m7o6i",
   "parent_track_bead_id": "asupersync-2cyx5",
   "external_ref": "bd-2bd8e",
-  "generated_at_utc": "2026-02-20T04:45:00Z",
+  "generated_at_utc": "2026-02-22T06:32:30Z",
   "contract": {
     "states": [
       "healthy",
@@ -398,10 +398,10 @@
         "bead_id": "asupersync-3ltrv",
         "name": "G3 optimization decision records",
         "required_status": "closed",
-        "current_status": "in_progress",
+        "current_status": "closed",
         "evidence_refs": [
           "artifacts/raptorq_optimization_decision_records_v1.json",
-          "thread:coord-2026-02-19"
+          "thread:asupersync-3ltrv"
         ]
       },
       {
@@ -418,24 +418,26 @@
         "bead_id": "asupersync-n5fk6",
         "name": "F7 final closure evidence in G3 decision records",
         "required_status": "closed",
-        "current_status": "in_progress",
+        "current_status": "closed",
         "evidence_refs": [
-          "artifacts/raptorq_optimization_decision_records_v1.json"
+          "artifacts/raptorq_optimization_decision_records_v1.json",
+          "artifacts/raptorq_track_f_factor_cache_p95p99_v3.json"
         ]
       },
       {
         "bead_id": "asupersync-2zu9p",
         "name": "F8 implementation and closure evidence in G3 decision records",
         "required_status": "closed",
-        "current_status": "open",
+        "current_status": "closed",
         "evidence_refs": [
-          "artifacts/raptorq_optimization_decision_records_v1.json"
+          "artifacts/raptorq_optimization_decision_records_v1.json",
+          "artifacts/raptorq_track_f_wavefront_pipeline_v1.json"
         ]
       }
     ],
     "remaining_requirements": [
-      "Attach final G3 closure refs with high-confidence E5 comparator corpus anchor.",
-      "Attach final F7/F8 closure evidence refs from decision cards before setting ready_to_close=true."
+      "Close asupersync-36m6p (E5) so closure_readiness dependencies all reach required_status=closed.",
+      "Attach Track-G handoff packet fields (gate_verdict_table, artifact_replay_index, residual_risk_register, go_no_go_decision) in asupersync-2cyx5."
     ],
     "track_g_handoff": {
       "bead_id": "asupersync-2cyx5",
