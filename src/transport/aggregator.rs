@@ -790,14 +790,14 @@ impl SymbolReorderer {
         if seq == state.next_expected {
             // Deliver immediately
             ready.push(symbol);
-            state.next_expected += 1;
+            state.next_expected = state.next_expected.saturating_add(1);
             state.last_delivery = now;
             self.in_order_deliveries.fetch_add(1, Ordering::Relaxed);
 
             // Check buffer for consecutive symbols
             while let Some(buffered) = state.buffer.remove(&state.next_expected) {
                 ready.push(buffered.symbol);
-                state.next_expected += 1;
+                state.next_expected = state.next_expected.saturating_add(1);
                 self.reordered_deliveries.fetch_add(1, Ordering::Relaxed);
             }
         } else if seq > state.next_expected {
@@ -821,7 +821,7 @@ impl SymbolReorderer {
                     ready.push(buffered.symbol);
                     self.timeout_deliveries.fetch_add(1, Ordering::Relaxed);
                 }
-                state.next_expected = seq + 1;
+                state.next_expected = seq.saturating_add(1);
                 state.last_delivery = now;
                 self.timeout_deliveries.fetch_add(1, Ordering::Relaxed);
                 ready.push(symbol);
@@ -861,8 +861,13 @@ impl SymbolReorderer {
                 // Drain everything up to cutoff
                 // BTreeMap::split_off returns keys >= argument.
                 // We want to keep keys > cutoff, so we split at cutoff + 1.
-                let keep = state.buffer.split_off(&(cutoff + 1));
-                let to_flush = std::mem::replace(&mut state.buffer, keep);
+                let to_flush = if cutoff == u32::MAX {
+                    // No key can be greater than u32::MAX.
+                    std::mem::take(&mut state.buffer)
+                } else {
+                    let keep = state.buffer.split_off(&(cutoff + 1));
+                    std::mem::replace(&mut state.buffer, keep)
+                };
 
                 for (_, buffered) in to_flush {
                     flushed.push(buffered.symbol);
@@ -872,14 +877,14 @@ impl SymbolReorderer {
                 }
 
                 if cutoff >= state.next_expected {
-                    state.next_expected = cutoff + 1;
+                    state.next_expected = cutoff.saturating_add(1);
                 }
             }
 
             // Drain any consecutive buffered symbols that are now deliverable.
             while let Some(buffered) = state.buffer.remove(&state.next_expected) {
                 flushed.push(buffered.symbol);
-                state.next_expected += 1;
+                state.next_expected = state.next_expected.saturating_add(1);
                 self.reordered_deliveries.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -2179,6 +2184,67 @@ mod tests {
         crate::test_complete!("flush_timeout_drains_consecutive_after_advance");
     }
 
+    #[test]
+    fn reorderer_large_gap_u32_max_does_not_overflow() {
+        init_test("reorderer_large_gap_u32_max_does_not_overflow");
+        let config = ReordererConfig {
+            immediate_delivery: false,
+            max_sequence_gap: 1,
+            ..Default::default()
+        };
+        let reorderer = SymbolReorderer::new(config);
+        let path = PathId(1);
+
+        let out = reorderer.process(Symbol::new_for_test(1, 0, u32::MAX, &[1]), path, Time::ZERO);
+        crate::assert_with_log!(out.len() == 1, "u32::MAX delivered", 1, out.len());
+        crate::assert_with_log!(
+            out[0].esi() == u32::MAX,
+            "delivered esi is u32::MAX",
+            u32::MAX,
+            out[0].esi()
+        );
+
+        crate::test_complete!("reorderer_large_gap_u32_max_does_not_overflow");
+    }
+
+    #[test]
+    fn flush_timeouts_handles_u32_max_cutoff() {
+        init_test("flush_timeouts_handles_u32_max_cutoff");
+        let config = ReordererConfig {
+            immediate_delivery: false,
+            max_wait_time: Time::from_millis(1),
+            max_sequence_gap: u32::MAX,
+            ..Default::default()
+        };
+        let reorderer = SymbolReorderer::new(config);
+        let path = PathId(1);
+
+        // This is buffered (gap == u32::MAX, allowed by config).
+        let out = reorderer.process(Symbol::new_for_test(1, 0, u32::MAX, &[9]), path, Time::ZERO);
+        crate::assert_with_log!(
+            out.is_empty(),
+            "u32::MAX symbol buffered",
+            true,
+            out.is_empty()
+        );
+
+        let flushed = reorderer.flush_timeouts(Time::from_millis(2));
+        crate::assert_with_log!(
+            flushed.len() == 1,
+            "flush emits buffered u32::MAX symbol",
+            1,
+            flushed.len()
+        );
+        crate::assert_with_log!(
+            flushed[0].esi() == u32::MAX,
+            "flushed esi is u32::MAX",
+            u32::MAX,
+            flushed[0].esi()
+        );
+
+        crate::test_complete!("flush_timeouts_handles_u32_max_cutoff");
+    }
+
     // =========================================================================
     // Wave 29: Data-type trait coverage
     // =========================================================================
@@ -2237,7 +2303,8 @@ mod tests {
         assert_eq!(chars.jitter_ms, 10);
         assert!(!chars.is_primary);
         assert_eq!(chars.priority, 100);
-        let _cloned = chars;
+        let cloned = chars.clone();
+        assert_eq!(cloned.latency_ms, chars.latency_ms);
     }
 
     #[test]
@@ -2273,7 +2340,8 @@ mod tests {
         assert_eq!(config.max_symbols_per_object, 10_000);
         assert_eq!(config.max_objects, 1_000);
         assert!(config.track_path);
-        let _cloned = config;
+        let cloned = config.clone();
+        assert_eq!(cloned.max_objects, config.max_objects);
     }
 
     #[test]
@@ -2296,7 +2364,8 @@ mod tests {
         assert_eq!(config.max_buffer_per_object, 1_000);
         assert!(!config.immediate_delivery);
         assert_eq!(config.max_sequence_gap, 100);
-        let _cloned = config;
+        let cloned = config.clone();
+        assert_eq!(cloned.max_buffer_per_object, config.max_buffer_per_object);
     }
 
     #[test]
@@ -2319,7 +2388,8 @@ mod tests {
         assert!(format!("{config:?}").contains("AggregatorConfig"));
         assert!(config.enable_reordering);
         assert_eq!(config.path_policy, PathSelectionPolicy::UseAll);
-        let _cloned = config;
+        let cloned = config.clone();
+        assert_eq!(cloned.enable_reordering, config.enable_reordering);
     }
 
     #[test]

@@ -289,6 +289,25 @@ pub struct LoadBalancer {
 }
 
 impl LoadBalancer {
+    const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+    const LCG_INCREMENT: u64 = 1;
+    const RANDOM_FLOYD_SMALL_N_MAX: usize = 8;
+
+    #[inline]
+    fn next_lcg(seed: u64) -> u64 {
+        seed.wrapping_mul(Self::LCG_MULTIPLIER)
+            .wrapping_add(Self::LCG_INCREMENT)
+    }
+
+    #[inline]
+    fn compare_weighted_load(a: &Endpoint, b: &Endpoint) -> std::cmp::Ordering {
+        let a_conn = u128::from(a.connection_count());
+        let b_conn = u128::from(b.connection_count());
+        let a_weight = u128::from(a.weight.max(1));
+        let b_weight = u128::from(b.weight.max(1));
+        (a_conn * b_weight).cmp(&(b_conn * a_weight))
+    }
+
     /// Creates a new load balancer.
     #[must_use]
     pub fn new(strategy: LoadBalanceStrategy) -> Self {
@@ -344,20 +363,14 @@ impl LoadBalancer {
                 available.into_iter().min_by_key(|e| e.connection_count())
             }
 
-            LoadBalanceStrategy::WeightedLeastConnections => {
-                available.into_iter().min_by(|a, b| {
-                    let a_score = f64::from(a.connection_count()) / f64::from(a.weight.max(1));
-                    let b_score = f64::from(b.connection_count()) / f64::from(b.weight.max(1));
-                    a_score
-                        .partial_cmp(&b_score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-            }
+            LoadBalanceStrategy::WeightedLeastConnections => available
+                .into_iter()
+                .min_by(|a, b| Self::compare_weighted_load(a, b)),
 
             LoadBalanceStrategy::Random => {
                 // Simple LCG random
                 let seed = self.random_seed.fetch_add(1, Ordering::Relaxed);
-                let random = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                let random = Self::next_lcg(seed);
                 let idx = (random as usize) % available.len();
                 Some(available[idx])
             }
@@ -387,6 +400,20 @@ impl LoadBalancer {
     ) -> Vec<&'a Arc<Endpoint>> {
         if n == 0 {
             return Vec::new();
+        }
+
+        if matches!(self.strategy, LoadBalanceStrategy::Random) && n == 1 {
+            return self
+                .select_random_single_without_materializing(endpoints)
+                .into_iter()
+                .collect();
+        }
+
+        if matches!(self.strategy, LoadBalanceStrategy::Random)
+            && n <= Self::RANDOM_FLOYD_SMALL_N_MAX
+            && let Some(selected) = self.select_n_random_all_healthy_small(endpoints, n)
+        {
+            return selected;
         }
 
         // Filter healthy endpoints first.
@@ -422,7 +449,7 @@ impl LoadBalancer {
 
                 for i in 0..count {
                     // Simple LCG step
-                    seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                    seed = Self::next_lcg(seed);
                     // Range is [i, len)
                     let range = len - i;
                     let offset = (seed as usize) % range;
@@ -432,8 +459,7 @@ impl LoadBalancer {
                 available.truncate(count);
                 available
             }
-            LoadBalanceStrategy::LeastConnections
-            | LoadBalanceStrategy::WeightedLeastConnections => {
+            LoadBalanceStrategy::LeastConnections => {
                 let mut candidates = available;
                 // Sort by connection count (approximated by full sort for simplicity)
                 // In production, select_nth_unstable is better.
@@ -441,10 +467,109 @@ impl LoadBalancer {
                 candidates.truncate(n);
                 candidates
             }
+            LoadBalanceStrategy::WeightedLeastConnections => {
+                let mut candidates = available;
+                candidates.sort_by(|a, b| Self::compare_weighted_load(a, b));
+                candidates.truncate(n);
+                candidates
+            }
 
             // For others, fallback to first-available logic or simple selection
             _ => available.into_iter().take(n).collect(),
         }
+    }
+
+    /// Allocation-free random single-endpoint selection.
+    ///
+    /// This preserves the same result as materializing all healthy endpoints
+    /// and choosing one by index, while avoiding per-call vector allocation.
+    fn select_random_single_without_materializing<'a>(
+        &self,
+        endpoints: &'a [Arc<Endpoint>],
+    ) -> Option<&'a Arc<Endpoint>> {
+        let mut healthy_count = 0usize;
+        let mut first_healthy: Option<&Arc<Endpoint>> = None;
+        for endpoint in endpoints {
+            if endpoint.state().can_receive() {
+                healthy_count += 1;
+                if first_healthy.is_none() {
+                    first_healthy = Some(endpoint);
+                }
+            }
+        }
+        if healthy_count == 0 {
+            return None;
+        }
+
+        let seed = self.random_seed.fetch_add(1, Ordering::Relaxed);
+        let random = Self::next_lcg(seed);
+        let mut target = (random as usize) % healthy_count;
+
+        for endpoint in endpoints {
+            if !endpoint.state().can_receive() {
+                continue;
+            }
+            if target == 0 {
+                return Some(endpoint);
+            }
+            target -= 1;
+        }
+
+        // Endpoint health is read atomically and may change between passes.
+        // If the target index disappears due to concurrent transitions, fall
+        // back to a healthy endpoint observed in the first pass.
+        first_healthy
+    }
+
+    /// Small-n all-healthy random selection using Floyd sampling.
+    ///
+    /// Floyd's algorithm samples an exact `n`-subset without replacement from
+    /// `[0, population)`. We then apply a tiny Fisher-Yates permutation to keep
+    /// output ordering random while avoiding full-vector materialization.
+    fn select_n_random_all_healthy_small<'a>(
+        &self,
+        endpoints: &'a [Arc<Endpoint>],
+        n: usize,
+    ) -> Option<Vec<&'a Arc<Endpoint>>> {
+        if n == 0 || endpoints.len() < n {
+            return None;
+        }
+
+        if endpoints.iter().any(|endpoint| !endpoint.state().can_receive()) {
+            return None;
+        }
+
+        let population = endpoints.len();
+        if n >= population {
+            return Some(endpoints.iter().collect());
+        }
+
+        let mut seed = self.random_seed.fetch_add(n as u64, Ordering::Relaxed);
+        let mut selected_indices = SmallVec::<[usize; Self::RANDOM_FLOYD_SMALL_N_MAX]>::new();
+        selected_indices.reserve_exact(n);
+
+        for j in (population - n)..population {
+            seed = Self::next_lcg(seed);
+            let candidate = (seed as usize) % (j + 1);
+            if selected_indices.contains(&candidate) {
+                selected_indices.push(j);
+            } else {
+                selected_indices.push(candidate);
+            }
+        }
+
+        for i in 0..n {
+            seed = Self::next_lcg(seed);
+            let swap = i + ((seed as usize) % (n - i));
+            selected_indices.swap(i, swap);
+        }
+
+        Some(
+            selected_indices
+                .into_iter()
+                .map(|index| &endpoints[index])
+                .collect(),
+        )
     }
 }
 
@@ -1618,6 +1743,23 @@ mod tests {
         assert_eq!(selected.id, e2.id); // Least connections
     }
 
+    #[test]
+    fn test_load_balancer_weighted_least_connections() {
+        let lb = LoadBalancer::new(LoadBalanceStrategy::WeightedLeastConnections);
+
+        let e1 = Arc::new(test_endpoint(1).with_weight(1));
+        let e2 = Arc::new(test_endpoint(2).with_weight(4));
+        let e3 = Arc::new(test_endpoint(3).with_weight(2));
+
+        e1.active_connections.store(2, Ordering::Relaxed); // 2.0
+        e2.active_connections.store(4, Ordering::Relaxed); // 1.0
+        e3.active_connections.store(3, Ordering::Relaxed); // 1.5
+
+        let endpoints = vec![e1, e2.clone(), e3];
+        let selected = lb.select(&endpoints, None).unwrap();
+        assert_eq!(selected.id, e2.id);
+    }
+
     // Test 5: Load balancer hash-based
     #[test]
     fn test_load_balancer_hash_based() {
@@ -1631,6 +1773,116 @@ mod tests {
         let s1 = lb.select(&endpoints, Some(oid));
         let s2 = lb.select(&endpoints, Some(oid));
         assert_eq!(s1.unwrap().id, s2.unwrap().id);
+    }
+
+    #[test]
+    fn test_load_balancer_random_select_n_returns_unique_healthy() {
+        let lb = LoadBalancer::new(LoadBalanceStrategy::Random);
+        let endpoints: Vec<Arc<Endpoint>> = (0..10)
+            .map(|i| {
+                let endpoint = test_endpoint(i);
+                if i % 3 == 0 {
+                    Arc::new(endpoint.with_state(EndpointState::Unhealthy))
+                } else {
+                    Arc::new(endpoint)
+                }
+            })
+            .collect();
+
+        let selected = lb.select_n(&endpoints, 3, None);
+        assert_eq!(selected.len(), 3);
+        assert!(
+            selected
+                .iter()
+                .all(|endpoint| endpoint.state().can_receive())
+        );
+
+        let unique_ids: HashSet<_> = selected.iter().map(|endpoint| endpoint.id).collect();
+        assert_eq!(unique_ids.len(), selected.len());
+    }
+
+    #[test]
+    fn test_load_balancer_random_select_n_returns_all_healthy_when_n_large() {
+        let lb = LoadBalancer::new(LoadBalanceStrategy::Random);
+        let endpoints = vec![
+            Arc::new(test_endpoint(1).with_state(EndpointState::Healthy)),
+            Arc::new(test_endpoint(2).with_state(EndpointState::Unhealthy)),
+            Arc::new(test_endpoint(3).with_state(EndpointState::Degraded)),
+            Arc::new(test_endpoint(4).with_state(EndpointState::Draining)),
+            Arc::new(test_endpoint(5).with_state(EndpointState::Healthy)),
+        ];
+
+        let selected = lb.select_n(&endpoints, 16, None);
+        let selected_ids: Vec<_> = selected.iter().map(|endpoint| endpoint.id).collect();
+        assert_eq!(
+            selected_ids,
+            vec![EndpointId::new(1), EndpointId::new(3), EndpointId::new(5)]
+        );
+    }
+
+    #[test]
+    fn test_load_balancer_random_select_n_single_matches_select_sequence() {
+        let lb_select = LoadBalancer::new(LoadBalanceStrategy::Random);
+        let lb_select_n = LoadBalancer::new(LoadBalanceStrategy::Random);
+        let endpoints: Vec<Arc<Endpoint>> = (0..8)
+            .map(|i| {
+                let endpoint = test_endpoint(i);
+                if i % 4 == 0 {
+                    Arc::new(endpoint.with_state(EndpointState::Unhealthy))
+                } else {
+                    Arc::new(endpoint)
+                }
+            })
+            .collect();
+
+        for _ in 0..64 {
+            let selected = lb_select
+                .select(&endpoints, None)
+                .map(|endpoint| endpoint.id);
+            let selected_n = lb_select_n
+                .select_n(&endpoints, 1, None)
+                .first()
+                .map(|endpoint| endpoint.id);
+            assert_eq!(selected, selected_n);
+        }
+    }
+
+    #[test]
+    fn test_load_balancer_random_select_n_small_all_healthy_is_unique() {
+        let lb = LoadBalancer::new(LoadBalanceStrategy::Random);
+        let endpoints: Vec<Arc<Endpoint>> = (0..16).map(|i| Arc::new(test_endpoint(i))).collect();
+
+        for _ in 0..64 {
+            let selected = lb.select_n(&endpoints, 3, None);
+            assert_eq!(selected.len(), 3);
+            assert!(
+                selected
+                    .iter()
+                    .all(|endpoint| endpoint.state().can_receive())
+            );
+            let unique_ids: HashSet<_> = selected.iter().map(|endpoint| endpoint.id).collect();
+            assert_eq!(unique_ids.len(), selected.len());
+        }
+    }
+
+    #[test]
+    fn test_load_balancer_weighted_least_connections_select_n_uses_weights() {
+        let lb = LoadBalancer::new(LoadBalanceStrategy::WeightedLeastConnections);
+
+        let e1 = Arc::new(test_endpoint(1).with_weight(1));
+        let e2 = Arc::new(test_endpoint(2).with_weight(4));
+        let e3 = Arc::new(test_endpoint(3).with_weight(2));
+        let e4 = Arc::new(test_endpoint(4).with_weight(2));
+
+        e1.active_connections.store(4, Ordering::Relaxed); // 4.0
+        e2.active_connections.store(4, Ordering::Relaxed); // 1.0
+        e3.active_connections.store(4, Ordering::Relaxed); // 2.0
+        e4.active_connections.store(1, Ordering::Relaxed); // 0.5
+
+        let endpoints = vec![e1, e2.clone(), e3, e4.clone()];
+        let selected = lb.select_n(&endpoints, 2, None);
+        let selected_ids: Vec<_> = selected.iter().map(|endpoint| endpoint.id).collect();
+        assert_eq!(selected_ids, vec![e4.id, e2.id]);
     }
 
     // Test 6: Routing table basic operations
