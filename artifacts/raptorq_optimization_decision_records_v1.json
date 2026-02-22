@@ -527,7 +527,7 @@
         "conservative_mode": "No reuse."
       },
       "rollback_rehearsal": {
-        "command": "cargo test --test ci_regression_gates g2_f7_burst_cache_closure_evidence_v3 -- --nocapture",
+        "command": "rch exec -- cargo test --test ci_regression_gates g2_f7_burst_cache_closure_evidence_v3 -- --nocapture",
         "outcome": "pass",
         "outcome_detail": "All 3 scenarios (k=48, k=64, k=48-large) verified: conservative cold-cache path produces correct source symbol recovery.",
         "outcome_artifact": "artifacts/raptorq_track_f_factor_cache_p95p99_v3.json (rollback_rehearsal section)",
@@ -637,7 +637,7 @@
   "coverage_summary": {
     "cards_total": 8,
     "cards_with_conservative_comparator": 8,
-    "cards_with_measured_comparator_evidence": 8,
+    "cards_with_measured_comparator_evidence": 7,
     "cards_with_partial_measured_comparator_evidence": 1,
     "cards_pending_measured_evidence": 1,
     "cards_with_replay_commands": 8,

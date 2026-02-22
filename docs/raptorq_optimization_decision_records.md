@@ -86,7 +86,7 @@ Current artifact summary (`coverage_summary` in JSON):
 
 - `cards_total = 8`
 - `cards_with_replay_commands = 8`
-- `cards_with_measured_comparator_evidence = 8`
+- `cards_with_measured_comparator_evidence = 7`
 - `cards_with_partial_measured_comparator_evidence = 1`
 - `cards_pending_measured_evidence = 1`
 - `partial_measured_levers = [E5]`

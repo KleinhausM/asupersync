@@ -1533,7 +1533,7 @@ fn g3_decision_records_schema_and_high_impact_lever_coverage() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         partial_measured_levers,
-        BTreeSet::from(["E5".to_string(), "F7".to_string()]),
+        BTreeSet::from(["E5".to_string()]),
         "partial_measured_levers must reflect current closure blockers"
     );
 
@@ -1590,7 +1590,7 @@ fn g3_decision_records_schema_and_high_impact_lever_coverage() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         closure_blocker_levers,
-        BTreeSet::from(["F7".to_string(), "F8".to_string()]),
+        BTreeSet::from(["F8".to_string()]),
         "closure_blocker_levers must match current G3 blockers"
     );
 
@@ -1600,15 +1600,15 @@ fn g3_decision_records_schema_and_high_impact_lever_coverage() {
         .expect("decision cards must include F7");
     assert_eq!(
         f7_card["measured_comparator_evidence"]["status"].as_str(),
-        Some("partial"),
-        "F7 should remain in partial measured-evidence state until closure-grade gain is proven"
+        Some("closure_complete"),
+        "F7 measured-evidence is closure_complete after v3 artifact publication"
     );
     assert!(
-        !f7_card["measured_comparator_evidence"]["pending_blockers"]
+        f7_card["measured_comparator_evidence"]["pending_blockers"]
             .as_array()
             .expect("F7 measured_comparator_evidence.pending_blockers must be an array")
             .is_empty(),
-        "F7 partial measured-evidence state must include pending blockers"
+        "F7 closure_complete state must have no pending blockers"
     );
 
     let f8_card = cards
