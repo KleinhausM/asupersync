@@ -4,6 +4,7 @@
 //! replicas and tracking acknowledgements with quorum semantics.
 
 use crate::combinator::quorum::{QuorumResult, quorum_outcomes};
+use crate::combinator::select::SelectAllDrain;
 use crate::error::ErrorKind;
 use crate::record::distributed_region::{ConsistencyLevel, ReplicaInfo};
 use crate::security::SecurityContext;
@@ -11,6 +12,7 @@ use crate::security::authenticated::AuthenticatedSymbol;
 use crate::types::symbol::ObjectId;
 use crate::types::{Outcome, Time};
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use super::assignment::{AssignmentStrategy, SymbolAssigner};
@@ -143,6 +145,8 @@ pub struct SymbolDistributor {
     pub metrics: DistributionMetrics,
 }
 
+type SendFuture<'a> = Pin<Box<dyn Future<Output = Result<ReplicaAck, ReplicaFailure>> + Send + 'a>>;
+
 impl SymbolDistributor {
     /// Creates a new distributor with the given configuration.
     #[must_use]
@@ -172,8 +176,12 @@ impl SymbolDistributor {
         let start = std::time::Instant::now();
         let assignments = Self::compute_assignments(encoded, replicas);
         let mut outcomes = Vec::with_capacity(assignments.len());
+        let parallelism = self.config.max_concurrent.max(1);
+        let mut assignment_iter = assignments.into_iter();
+        let mut in_flight: Vec<SendFuture<'_>> = Vec::with_capacity(parallelism);
+        let mut symbols_sent_total = 0_u64;
 
-        for assignment in assignments {
+        let mut enqueue = |assignment: super::assignment::ReplicaAssignment| -> Option<SendFuture<'_>> {
             let symbols_for_replica: Vec<AuthenticatedSymbol> = assignment
                 .symbol_indices
                 .iter()
@@ -184,21 +192,50 @@ impl SymbolDistributor {
                 .collect();
 
             if symbols_for_replica.is_empty() {
-                continue;
+                return None;
             }
 
-            // TODO: Execute these concurrently (respecting max_concurrent)
-            let result = transport
-                .send_symbols(&assignment.replica_id, symbols_for_replica)
-                .await;
+            symbols_sent_total = symbols_sent_total.saturating_add(symbols_for_replica.len() as u64);
+            let replica_id = assignment.replica_id;
+            Some(Box::pin(async move {
+                transport
+                    .send_symbols(&replica_id, symbols_for_replica)
+                    .await
+            }))
+        };
 
-            outcomes.push(match result {
+        while in_flight.len() < parallelism {
+            let Some(assignment) = assignment_iter.next() else {
+                break;
+            };
+            if let Some(fut) = enqueue(assignment) {
+                in_flight.push(fut);
+            }
+        }
+
+        while !in_flight.is_empty() {
+            let selected = SelectAllDrain::new(in_flight).await;
+            in_flight = selected.losers;
+
+            outcomes.push(match selected.value {
                 Ok(ack) => Outcome::Ok(ack),
                 Err(fail) => Outcome::Err(fail),
             });
+
+            if let Some(assignment) = assignment_iter.next()
+                && let Some(fut) = enqueue(assignment)
+            {
+                in_flight.push(fut);
+            }
         }
 
-        self.evaluate_outcomes(encoded, replicas, outcomes, start.elapsed())
+        self.evaluate_outcomes_with_sent(
+            encoded,
+            replicas,
+            outcomes,
+            symbols_sent_total,
+            start.elapsed(),
+        )
     }
 
     /// Computes the required acknowledgement count for the given consistency
@@ -243,13 +280,33 @@ impl SymbolDistributor {
         outcomes: Vec<Outcome<ReplicaAck, ReplicaFailure>>,
         duration: Duration,
     ) -> DistributionResult {
+        self.evaluate_outcomes_with_sent(
+            encoded,
+            replicas,
+            outcomes,
+            encoded.symbols.len() as u64,
+            duration,
+        )
+    }
+
+    fn evaluate_outcomes_with_sent(
+        &mut self,
+        encoded: &EncodedState,
+        replicas: &[ReplicaInfo],
+        outcomes: Vec<Outcome<ReplicaAck, ReplicaFailure>>,
+        symbols_sent_total: u64,
+        duration: Duration,
+    ) -> DistributionResult {
         let required = Self::required_acks(self.config.consistency, replicas.len());
 
         let quorum_result: QuorumResult<ReplicaAck, ReplicaFailure> =
             quorum_outcomes(required, outcomes);
 
         self.metrics.distributions_total += 1;
-        self.metrics.symbols_sent_total += u64::from(encoded.symbols.len() as u32);
+        self.metrics.symbols_sent_total = self
+            .metrics
+            .symbols_sent_total
+            .saturating_add(symbols_sent_total);
 
         let acks: Vec<ReplicaAck> = quorum_result
             .successes
@@ -341,6 +398,20 @@ mod tests {
             replica_id: replica_id.to_string(),
             error: "connection refused".to_string(),
             error_kind: ErrorKind::NodeUnavailable,
+        }
+    }
+
+    struct MockSuccessTransport;
+
+    impl DistributorTransport for MockSuccessTransport {
+        fn send_symbols(
+            &self,
+            replica_id: &str,
+            symbols: Vec<AuthenticatedSymbol>,
+        ) -> impl Future<Output = Result<ReplicaAck, ReplicaFailure>> + Send {
+            let replica_id = replica_id.to_string();
+            let symbol_count = symbols.len() as u32;
+            async move { Ok(make_ack(&replica_id, symbol_count)) }
         }
     }
 
@@ -436,6 +507,32 @@ mod tests {
         assert_eq!(distributor.metrics.distributions_successful, 1);
         assert!(distributor.metrics.symbols_sent_total > 0);
         assert_eq!(distributor.metrics.acks_received_total, 3);
+    }
+
+    #[test]
+    fn distribute_counts_symbols_sent_per_replica_attempt() {
+        let config = DistributionConfig::default();
+        let mut distributor = SymbolDistributor::new(config);
+        let replicas = create_test_replicas(3);
+        let encoded = create_test_encoded_state();
+        let auth_context = SecurityContext::for_testing(7);
+        let transport = MockSuccessTransport;
+
+        let expected_symbols_sent: u64 = SymbolDistributor::compute_assignments(&encoded, &replicas)
+            .into_iter()
+            .map(|assignment| assignment.symbol_indices.len() as u64)
+            .sum();
+
+        let result = futures_lite::future::block_on(async {
+            distributor
+                .distribute(&encoded, &replicas, &transport, &auth_context)
+                .await
+        });
+
+        assert!(result.quorum_achieved);
+        assert_eq!(result.acks.len(), replicas.len());
+        assert_eq!(distributor.metrics.distributions_total, 1);
+        assert_eq!(distributor.metrics.symbols_sent_total, expected_symbols_sent);
     }
 
     #[test]
