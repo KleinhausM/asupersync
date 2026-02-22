@@ -23,6 +23,9 @@ const DEFAULT_MAX_HEADERS_SIZE: usize = 64 * 1024;
 /// Maximum allowed body size (16 MiB).
 const DEFAULT_MAX_BODY_SIZE: usize = 16 * 1024 * 1024;
 
+/// Maximum allowed trailer block size (64 KiB).
+const DEFAULT_MAX_TRAILERS_SIZE: usize = 64 * 1024;
+
 /// Maximum number of headers.
 const MAX_HEADERS: usize = 128;
 
@@ -41,6 +44,7 @@ pub struct Http1ClientCodec {
     state: ClientDecodeState,
     max_headers_size: usize,
     max_body_size: usize,
+    max_trailers_size: usize,
 }
 
 enum ClientDecodeState {
@@ -76,6 +80,7 @@ impl Http1ClientCodec {
             state: ClientDecodeState::Head,
             max_headers_size: DEFAULT_MAX_HEADERS_SIZE,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
+            max_trailers_size: DEFAULT_MAX_TRAILERS_SIZE,
         }
     }
 
@@ -90,6 +95,13 @@ impl Http1ClientCodec {
     #[must_use]
     pub fn max_body_size(mut self, size: usize) -> Self {
         self.max_body_size = size;
+        self
+    }
+
+    /// Set the maximum trailer block size for chunked responses.
+    #[must_use]
+    pub fn max_trailers_size(mut self, size: usize) -> Self {
+        self.max_trailers_size = size;
         self
     }
 }
@@ -188,7 +200,7 @@ impl crate::codec::Decoder for Http1ClientCodec {
                             headers,
                             chunked: ChunkedBodyDecoder::new(
                                 self.max_body_size,
-                                self.max_headers_size,
+                                self.max_trailers_size,
                             ),
                         };
                         continue;
@@ -851,12 +863,11 @@ impl<T> ClientIncomingBody<T> {
                 }
 
                 ChunkedReadState::Trailers => {
-                    if *trailers_bytes + self.buffer.len() > self.max_trailers_size {
-                        return Err(HttpError::HeadersTooLarge);
-                    }
-
                     let line_end = self.buffer.as_ref().windows(2).position(|w| w == b"\r\n");
                     let Some(line_end) = line_end else {
+                        if *trailers_bytes + self.buffer.len() > self.max_trailers_size {
+                            return Err(HttpError::HeadersTooLarge);
+                        }
                         return Ok(None);
                     };
 
@@ -1249,6 +1260,50 @@ mod tests {
         assert_eq!(resp.trailers.len(), 2);
         assert_eq!(resp.trailers[0].0, "X-Trailer");
         assert_eq!(resp.trailers[0].1, "one");
+    }
+
+    #[test]
+    fn streaming_chunked_trailer_limit_does_not_count_terminal_crlf() {
+        // ClientIncomingBody default trailer limit is 16 KiB. We construct a
+        // single trailer line that exactly consumes that budget:
+        // line "X:<value>" is 2 + value_len bytes; plus CRLF => +2.
+        // Choose value_len=16380 so (2 + 16380 + 2) == 16384.
+        let trailer_value = "a".repeat(16 * 1024 - 4);
+        let mut response_bytes = Vec::new();
+        response_bytes.extend_from_slice(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+        response_bytes.extend_from_slice(b"0\r\nX:");
+        response_bytes.extend_from_slice(trailer_value.as_bytes());
+        response_bytes.extend_from_slice(b"\r\n\r\n");
+
+        let io = TestIo::new(&response_bytes);
+        let req = Request {
+            method: Method::Get,
+            uri: "/".to_string(),
+            version: Version::Http11,
+            headers: vec![("Host".to_string(), "example.com".to_string())],
+            body: Vec::new(),
+            trailers: Vec::new(),
+            peer_addr: None,
+        };
+
+        let mut resp = block_on(Http1Client::request_streaming(io, req)).expect("streaming resp");
+        assert_eq!(resp.head.status, 200);
+
+        let mut saw_trailers = false;
+        while let Some(frame) = poll_body(&mut resp.body) {
+            let frame = frame.expect("frame ok");
+            match frame {
+                Frame::Data(_) => panic!("zero-sized chunked response should not yield data"),
+                Frame::Trailers(trailers) => {
+                    saw_trailers = true;
+                    let header = trailers
+                        .get(&HeaderName::from_static("x"))
+                        .expect("trailer x");
+                    assert_eq!(header.as_bytes().len(), trailer_value.len());
+                }
+            }
+        }
+        assert!(saw_trailers);
     }
 
     #[test]

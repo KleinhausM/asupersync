@@ -444,12 +444,12 @@ impl IncomingBodyWriter {
                 }
 
                 ChunkedReadState::Trailers => {
-                    if self.trailers_bytes + self.buffer.len() > self.max_trailers_size {
-                        return Err(HttpError::HeadersTooLarge);
-                    }
-
                     let line_end = self.buffer.as_ref().windows(2).position(|w| w == b"\r\n");
                     let Some(line_end) = line_end else {
+                        // No complete trailer line yet: bound buffered trailer data.
+                        if self.trailers_bytes + self.buffer.len() > self.max_trailers_size {
+                            return Err(HttpError::HeadersTooLarge);
+                        }
                         return Ok(None);
                     };
 
@@ -668,7 +668,15 @@ impl Body for OutgoingBody {
 
         let cx = self.cx.clone();
         match self.receiver.poll_recv(&cx, poll_cx) {
-            Poll::Ready(Ok(frame)) => Poll::Ready(Some(frame)),
+            Poll::Ready(Ok(frame)) => {
+                if let Ok(ref f) = frame {
+                    if f.is_trailers() {
+                        // Trailers are terminal for chunked bodies.
+                        self.done = true;
+                    }
+                }
+                Poll::Ready(Some(frame))
+            }
             Poll::Ready(Err(RecvError::Cancelled)) => {
                 self.done = true;
                 Poll::Ready(Some(Err(HttpError::BodyCancelled)))
@@ -1125,6 +1133,24 @@ mod tests {
     }
 
     #[test]
+    fn incoming_body_chunked_trailer_limit_does_not_count_terminal_crlf() {
+        let cx: Cx = Cx::for_testing();
+        let (writer, mut body) = IncomingBody::channel(&cx, BodyKind::Chunked);
+        let mut writer = writer.max_trailers_size(7);
+
+        // "X: y\r\n" consumes 6 trailer bytes; terminal "\r\n" should not count.
+        block_on(writer.push_bytes(&cx, b"0\r\nX: y\r\n\r\n"))
+            .expect("valid trailers should fit configured trailer limit");
+
+        let frame = poll_body(&mut body)
+            .expect("trailers frame")
+            .expect("ok frame");
+        let trailers = frame.into_trailers().expect("trailers");
+        assert_eq!(trailers.len(), 1);
+        assert!(body.is_end_stream());
+    }
+
+    #[test]
     fn incoming_body_pending_poll_keeps_waker_registration() {
         let cx: Cx = Cx::for_testing();
         let (mut writer, mut body) = IncomingBody::channel(&cx, BodyKind::ContentLength(1));
@@ -1276,6 +1302,33 @@ mod tests {
         };
         let data = frame.into_data().expect("data frame");
         assert_eq!(data.chunk(), b"x");
+    }
+
+    #[test]
+    fn outgoing_body_trailers_mark_end_stream_immediately() {
+        let cx: Cx = Cx::for_testing();
+        let (mut sender, mut body) = OutgoingBody::channel(&cx, BodyKind::Chunked);
+
+        let mut trailers = HeaderMap::new();
+        trailers.insert(
+            crate::http::body::HeaderName::from_static("x-end"),
+            crate::http::body::HeaderValue::from_static("true"),
+        );
+
+        block_on(sender.send_trailers(&cx, trailers)).expect("send trailers");
+
+        let frame = poll_body(&mut body)
+            .expect("trailers frame")
+            .expect("ok frame");
+        assert!(frame.is_trailers(), "terminal frame must be trailers");
+        assert!(
+            body.is_end_stream(),
+            "body should mark end-stream immediately after trailers"
+        );
+        assert!(
+            poll_body(&mut body).is_none(),
+            "next poll should complete stream"
+        );
     }
 
     #[test]
