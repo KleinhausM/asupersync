@@ -12,6 +12,7 @@ use asupersync::cx::Cx;
 use asupersync::http::h3_native::{
     H3ConnectionConfig, H3ConnectionState, H3ControlState, H3Frame, H3NativeError, H3PseudoHeaders,
     H3QpackMode, H3RequestHead, H3RequestStreamState, H3ResponseHead, H3Settings, QpackFieldPlan,
+    qpack_decode_field_section, qpack_encode_field_section, qpack_plan_to_header_fields,
     qpack_static_plan_for_request, qpack_static_plan_for_response,
 };
 use asupersync::net::quic_native::{
@@ -20,6 +21,7 @@ use asupersync::net::quic_native::{
 };
 use asupersync::types::Time;
 use asupersync::util::DetRng;
+use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // Helpers (replicated from quic_h3_e2e.rs)
@@ -28,6 +30,143 @@ use asupersync::util::DetRng;
 /// Build a test Cx with infinite budget and no cancellation.
 fn test_cx() -> Cx {
     Cx::for_testing()
+}
+
+fn decode_hex(hex: &str) -> Vec<u8> {
+    assert_eq!(hex.len() % 2, 0, "hex string length must be even");
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    let bytes = hex.as_bytes();
+    for i in (0..bytes.len()).step_by(2) {
+        let hi = (bytes[i] as char)
+            .to_digit(16)
+            .unwrap_or_else(|| panic!("invalid hex nibble at {i}"));
+        let lo = (bytes[i + 1] as char)
+            .to_digit(16)
+            .unwrap_or_else(|| panic!("invalid hex nibble at {}", i + 1));
+        out.push(((hi << 4) | lo) as u8);
+    }
+    out
+}
+
+fn fixture_plan_from_json(value: &Value) -> Vec<QpackFieldPlan> {
+    let entries = value
+        .as_array()
+        .expect("expected fixture expected_plan to be array");
+    entries
+        .iter()
+        .map(|entry| {
+            let kind = entry
+                .get("kind")
+                .and_then(Value::as_str)
+                .expect("expected plan entry kind");
+            match kind {
+                "static" => QpackFieldPlan::StaticIndex(
+                    entry
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .expect("expected static index"),
+                ),
+                "literal" => QpackFieldPlan::Literal {
+                    name: entry
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .expect("expected literal name")
+                        .to_string(),
+                    value: entry
+                        .get("value")
+                        .and_then(Value::as_str)
+                        .expect("expected literal value")
+                        .to_string(),
+                },
+                other => panic!("unknown expected_plan kind: {other}"),
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+enum H3HarnessEvent {
+    Control(H3Frame),
+    RequestFrame { stream_id: u64, frame: H3Frame },
+    FinishRequest { stream_id: u64 },
+}
+
+#[derive(Clone, Debug)]
+struct ScheduledH3Event {
+    origin: usize,
+    event: H3HarnessEvent,
+}
+
+fn build_fault_schedule(
+    base: &[H3HarnessEvent],
+    drops: &[usize],
+    duplicates: &[usize],
+    swaps: &[(usize, usize)],
+) -> Vec<ScheduledH3Event> {
+    // Deterministic operation order:
+    // 1) drop by origin from base sequence
+    // 2) apply swaps against the unique-origin post-drop sequence
+    // 3) duplicate by origin on the swapped sequence
+    let mut schedule: Vec<ScheduledH3Event> = base
+        .iter()
+        .enumerate()
+        .filter_map(|(origin, event)| {
+            if drops.contains(&origin) {
+                None
+            } else {
+                Some(ScheduledH3Event {
+                    origin,
+                    event: event.clone(),
+                })
+            }
+        })
+        .collect();
+
+    for (a, b) in swaps {
+        let a_pos = schedule
+            .iter()
+            .position(|event| event.origin == *a)
+            .unwrap_or_else(|| panic!("swap origin {a} missing in schedule"));
+        let b_pos = schedule
+            .iter()
+            .position(|event| event.origin == *b)
+            .unwrap_or_else(|| panic!("swap origin {b} missing in schedule"));
+        if a_pos != b_pos {
+            schedule.swap(a_pos, b_pos);
+        }
+    }
+
+    for origin in duplicates {
+        let pos = schedule
+            .iter()
+            .rposition(|event| event.origin == *origin)
+            .unwrap_or_else(|| panic!("duplicate origin {origin} missing after drop/swap"));
+        let duplicate_event = schedule[pos].clone();
+        schedule.insert(pos + 1, duplicate_event);
+    }
+
+    schedule
+}
+
+fn run_fault_schedule(
+    state: &mut H3ConnectionState,
+    schedule: &[ScheduledH3Event],
+) -> Vec<(usize, Result<(), H3NativeError>)> {
+    schedule
+        .iter()
+        .map(|scheduled| {
+            let result = match &scheduled.event {
+                H3HarnessEvent::Control(frame) => state.on_control_frame(frame),
+                H3HarnessEvent::RequestFrame { stream_id, frame } => {
+                    state.on_request_stream_frame(*stream_id, frame)
+                }
+                H3HarnessEvent::FinishRequest { stream_id } => {
+                    state.finish_request_stream(*stream_id)
+                }
+            };
+            (scheduled.origin, result)
+        })
+        .collect()
 }
 
 /// Deterministic microsecond clock starting at seed-derived offset.
@@ -1394,4 +1533,257 @@ fn full_h3_lifecycle_over_quic_streams() {
         client_view.recv_offset > 0,
         "client should have received response data"
     );
+}
+
+// ===========================================================================
+// Test 13: Wire-level QPACK field section roundtrip + header projection
+// ===========================================================================
+
+#[test]
+fn qpack_wire_field_section_roundtrip_and_header_projection() {
+    let plan = vec![
+        QpackFieldPlan::StaticIndex(17), // :method GET
+        QpackFieldPlan::StaticIndex(23), // :scheme https
+        QpackFieldPlan::StaticIndex(1),  // :path /
+        QpackFieldPlan::Literal {
+            name: ":authority".to_string(),
+            value: "example.com".to_string(),
+        },
+        QpackFieldPlan::Literal {
+            name: "accept".to_string(),
+            value: "application/json".to_string(),
+        },
+    ];
+
+    let wire = qpack_encode_field_section(&plan).expect("encode field section");
+    let decoded =
+        qpack_decode_field_section(&wire, H3QpackMode::StaticOnly).expect("decode field section");
+    assert_eq!(decoded, plan);
+
+    let projected = qpack_plan_to_header_fields(&decoded).expect("project to header fields");
+    assert_eq!(projected[0], (":method".to_string(), "GET".to_string()));
+    assert_eq!(projected[1], (":scheme".to_string(), "https".to_string()));
+    assert_eq!(projected[2], (":path".to_string(), "/".to_string()));
+    assert_eq!(
+        projected[3],
+        (":authority".to_string(), "example.com".to_string())
+    );
+}
+
+// ===========================================================================
+// Test 14: Interop capture corpus fixtures (black-box) validate decode policy
+// ===========================================================================
+
+#[test]
+fn qpack_interop_capture_corpus_v1_fixtures() {
+    let corpus_json = include_str!("../artifacts/quic_h3_interop_capture_corpus_v1.json");
+    let corpus: Value = serde_json::from_str(corpus_json).expect("parse interop corpus");
+
+    assert_eq!(
+        corpus
+            .get("schema_version")
+            .and_then(Value::as_str)
+            .expect("schema_version"),
+        "quic-h3-interop-capture-corpus-v1"
+    );
+
+    let fixtures = corpus
+        .get("fixtures")
+        .and_then(Value::as_array)
+        .expect("fixtures array");
+    assert!(
+        !fixtures.is_empty(),
+        "interop corpus must contain at least one fixture"
+    );
+
+    for fixture in fixtures {
+        let id = fixture
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("fixture id");
+        let wire_hex = fixture
+            .get("wire_hex")
+            .and_then(Value::as_str)
+            .expect("fixture wire_hex");
+        let expect_decode = fixture
+            .get("expect_decode")
+            .and_then(Value::as_str)
+            .expect("fixture expect_decode");
+        let wire = decode_hex(wire_hex);
+
+        match expect_decode {
+            "ok" => {
+                let decoded = qpack_decode_field_section(&wire, H3QpackMode::StaticOnly)
+                    .unwrap_or_else(|e| panic!("{id}: decode failed: {e}"));
+                let expected = fixture_plan_from_json(
+                    fixture
+                        .get("expected_plan")
+                        .expect("expected expected_plan for ok fixture"),
+                );
+                assert_eq!(decoded, expected, "{id}: decoded plan mismatch");
+
+                let reencoded = qpack_encode_field_section(&decoded)
+                    .unwrap_or_else(|e| panic!("{id}: re-encode failed: {e}"));
+                let decoded_again = qpack_decode_field_section(&reencoded, H3QpackMode::StaticOnly)
+                    .unwrap_or_else(|e| panic!("{id}: decode(re-encode) failed: {e}"));
+                assert_eq!(
+                    decoded_again, decoded,
+                    "{id}: decode(re-encode) must preserve plan semantics"
+                );
+
+                let projected = qpack_plan_to_header_fields(&decoded)
+                    .unwrap_or_else(|e| panic!("{id}: projection failed: {e}"));
+                assert!(
+                    !projected.is_empty(),
+                    "{id}: projected headers must be non-empty"
+                );
+            }
+            "error" => {
+                let expected_error = fixture.get("expected_error").expect("expected_error block");
+                let expected_variant = expected_error
+                    .get("variant")
+                    .and_then(Value::as_str)
+                    .expect("expected_error.variant");
+                let expected_message = expected_error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .expect("expected_error.message");
+
+                let err = qpack_decode_field_section(&wire, H3QpackMode::StaticOnly)
+                    .expect_err("fixture should fail decode");
+                match err {
+                    H3NativeError::QpackPolicy(msg) => {
+                        assert_eq!(expected_variant, "QpackPolicy", "{id}: wrong error variant");
+                        assert_eq!(msg, expected_message, "{id}: error message mismatch");
+                    }
+                    H3NativeError::InvalidFrame(msg) => {
+                        assert_eq!(
+                            expected_variant, "InvalidFrame",
+                            "{id}: wrong error variant"
+                        );
+                        assert_eq!(msg, expected_message, "{id}: error message mismatch");
+                    }
+                    other => panic!("{id}: unexpected error variant: {other:?}"),
+                }
+            }
+            other => panic!("{id}: unknown expect_decode value: {other}"),
+        }
+    }
+}
+
+// ===========================================================================
+// Test 15: Deterministic fault schedule -- GOAWAY reorder boundary behavior
+// ===========================================================================
+
+#[test]
+fn h3_fault_schedule_reorder_goaway_before_request_rejects_boundary_stream() {
+    let base = vec![
+        H3HarnessEvent::Control(H3Frame::Settings(H3Settings::default())),
+        H3HarnessEvent::RequestFrame {
+            stream_id: 8,
+            frame: H3Frame::Headers(vec![0x80, 0x00]),
+        },
+        H3HarnessEvent::Control(H3Frame::Goaway(8)),
+    ];
+
+    let baseline_schedule = build_fault_schedule(&base, &[], &[], &[]);
+    let mut baseline_state = H3ConnectionState::new();
+    let baseline = run_fault_schedule(&mut baseline_state, &baseline_schedule);
+    assert_eq!(baseline.len(), 3);
+    assert!(baseline.iter().all(|(_, result)| result.is_ok()));
+
+    let reordered_schedule = build_fault_schedule(&base, &[], &[], &[(1, 2)]);
+    let mut reordered_state = H3ConnectionState::new();
+    let reordered = run_fault_schedule(&mut reordered_state, &reordered_schedule);
+
+    assert_eq!(reordered.len(), 3);
+    assert_eq!(reordered[0].0, 0, "first event should remain SETTINGS");
+    assert!(reordered[0].1.is_ok());
+    assert_eq!(reordered[1].0, 2, "second event should be reordered GOAWAY");
+    assert!(reordered[1].1.is_ok());
+    assert_eq!(reordered[2].0, 1, "third event should be reordered request");
+    match &reordered[2].1 {
+        Err(H3NativeError::ControlProtocol(msg)) => {
+            assert_eq!(*msg, "request stream id rejected after GOAWAY");
+        }
+        other => panic!("expected GOAWAY boundary rejection, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// Test 16: Deterministic fault schedule -- duplicate/drop injected controls
+// ===========================================================================
+
+#[test]
+fn h3_fault_schedule_duplicate_and_drop_injection_are_deterministic() {
+    let base = vec![
+        H3HarnessEvent::Control(H3Frame::Settings(H3Settings::default())),
+        H3HarnessEvent::RequestFrame {
+            stream_id: 0,
+            frame: H3Frame::Headers(vec![0x80, 0x00]),
+        },
+        H3HarnessEvent::RequestFrame {
+            stream_id: 0,
+            frame: H3Frame::Data(vec![1, 2, 3]),
+        },
+        H3HarnessEvent::FinishRequest { stream_id: 0 },
+    ];
+
+    let duplicate_schedule = build_fault_schedule(&base, &[], &[0], &[]);
+    let mut duplicate_state = H3ConnectionState::new();
+    let duplicate_results = run_fault_schedule(&mut duplicate_state, &duplicate_schedule);
+
+    assert_eq!(duplicate_results.len(), 5);
+    assert!(duplicate_results[0].1.is_ok());
+    match &duplicate_results[1].1 {
+        Err(H3NativeError::ControlProtocol(msg)) => {
+            assert_eq!(*msg, "duplicate SETTINGS on remote control stream");
+        }
+        other => panic!("expected duplicate SETTINGS error, got {other:?}"),
+    }
+    assert!(duplicate_results[2].1.is_ok());
+    assert!(duplicate_results[3].1.is_ok());
+    assert!(duplicate_results[4].1.is_ok());
+
+    let dropped_headers_schedule = build_fault_schedule(&base, &[1], &[], &[]);
+    let mut dropped_headers_state = H3ConnectionState::new();
+    let dropped_headers_results =
+        run_fault_schedule(&mut dropped_headers_state, &dropped_headers_schedule);
+
+    assert_eq!(dropped_headers_results.len(), 3);
+    assert!(dropped_headers_results[0].1.is_ok());
+    match &dropped_headers_results[1].1 {
+        Err(H3NativeError::ControlProtocol(msg)) => {
+            assert_eq!(*msg, "DATA before initial HEADERS on request stream");
+        }
+        other => panic!("expected DATA-before-HEADERS error, got {other:?}"),
+    }
+    match &dropped_headers_results[2].1 {
+        Err(H3NativeError::ControlProtocol(msg)) => {
+            assert_eq!(*msg, "request stream ended before initial HEADERS");
+        }
+        other => panic!("expected finish-before-HEADERS error, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// Test 17: Deterministic transform ordering for swap+duplicate composition
+// ===========================================================================
+
+#[test]
+fn h3_fault_schedule_operation_order_is_deterministic() {
+    let base = vec![
+        H3HarnessEvent::Control(H3Frame::Settings(H3Settings::default())), // origin 0
+        H3HarnessEvent::RequestFrame {
+            stream_id: 0,
+            frame: H3Frame::Headers(vec![0x80, 0x00]), // origin 1
+        },
+        H3HarnessEvent::FinishRequest { stream_id: 0 }, // origin 2
+    ];
+
+    // Swaps are applied before duplication:
+    // [0,1,2] --swap(0,2)--> [2,1,0] --dup(0)--> [2,1,0,0]
+    let schedule = build_fault_schedule(&base, &[], &[0], &[(0, 2)]);
+    let origins: Vec<usize> = schedule.iter().map(|event| event.origin).collect();
+    assert_eq!(origins, vec![2, 1, 0, 0]);
 }

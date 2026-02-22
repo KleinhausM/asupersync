@@ -5,12 +5,14 @@
 //! No async runtime is required.
 
 use asupersync::cx::Cx;
+use asupersync::http::h3_native::{H3ConnectionState, H3Frame, H3RequestStreamState, H3Settings};
 use asupersync::net::quic_native::{
     AckRange, NativeQuicConnection, NativeQuicConnectionConfig, PacketNumberSpace,
     QuicConnectionState, QuicTransportMachine, SentPacketMeta, StreamRole,
 };
 use asupersync::types::Time;
 use asupersync::util::DetRng;
+use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -141,6 +143,65 @@ fn sent(space: PacketNumberSpace, pn: u64, bytes: u64, t: u64) -> SentPacketMeta
         ack_eliciting: true,
         in_flight: true,
         time_sent_micros: t,
+    }
+}
+
+/// Deterministic lab-style network scenario harness for packet reordering/fault injection.
+#[derive(Debug)]
+struct LabRuntimeScenarioHarness {
+    dropped_packets: BTreeSet<u64>,
+    ack_reports: Vec<(usize, usize)>,
+}
+
+#[derive(Debug)]
+enum LabNetworkStep {
+    AdvanceMicros(u64),
+    AckPackets(Vec<u64>),
+}
+
+impl LabRuntimeScenarioHarness {
+    fn with_dropped_packets(dropped: &[u64]) -> Self {
+        Self {
+            dropped_packets: dropped.iter().copied().collect(),
+            ack_reports: Vec::new(),
+        }
+    }
+
+    fn run(&mut self, pair: &mut ConnectionPair, steps: &[LabNetworkStep]) {
+        let cx = &pair.cx;
+        for step in steps {
+            match step {
+                LabNetworkStep::AdvanceMicros(delta) => pair.clock.advance(*delta),
+                LabNetworkStep::AckPackets(raw) => {
+                    let acked: Vec<u64> = raw
+                        .iter()
+                        .copied()
+                        .filter(|pn| !self.dropped_packets.contains(pn))
+                        .collect();
+                    if acked.is_empty() {
+                        continue;
+                    }
+                    let report = pair
+                        .client
+                        .on_ack_received(
+                            cx,
+                            PacketNumberSpace::ApplicationData,
+                            &acked,
+                            0,
+                            pair.clock.now(),
+                        )
+                        .unwrap_or_else(|_| panic!("ack packets {acked:?}"));
+                    self.ack_reports
+                        .push((report.acked_packets, report.lost_packets));
+                }
+            }
+        }
+    }
+
+    fn totals(&self) -> (usize, usize) {
+        self.ack_reports
+            .iter()
+            .fold((0, 0), |(a, l), (da, dl)| (a + *da, l + *dl))
     }
 }
 
@@ -1085,4 +1146,186 @@ fn non_in_flight_packets_excluded_from_tracking() {
     assert_eq!(ack_loss.lost_bytes, 1200);
     // Remaining: pn 2 (1200) + pn 3 (1200) = 2400.
     assert_eq!(transport.transport().bytes_in_flight(), 2400);
+}
+
+// ===========================================================================
+// Test 13: Lab-runtime scenario harness reordering/drop at transport level
+// ===========================================================================
+
+#[test]
+fn lab_runtime_harness_reorder_and_drop_transport_packets() {
+    let mut rng = DetRng::new(0xE3_000D);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let cx = &pair.cx;
+    let t0 = pair.clock.now();
+
+    // Send six application packets.
+    for i in 0u64..6 {
+        pair.client
+            .on_packet_sent(
+                cx,
+                PacketNumberSpace::ApplicationData,
+                1200,
+                true,
+                true,
+                t0 + i * 100,
+            )
+            .unwrap_or_else(|_| panic!("send pn {i}"));
+    }
+    assert_eq!(pair.client.transport().bytes_in_flight(), 7200);
+
+    // Drop packet 1, reorder ACK arrivals across the remainder.
+    let mut harness = LabRuntimeScenarioHarness::with_dropped_packets(&[1]);
+    let script = vec![
+        LabNetworkStep::AdvanceMicros(15_000),
+        LabNetworkStep::AckPackets(vec![2]),
+        LabNetworkStep::AdvanceMicros(10_000),
+        LabNetworkStep::AckPackets(vec![5]),
+        LabNetworkStep::AdvanceMicros(5_000),
+        LabNetworkStep::AckPackets(vec![0, 3, 4, 1]),
+    ];
+    harness.run(&mut pair, &script);
+
+    let (acked_total, lost_total) = harness.totals();
+    assert!(
+        acked_total > 0,
+        "fault script should still yield some ACKed packets"
+    );
+    assert!(
+        lost_total >= 1,
+        "at least one packet should be marked lost under reorder+drop"
+    );
+    assert_eq!(
+        pair.client.transport().bytes_in_flight(),
+        0,
+        "all packets should be either acked or declared lost by end of script"
+    );
+}
+
+// ===========================================================================
+// Test 14: Lab-runtime scenario harness with H3 lifecycle under ACK faults
+// ===========================================================================
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn lab_runtime_harness_h3_request_response_under_reordered_acks() {
+    let mut rng = DetRng::new(0xE3_000E);
+    let mut pair = ConnectionPair::new(&mut rng);
+    pair.establish();
+
+    let mut client_h3 = H3ConnectionState::new();
+    let mut server_h3 = H3ConnectionState::new();
+    client_h3
+        .on_control_frame(&H3Frame::Settings(H3Settings::default()))
+        .expect("client settings");
+    server_h3
+        .on_control_frame(&H3Frame::Settings(H3Settings::default()))
+        .expect("server settings");
+
+    // Client request stream + request frames.
+    let stream = pair
+        .client
+        .open_local_bidi(&pair.cx)
+        .expect("open request stream");
+    let mut request_wire = Vec::new();
+    let req_headers = H3Frame::Headers(vec![0x00, 0x00, 0x80]);
+    let req_body = H3Frame::Data(b"lab-runtime-request-body".to_vec());
+    req_headers
+        .encode(&mut request_wire)
+        .expect("encode request headers");
+    req_body
+        .encode(&mut request_wire)
+        .expect("encode request body");
+
+    let req_len = request_wire.len() as u64;
+    pair.client
+        .write_stream(&pair.cx, stream, req_len)
+        .expect("client write request bytes");
+    pair.server
+        .accept_remote_stream(&pair.cx, stream)
+        .expect("server accept request stream");
+    pair.server
+        .receive_stream(&pair.cx, stream, req_len)
+        .expect("server receive request bytes");
+
+    // Inject reordered ACKs with one dropped packet while request/response
+    // lifecycle continues.
+    let t0 = pair.clock.now();
+    for i in 0u64..5 {
+        pair.client
+            .on_packet_sent(
+                &pair.cx,
+                PacketNumberSpace::ApplicationData,
+                1100,
+                true,
+                true,
+                t0 + i * 100,
+            )
+            .unwrap_or_else(|_| panic!("send pn {i}"));
+    }
+    let mut harness = LabRuntimeScenarioHarness::with_dropped_packets(&[1]);
+    let script = vec![
+        LabNetworkStep::AdvanceMicros(12_000),
+        LabNetworkStep::AckPackets(vec![3]),
+        LabNetworkStep::AdvanceMicros(8_000),
+        LabNetworkStep::AckPackets(vec![4]),
+        LabNetworkStep::AdvanceMicros(6_000),
+        LabNetworkStep::AckPackets(vec![0, 2, 1]),
+    ];
+    harness.run(&mut pair, &script);
+    let (_, lost_total) = harness.totals();
+    assert!(
+        lost_total >= 1,
+        "fault script should produce at least one transport loss"
+    );
+
+    // Server processes request frames and responds successfully.
+    let (decoded_req_h, n) = H3Frame::decode(&request_wire).expect("decode request headers");
+    assert_eq!(decoded_req_h, req_headers);
+    server_h3
+        .on_request_stream_frame(stream.0, &decoded_req_h)
+        .expect("server on request headers");
+    let (decoded_req_d, _) = H3Frame::decode(&request_wire[n..]).expect("decode request body");
+    assert_eq!(decoded_req_d, req_body);
+    server_h3
+        .on_request_stream_frame(stream.0, &decoded_req_d)
+        .expect("server on request body");
+    server_h3
+        .finish_request_stream(stream.0)
+        .expect("finish request");
+
+    let mut response_state = H3RequestStreamState::new();
+    let resp_headers = H3Frame::Headers(vec![0x00, 0x00, 0xD9]); // :status=200 static path
+    let resp_body = H3Frame::Data(b"ok".to_vec());
+    response_state
+        .on_frame(&resp_headers)
+        .expect("response headers frame");
+    response_state
+        .on_frame(&resp_body)
+        .expect("response body frame");
+    response_state
+        .mark_end_stream()
+        .expect("response end stream");
+
+    let mut response_wire = Vec::new();
+    resp_headers
+        .encode(&mut response_wire)
+        .expect("encode response headers");
+    resp_body
+        .encode(&mut response_wire)
+        .expect("encode response body");
+    let resp_len = response_wire.len() as u64;
+    pair.server
+        .write_stream(&pair.cx, stream, resp_len)
+        .expect("server write response bytes");
+    pair.client
+        .receive_stream(&pair.cx, stream, resp_len)
+        .expect("client receive response bytes");
+
+    let (decoded_resp_h, m) = H3Frame::decode(&response_wire).expect("decode response headers");
+    assert_eq!(decoded_resp_h, resp_headers);
+    let (decoded_resp_d, _) = H3Frame::decode(&response_wire[m..]).expect("decode response body");
+    assert_eq!(decoded_resp_d, resp_body);
 }
