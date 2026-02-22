@@ -20,6 +20,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+const FALLBACK_IO_BACKOFF: Duration = Duration::from_millis(1);
+
 /// A TCP stream.
 #[derive(Debug)]
 pub struct TcpStream {
@@ -256,7 +258,7 @@ impl TcpStream {
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotConnected => {
                     self.registration = None;
-                    cx.waker().wake_by_ref();
+                    fallback_rewake(cx);
                     return Ok(());
                 }
                 Err(err) => return Err(err),
@@ -264,11 +266,11 @@ impl TcpStream {
         }
 
         let Some(current) = Cx::current() else {
-            cx.waker().wake_by_ref();
+            fallback_rewake(cx);
             return Ok(());
         };
         let Some(driver) = current.io_driver_handle() else {
-            cx.waker().wake_by_ref();
+            fallback_rewake(cx);
             return Ok(());
         };
 
@@ -278,12 +280,18 @@ impl TcpStream {
                 Ok(())
             }
             Err(err) if err.kind() == io::ErrorKind::Unsupported => {
-                cx.waker().wake_by_ref();
+                fallback_rewake(cx);
                 Ok(())
             }
             Err(err) => Err(err),
         }
     }
+}
+
+#[inline]
+fn fallback_rewake(cx: &Context<'_>) {
+    std::thread::sleep(FALLBACK_IO_BACKOFF);
+    cx.waker().wake_by_ref();
 }
 
 fn timeout_now() -> Time {
@@ -372,7 +380,7 @@ fn rearm_connect_registration(
         }
         Err(err) if err.kind() == io::ErrorKind::NotConnected => {
             *registration = None;
-            cx.waker().wake_by_ref();
+            fallback_rewake(cx);
             Ok(())
         }
         Err(err) => Err(err),

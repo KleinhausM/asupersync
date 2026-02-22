@@ -19,6 +19,9 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
+const TRANSIENT_ACCEPT_BACKOFF_BASE: Duration = Duration::from_millis(2);
+const TRANSIENT_ACCEPT_BACKOFF_CAP: Duration = Duration::from_millis(64);
+
 /// Configuration for the HTTP/1.1 listener.
 #[derive(Debug, Clone)]
 pub struct Http1ListenerConfig {
@@ -171,6 +174,7 @@ where
     pub async fn run(self, runtime: &RuntimeHandle) -> io::Result<ShutdownStats> {
         let mut tasks = ConnectionTasks::new();
         let mut shutdown_rx = self.shutdown_signal.subscribe();
+        let mut transient_accept_streak: u32 = 0;
         // Accept loop: keep accepting until shutdown
         loop {
             if self.shutdown_signal.is_shutting_down() {
@@ -212,8 +216,13 @@ where
             };
 
             let (stream, addr) = match accept_result {
-                Ok(conn) => conn,
+                Ok(conn) => {
+                    transient_accept_streak = 0;
+                    conn
+                }
                 Err(ref e) if is_transient_accept_error(e) => {
+                    transient_accept_streak = transient_accept_streak.saturating_add(1);
+                    std::thread::sleep(transient_accept_backoff_delay(transient_accept_streak));
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -347,11 +356,20 @@ fn payload_to_string(payload: &Box<dyn std::any::Any + Send>) -> String {
 fn is_transient_accept_error(err: &io::Error) -> bool {
     matches!(
         err.kind(),
-        io::ErrorKind::ConnectionRefused
+        io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::ConnectionRefused
             | io::ErrorKind::ConnectionAborted
             | io::ErrorKind::ConnectionReset
             | io::ErrorKind::Interrupted
     )
+}
+
+fn transient_accept_backoff_delay(streak: u32) -> Duration {
+    let exponent = (streak.saturating_sub(1) / 16).min(5);
+    TRANSIENT_ACCEPT_BACKOFF_BASE
+        .saturating_mul(1u32 << exponent)
+        .min(TRANSIENT_ACCEPT_BACKOFF_CAP)
 }
 
 #[cfg(test)]
@@ -388,6 +406,14 @@ mod tests {
     #[test]
     fn transient_error_detection() {
         assert!(is_transient_accept_error(&io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "would block"
+        )));
+        assert!(is_transient_accept_error(&io::Error::new(
+            io::ErrorKind::TimedOut,
+            "timed out"
+        )));
+        assert!(is_transient_accept_error(&io::Error::new(
             io::ErrorKind::ConnectionRefused,
             "refused"
         )));
@@ -411,6 +437,26 @@ mod tests {
             io::ErrorKind::PermissionDenied,
             "denied"
         )));
+    }
+
+    #[test]
+    fn transient_backoff_caps() {
+        assert_eq!(
+            transient_accept_backoff_delay(1),
+            TRANSIENT_ACCEPT_BACKOFF_BASE
+        );
+        assert_eq!(
+            transient_accept_backoff_delay(16),
+            TRANSIENT_ACCEPT_BACKOFF_BASE
+        );
+        assert_eq!(
+            transient_accept_backoff_delay(17),
+            TRANSIENT_ACCEPT_BACKOFF_BASE.saturating_mul(2)
+        );
+        assert_eq!(
+            transient_accept_backoff_delay(10_000),
+            TRANSIENT_ACCEPT_BACKOFF_CAP
+        );
     }
 
     #[test]
