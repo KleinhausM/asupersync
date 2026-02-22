@@ -1063,10 +1063,11 @@ impl ThreeLaneWorker {
             // If we can acquire the IO driver lock, we become the I/O leader
             // and poll the reactor for ready events (e.g. TCP connect completion).
             if let Some(io) = &self.io_driver {
-                // When no sockets are registered, polling the reactor can return
-                // immediately and starve parking, causing runaway idle CPU.
-                if !io.is_empty() {
-                    if let Some(mut driver) = io.try_lock() {
+                // Single try_lock to avoid double lock acquisition (is_empty
+                // also locks the inner Mutex).  Check emptiness inside the
+                // critical section to eliminate the TOCTOU race.
+                if let Some(mut driver) = io.try_lock() {
+                    if !driver.is_empty() {
                         let _ = driver.turn_with(Some(Duration::from_millis(1)), |_, _| {});
                         continue;
                     }
@@ -2000,6 +2001,12 @@ impl ThreeLaneWorker {
                 (w, priority)
             })
         };
+        // Install the task context BEFORE creating TaskExecutionGuard so
+        // that during panic unwind, TaskExecutionGuard::drop runs first
+        // (while Cx is still installed), then _cx_guard is dropped.  This
+        // matches the ordering in worker.rs and ensures any cleanup code
+        // in the guard's drop can access Cx::current().
+        let _cx_guard = crate::cx::Cx::set_current(task_cx);
         let mut guard = TaskExecutionGuard {
             worker: self,
             task_id,
@@ -2007,9 +2014,6 @@ impl ThreeLaneWorker {
         };
 
         let poll_result = {
-            // Install the task context while polling so async I/O can reach
-            // runtime drivers via `Cx::current()`.
-            let _cx_guard = crate::cx::Cx::set_current(task_cx);
             let mut cx = Context::from_waker(&waker);
             stored.poll(&mut cx)
         };

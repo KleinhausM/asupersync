@@ -632,8 +632,8 @@ impl Parker {
             return;
         }
 
-        let mut guard = self.lock_unpoisoned();
         self.inner.waiting.fetch_add(1, Ordering::SeqCst);
+        let mut guard = self.lock_unpoisoned();
         while self
             .inner
             .notified
