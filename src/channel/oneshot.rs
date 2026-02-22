@@ -369,7 +369,7 @@ impl<T> Drop for SendPermit<T> {
 
 /// Future returned by [`Receiver::recv`].
 pub struct RecvFuture<'a, T> {
-    receiver: &'a Receiver<T>,
+    receiver: &'a mut Receiver<T>,
     cx: &'a Cx,
     waiter_id: Option<u64>,
 }
@@ -487,7 +487,7 @@ impl<T> Receiver<T> {
     ///
     /// Returns `Err(RecvError::Closed)` if the sender was dropped without sending.
     #[must_use]
-    pub fn recv<'a>(&'a self, cx: &'a Cx) -> RecvFuture<'a, T> {
+    pub fn recv<'a>(&'a mut self, cx: &'a Cx) -> RecvFuture<'a, T> {
         RecvFuture {
             receiver: self,
             cx,
@@ -602,7 +602,7 @@ mod tests {
     fn basic_send_recv() {
         init_test("basic_send_recv");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         tx.send(&cx, 42).expect("send should succeed");
         let value = block_on(rx.recv(&cx)).expect("recv should succeed");
@@ -614,7 +614,7 @@ mod tests {
     fn reserve_then_send() {
         init_test("reserve_then_send");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         let permit = tx.reserve(&cx);
         permit.send(42).expect("send should succeed");
@@ -822,7 +822,7 @@ mod tests {
         init_test("value_is_moved_not_cloned");
         // Test that non-Clone types work
         let cx = test_cx();
-        let (tx, rx) = channel::<NonClone>();
+        let (tx, mut rx) = channel::<NonClone>();
 
         tx.send(&cx, NonClone(42)).expect("send should succeed");
         let value = block_on(rx.recv(&cx)).expect("recv should succeed");
@@ -855,7 +855,7 @@ mod tests {
         let cx = test_cx();
         cx.set_cancel_requested(true);
 
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         // Sender sends but receiver is cancelled
         tx.send(&cx, 42).expect("send should succeed");
@@ -877,7 +877,7 @@ mod tests {
         init_test("recv_cancel_during_wait");
         let cx = test_cx();
 
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         // Start with cancel requested - recv will fail at checkpoint
         cx.set_cancel_requested(true);
@@ -900,7 +900,7 @@ mod tests {
     fn recv_cancel_after_pending_clears_registered_waker() {
         init_test("recv_cancel_after_pending_clears_registered_waker");
         let cx = test_cx();
-        let (_tx, rx) = channel::<i32>();
+        let (_tx, mut rx) = channel::<i32>();
         let inner = Arc::clone(&rx.inner);
 
         let waker = Waker::from(std::sync::Arc::new(TestNoopWaker));
@@ -956,7 +956,7 @@ mod tests {
     fn recv_value_ready_clears_stale_waker() {
         init_test("recv_value_ready_clears_stale_waker");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
         let inner = Arc::clone(&rx.inner);
 
         let waker = Waker::from(std::sync::Arc::new(TestNoopWaker));
@@ -995,7 +995,7 @@ mod tests {
     fn recv_closed_clears_stale_waker() {
         init_test("recv_closed_clears_stale_waker");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
         let inner = Arc::clone(&rx.inner);
 
         let waker = Waker::from(std::sync::Arc::new(TestNoopWaker));
@@ -1030,7 +1030,7 @@ mod tests {
     fn try_recv_value_ready_clears_stale_waker() {
         init_test("try_recv_value_ready_clears_stale_waker");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
         let inner = Arc::clone(&rx.inner);
 
         let waker = Waker::from(std::sync::Arc::new(TestNoopWaker));
@@ -1057,7 +1057,7 @@ mod tests {
     fn try_recv_closed_clears_stale_waker() {
         init_test("try_recv_closed_clears_stale_waker");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
         let inner = Arc::clone(&rx.inner);
 
         let waker = Waker::from(std::sync::Arc::new(TestNoopWaker));
@@ -1086,7 +1086,7 @@ mod tests {
     fn permit_send_receiver_dropped_clears_waker() {
         init_test("permit_send_receiver_dropped_clears_waker");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         // Poll recv to register a waker, then drop the future.
         // RecvFuture::Drop now clears the stale waker (correct behavior).
@@ -1170,7 +1170,7 @@ mod tests {
     fn recv_future_drop_clears_stale_waker() {
         init_test("recv_future_drop_clears_stale_waker");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
         let inner = Arc::clone(&rx.inner);
 
         let waker = Waker::from(std::sync::Arc::new(TestNoopWaker));
@@ -1208,7 +1208,7 @@ mod tests {
         // Value-ready takes priority over cancellation.
         init_test("recv_returns_value_even_when_cancelled");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         tx.send(&cx, 77).unwrap();
         cx.set_cancel_requested(true);
@@ -1274,7 +1274,7 @@ mod tests {
         init_test("sender_drop_wakes_pending_receiver");
 
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         let notify_count = Arc::new(AtomicUsize::new(0));
         let poll_waker = counting_waker(Arc::clone(&notify_count));
@@ -1299,7 +1299,7 @@ mod tests {
     fn dropping_stale_recv_future_does_not_clear_new_waiter() {
         init_test("dropping_stale_recv_future_does_not_clear_new_waiter");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         let wake_counter_1 = Arc::new(AtomicUsize::new(0));
         let wake_counter_2 = Arc::new(AtomicUsize::new(0));
@@ -1360,7 +1360,7 @@ mod tests {
     fn permit_abort_wakes_pending_receiver_and_returns_closed() {
         init_test("permit_abort_wakes_pending_receiver_and_returns_closed");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         let wake_counter = Arc::new(AtomicUsize::new(0));
         let recv_waker = counting_waker(Arc::clone(&wake_counter));
@@ -1395,7 +1395,7 @@ mod tests {
     fn dropping_permit_wakes_pending_receiver_and_returns_closed() {
         init_test("dropping_permit_wakes_pending_receiver_and_returns_closed");
         let cx = test_cx();
-        let (tx, rx) = channel::<i32>();
+        let (tx, mut rx) = channel::<i32>();
 
         let wake_counter = Arc::new(AtomicUsize::new(0));
         let recv_waker = counting_waker(Arc::clone(&wake_counter));
@@ -1430,7 +1430,7 @@ mod tests {
     fn recv_repoll_same_waker_keeps_waiter_identity() {
         init_test("recv_repoll_same_waker_keeps_waiter_identity");
         let cx = test_cx();
-        let (_tx, rx) = channel::<i32>();
+        let (_tx, mut rx) = channel::<i32>();
         let inner = Arc::clone(&rx.inner);
 
         let recv_waker = counting_waker(Arc::new(AtomicUsize::new(0)));
