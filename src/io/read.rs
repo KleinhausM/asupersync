@@ -226,15 +226,14 @@ where
 impl<R, P> AsyncRead for Pin<P>
 where
     P: DerefMut<Target = R> + Unpin,
-    R: AsyncRead + Unpin + ?Sized,
+    R: AsyncRead + ?Sized,
 {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        Pin::new(&mut **this).poll_read(cx, buf)
+        self.get_mut().as_mut().poll_read(cx, buf)
     }
 }
 
@@ -258,7 +257,7 @@ impl<R> AsyncReadVectored for Box<R> where R: AsyncReadVectored + Unpin + ?Sized
 impl<R, P> AsyncReadVectored for Pin<P>
 where
     P: DerefMut<Target = R> + Unpin,
-    R: AsyncReadVectored + Unpin + ?Sized,
+    R: AsyncReadVectored + ?Sized,
 {
 }
 

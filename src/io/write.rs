@@ -223,15 +223,14 @@ where
 impl<W, P> AsyncWrite for Pin<P>
 where
     P: DerefMut<Target = W> + Unpin,
-    W: AsyncWrite + Unpin + ?Sized,
+    W: AsyncWrite + ?Sized,
 {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        Pin::new(&mut **this).poll_write(cx, buf)
+        self.get_mut().as_mut().poll_write(cx, buf)
     }
 
     fn poll_write_vectored(
@@ -239,8 +238,7 @@ where
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        Pin::new(&mut **this).poll_write_vectored(cx, bufs)
+        self.get_mut().as_mut().poll_write_vectored(cx, bufs)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -248,13 +246,11 @@ where
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        Pin::new(&mut **this).poll_flush(cx)
+        self.get_mut().as_mut().poll_flush(cx)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        Pin::new(&mut **this).poll_shutdown(cx)
+        self.get_mut().as_mut().poll_shutdown(cx)
     }
 }
 
