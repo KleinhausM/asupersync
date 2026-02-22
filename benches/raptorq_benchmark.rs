@@ -23,8 +23,8 @@ use asupersync::raptorq::systematic::SystematicEncoder;
 const TRACK_E_ARTIFACT_PATH: &str = "artifacts/raptorq_track_e_gf256_bench_v1.json";
 const TRACK_E_REPRO_CMD: &str =
     "rch exec -- cargo bench --bench raptorq_benchmark -- gf256_primitives";
-const TRACK_E_POLICY_SCHEMA_VERSION: &str = "raptorq-track-e-dual-policy-v1";
-const TRACK_E_POLICY_PROBE_SCHEMA_VERSION: &str = "raptorq-track-e-dual-policy-probe-v1";
+const TRACK_E_POLICY_SCHEMA_VERSION: &str = "raptorq-track-e-dual-policy-v2";
+const TRACK_E_POLICY_PROBE_SCHEMA_VERSION: &str = "raptorq-track-e-dual-policy-probe-v2";
 const TRACK_E_POLICY_PROBE_REPRO_CMD: &str =
     "rch exec -- cargo bench --bench raptorq_benchmark -- gf256_dual_policy";
 
@@ -85,7 +85,7 @@ fn emit_track_e_policy_log(scenario: &Gf256BenchScenario) {
     let mul_decision = dual_mul_kernel_decision(scenario.len, scenario.len);
     let addmul_decision = dual_addmul_kernel_decision(scenario.len, scenario.len);
     eprintln!(
-        "{{\"schema_version\":\"{}\",\"manifest_schema_version\":\"{}\",\"profile_schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"architecture_class\":\"{}\",\"profile_pack\":\"{}\",\"profile_fallback_reason\":\"{}\",\"rejected_profile_packs\":\"{}\",\"profile_catalog_count\":{},\"tuning_candidate_catalog_count\":{},\"active_profile_architecture_class\":\"{}\",\"target_arch\":\"{}\",\"target_os\":\"{}\",\"target_env\":\"{}\",\"target_endian\":\"{}\",\"target_pointer_width_bits\":{},\"tuning_corpus_id\":\"{}\",\"selected_tuning_candidate_id\":\"{}\",\"selected_tuning_tile_bytes\":{},\"selected_tuning_unroll\":{},\"selected_tuning_prefetch_distance\":{},\"selected_tuning_fusion_shape\":\"{}\",\"rejected_tuning_candidate_ids\":\"{}\",\"replay_pointer\":\"{}\",\"command_bundle\":\"{}\",\"mode\":\"{:?}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"max_lane_ratio\":{},\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"mul_decision\":\"{:?}\",\"addmul_decision\":\"{:?}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
+        "{{\"schema_version\":\"{}\",\"manifest_schema_version\":\"{}\",\"profile_schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"architecture_class\":\"{}\",\"profile_pack\":\"{}\",\"profile_fallback_reason\":\"{}\",\"rejected_profile_packs\":\"{}\",\"profile_catalog_count\":{},\"tuning_candidate_catalog_count\":{},\"active_profile_architecture_class\":\"{}\",\"target_arch\":\"{}\",\"target_os\":\"{}\",\"target_env\":\"{}\",\"target_endian\":\"{}\",\"target_pointer_width_bits\":{},\"tuning_corpus_id\":\"{}\",\"selected_tuning_candidate_id\":\"{}\",\"selected_tuning_tile_bytes\":{},\"selected_tuning_unroll\":{},\"selected_tuning_prefetch_distance\":{},\"selected_tuning_fusion_shape\":\"{}\",\"rejected_tuning_candidate_ids\":\"{}\",\"replay_pointer\":\"{}\",\"command_bundle\":\"{}\",\"mode\":\"{:?}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"addmul_min_lane\":{},\"max_lane_ratio\":{},\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"mul_decision\":\"{:?}\",\"addmul_decision\":\"{:?}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
         TRACK_E_POLICY_SCHEMA_VERSION,
         manifest.schema_version,
         policy.profile_schema_version,
@@ -120,6 +120,7 @@ fn emit_track_e_policy_log(scenario: &Gf256BenchScenario) {
         policy.mul_max_total,
         policy.addmul_min_total,
         policy.addmul_max_total,
+        policy.addmul_min_lane,
         policy.max_lane_ratio,
         scenario.len,
         scenario.len,
@@ -155,7 +156,7 @@ fn emit_track_e_policy_probe_log(
     let total = scenario.lane_a_len.saturating_add(scenario.lane_b_len);
     let lane_ratio = lane_ratio_string(scenario.lane_a_len, scenario.lane_b_len);
     eprintln!(
-        "{{\"schema_version\":\"{}\",\"manifest_schema_version\":\"{}\",\"profile_schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"architecture_class\":\"{}\",\"profile_pack\":\"{}\",\"profile_fallback_reason\":\"{}\",\"rejected_profile_packs\":\"{}\",\"profile_catalog_count\":{},\"tuning_candidate_catalog_count\":{},\"active_profile_architecture_class\":\"{}\",\"target_arch\":\"{}\",\"target_os\":\"{}\",\"target_env\":\"{}\",\"target_endian\":\"{}\",\"target_pointer_width_bits\":{},\"tuning_corpus_id\":\"{}\",\"selected_tuning_candidate_id\":\"{}\",\"selected_tuning_tile_bytes\":{},\"selected_tuning_unroll\":{},\"selected_tuning_prefetch_distance\":{},\"selected_tuning_fusion_shape\":\"{}\",\"rejected_tuning_candidate_ids\":\"{}\",\"replay_pointer\":\"{}\",\"command_bundle\":\"{}\",\"mode\":\"{:?}\",\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"lane_ratio\":\"{}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"max_lane_ratio\":{},\"mul_decision\":\"{}\",\"addmul_decision\":\"{}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
+        "{{\"schema_version\":\"{}\",\"manifest_schema_version\":\"{}\",\"profile_schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"architecture_class\":\"{}\",\"profile_pack\":\"{}\",\"profile_fallback_reason\":\"{}\",\"rejected_profile_packs\":\"{}\",\"profile_catalog_count\":{},\"tuning_candidate_catalog_count\":{},\"active_profile_architecture_class\":\"{}\",\"target_arch\":\"{}\",\"target_os\":\"{}\",\"target_env\":\"{}\",\"target_endian\":\"{}\",\"target_pointer_width_bits\":{},\"tuning_corpus_id\":\"{}\",\"selected_tuning_candidate_id\":\"{}\",\"selected_tuning_tile_bytes\":{},\"selected_tuning_unroll\":{},\"selected_tuning_prefetch_distance\":{},\"selected_tuning_fusion_shape\":\"{}\",\"rejected_tuning_candidate_ids\":\"{}\",\"replay_pointer\":\"{}\",\"command_bundle\":\"{}\",\"mode\":\"{:?}\",\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"lane_ratio\":\"{}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"addmul_min_lane\":{},\"max_lane_ratio\":{},\"mul_decision\":\"{}\",\"addmul_decision\":\"{}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
         TRACK_E_POLICY_PROBE_SCHEMA_VERSION,
         manifest.schema_version,
         policy.profile_schema_version,
@@ -194,6 +195,7 @@ fn emit_track_e_policy_probe_log(
         policy.mul_max_total,
         policy.addmul_min_total,
         policy.addmul_max_total,
+        policy.addmul_min_lane,
         policy.max_lane_ratio,
         mul_decision,
         addmul_decision,
@@ -368,7 +370,7 @@ fn gf256_scenarios() -> [Gf256BenchScenario; 5] {
     ]
 }
 
-fn gf256_dual_policy_scenarios() -> [Gf256DualPolicyScenario; 6] {
+fn gf256_dual_policy_scenarios() -> [Gf256DualPolicyScenario; 7] {
     [
         Gf256DualPolicyScenario {
             scenario_id: "RQ-E-GF256-DUAL-001",
@@ -411,6 +413,13 @@ fn gf256_dual_policy_scenarios() -> [Gf256DualPolicyScenario; 6] {
             lane_a_len: 16384,
             lane_b_len: 16384,
             mul_const: 187,
+        },
+        Gf256DualPolicyScenario {
+            scenario_id: "RQ-E-GF256-DUAL-007",
+            seed: 0x2007,
+            lane_a_len: 12288,
+            lane_b_len: 1536,
+            mul_const: 211,
         },
     ]
 }

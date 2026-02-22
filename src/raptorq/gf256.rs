@@ -46,6 +46,11 @@
 //! Runtime can request a specific pack via `ASUPERSYNC_GF256_PROFILE_PACK`.
 //! Unsupported requests fail closed to the host default pack with an explicit
 //! fallback reason surfaced in [`DualKernelPolicySnapshot`].
+//!
+//! Advanced tuning overrides can further refine auto policy windows:
+//! - `ASUPERSYNC_GF256_DUAL_ADDMUL_MIN_TOTAL`
+//! - `ASUPERSYNC_GF256_DUAL_ADDMUL_MAX_TOTAL`
+//! - `ASUPERSYNC_GF256_DUAL_ADDMUL_MIN_LANE`
 
 #![cfg_attr(
     feature = "simd-intrinsics",
@@ -250,9 +255,9 @@ struct Gf256Dispatch {
 
 static DISPATCH: std::sync::OnceLock<Gf256Dispatch> = std::sync::OnceLock::new();
 static DUAL_POLICY: std::sync::OnceLock<DualKernelPolicy> = std::sync::OnceLock::new();
-const GF256_PROFILE_PACK_SCHEMA_VERSION: &str = "raptorq-gf256-profile-pack-v1";
-const GF256_PROFILE_PACK_MANIFEST_SCHEMA_VERSION: &str = "raptorq-gf256-profile-pack-manifest-v1";
-const GF256_PROFILE_PACK_REPLAY_POINTER: &str = "replay:rq-e-gf256-profile-pack-v1";
+const GF256_PROFILE_PACK_SCHEMA_VERSION: &str = "raptorq-gf256-profile-pack-v2";
+const GF256_PROFILE_PACK_MANIFEST_SCHEMA_VERSION: &str = "raptorq-gf256-profile-pack-manifest-v2";
+const GF256_PROFILE_PACK_REPLAY_POINTER: &str = "replay:rq-e-gf256-profile-pack-v2";
 const GF256_PROFILE_PACK_COMMAND_BUNDLE: &str =
     "rch exec -- cargo bench --bench raptorq_benchmark -- gf256_primitives";
 const GF256_PROFILE_TUNING_CORPUS_ID: &str = "raptorq-gf256-profile-corpus-v1";
@@ -368,6 +373,8 @@ pub struct DualKernelPolicySnapshot {
     pub addmul_min_total: usize,
     /// Inclusive maximum total lane bytes for fused dual-addmul path in auto mode.
     pub addmul_max_total: usize,
+    /// Inclusive minimum per-lane bytes for fused dual-addmul path in auto mode.
+    pub addmul_min_lane: usize,
     /// Maximum allowed lane length ratio (`max(len_a,len_b)/min(...)`) in auto mode.
     pub max_lane_ratio: usize,
 }
@@ -495,6 +502,8 @@ pub struct Gf256ProfilePackMetadata {
     pub addmul_min_total: usize,
     /// Inclusive maximum total lane bytes for fused dual-addmul path in auto mode.
     pub addmul_max_total: usize,
+    /// Inclusive minimum per-lane bytes for fused dual-addmul path in auto mode.
+    pub addmul_min_lane: usize,
     /// Maximum allowed lane length ratio (`max(len_a,len_b)/min(...)`) in auto mode.
     pub max_lane_ratio: usize,
     /// Stable replay pointer used for traceability and deterministic replays.
@@ -557,6 +566,7 @@ const GF256_PROFILE_PACK_CATALOG: [Gf256ProfilePackMetadata; 3] = [
         mul_max_total: 0,
         addmul_min_total: usize::MAX,
         addmul_max_total: 0,
+        addmul_min_lane: 0,
         max_lane_ratio: 1,
         replay_pointer: GF256_PROFILE_PACK_REPLAY_POINTER,
         command_bundle: GF256_PROFILE_PACK_COMMAND_BUNDLE,
@@ -575,6 +585,8 @@ const GF256_PROFILE_PACK_CATALOG: [Gf256ProfilePackMetadata; 3] = [
         // showed fused addmul regressed at that footprint.
         addmul_min_total: 12 * 1024,
         addmul_max_total: 16 * 1024,
+        // Guard against asymmetric-lane overhead when one lane is too small.
+        addmul_min_lane: 2 * 1024,
         max_lane_ratio: 8,
         replay_pointer: GF256_PROFILE_PACK_REPLAY_POINTER,
         command_bundle: GF256_PROFILE_PACK_COMMAND_BUNDLE,
@@ -593,6 +605,8 @@ const GF256_PROFILE_PACK_CATALOG: [Gf256ProfilePackMetadata; 3] = [
         // showed fused addmul regressed at that footprint.
         addmul_min_total: 12 * 1024,
         addmul_max_total: 16 * 1024,
+        // Guard against asymmetric-lane overhead when one lane is too small.
+        addmul_min_lane: 2 * 1024,
         max_lane_ratio: 8,
         replay_pointer: GF256_PROFILE_PACK_REPLAY_POINTER,
         command_bundle: GF256_PROFILE_PACK_COMMAND_BUNDLE,
@@ -766,6 +780,7 @@ struct DualKernelPolicy {
     mul_max_total: usize,
     addmul_min_total: usize,
     addmul_max_total: usize,
+    addmul_min_lane: usize,
     max_lane_ratio: usize,
 }
 
@@ -901,6 +916,7 @@ fn detect_dual_policy() -> DualKernelPolicy {
         mul_max_total: metadata.mul_max_total,
         addmul_min_total: metadata.addmul_min_total,
         addmul_max_total: metadata.addmul_max_total,
+        addmul_min_lane: metadata.addmul_min_lane,
         max_lane_ratio: metadata.max_lane_ratio,
     };
 
@@ -915,6 +931,9 @@ fn detect_dual_policy() -> DualKernelPolicy {
     }
     if let Some(v) = parse_usize_env("ASUPERSYNC_GF256_DUAL_ADDMUL_MAX_TOTAL") {
         policy.addmul_max_total = v;
+    }
+    if let Some(v) = parse_usize_env("ASUPERSYNC_GF256_DUAL_ADDMUL_MIN_LANE") {
+        policy.addmul_min_lane = v;
     }
     if let Some(v) = parse_usize_env("ASUPERSYNC_GF256_DUAL_MAX_LANE_RATIO") {
         policy.max_lane_ratio = v.max(1);
@@ -986,6 +1005,7 @@ fn dual_addmul_decision_with_policy(
         DualKernelOverride::Auto => {
             let total = len_a.saturating_add(len_b);
             if in_window(total, policy.addmul_min_total, policy.addmul_max_total)
+                && len_a.min(len_b) >= policy.addmul_min_lane
                 && lane_ratio_within(len_a, len_b, policy.max_lane_ratio)
             {
                 DualKernelDecision::Fused
@@ -1017,6 +1037,7 @@ pub fn dual_kernel_policy_snapshot() -> DualKernelPolicySnapshot {
         mul_max_total: policy.mul_max_total,
         addmul_min_total: policy.addmul_min_total,
         addmul_max_total: policy.addmul_max_total,
+        addmul_min_lane: policy.addmul_min_lane,
         max_lane_ratio: policy.max_lane_ratio,
     }
 }
@@ -2675,6 +2696,46 @@ mod tests {
     }
 
     #[test]
+    fn dual_policy_addmul_lane_floor_gate_behaves_as_expected() {
+        let seed = 0u64;
+        let replay_ref = "replay:rq-u-gf256-dual-policy-v3";
+        let context = failure_context(
+            "RQ-U-GF256-DUAL-POLICY",
+            seed,
+            "dual_policy_addmul_lane_floor_gate_behaves_as_expected",
+            replay_ref,
+        );
+        let policy = DualKernelPolicy {
+            profile_pack: Gf256ProfilePackId::X86Avx2BalancedV1,
+            architecture_class: Gf256ArchitectureClass::X86Avx2,
+            tuning_corpus_id: GF256_PROFILE_TUNING_CORPUS_ID,
+            selected_tuning_candidate_id: X86_SELECTED_TUNING_CANDIDATE,
+            rejected_tuning_candidate_ids: X86_REJECTED_TUNING_CANDIDATES,
+            fallback_reason: None,
+            rejected_candidates: REJECTED_PROFILE_X86_AVX2,
+            replay_pointer: GF256_PROFILE_PACK_REPLAY_POINTER,
+            command_bundle: GF256_PROFILE_PACK_COMMAND_BUNDLE,
+            mode: DualKernelOverride::Auto,
+            mul_min_total: 8 * 1024,
+            mul_max_total: 24 * 1024,
+            addmul_min_total: 12 * 1024,
+            addmul_max_total: 16 * 1024,
+            addmul_min_lane: 2 * 1024,
+            max_lane_ratio: 8,
+        };
+        assert_eq!(
+            dual_addmul_decision_with_policy(&policy, 12288, 1536),
+            DualKernelDecision::Sequential,
+            "{context}"
+        );
+        assert_eq!(
+            dual_addmul_decision_with_policy(&policy, 12288, 2048),
+            DualKernelDecision::Fused,
+            "{context}"
+        );
+    }
+
+    #[test]
     fn dual_policy_snapshot_is_consistent_with_decision_helpers() {
         let snapshot = dual_kernel_policy_snapshot();
         let mode = snapshot.mode;
@@ -2706,6 +2767,7 @@ mod tests {
         mode: DualKernelMode,
         min_total: usize,
         max_total: usize,
+        min_lane: usize,
         max_lane_ratio: usize,
         len_a: usize,
         len_b: usize,
@@ -2716,6 +2778,7 @@ mod tests {
             DualKernelMode::Auto => {
                 let total = len_a.saturating_add(len_b);
                 in_window(total, min_total, max_total)
+                    && len_a.min(len_b) >= min_lane
                     && lane_ratio_within(len_a, len_b, max_lane_ratio)
             }
         }
@@ -2724,7 +2787,7 @@ mod tests {
     #[test]
     fn dual_policy_decision_matrix_matches_snapshot_contract() {
         let seed = 0u64;
-        let replay_ref = "replay:rq-u-gf256-dual-policy-v2";
+        let replay_ref = "replay:rq-u-gf256-dual-policy-v3";
         let context = failure_context(
             "RQ-U-GF256-DUAL-POLICY",
             seed,
@@ -2741,6 +2804,7 @@ mod tests {
             ("RQ-E-GF256-DUAL-004", 12288usize, 12288usize),
             ("RQ-E-GF256-DUAL-005", 15360usize, 15360usize),
             ("RQ-E-GF256-DUAL-006", 16384usize, 16384usize),
+            ("RQ-E-GF256-DUAL-007", 12288usize, 1536usize),
         ];
 
         for (scenario_id, len_a, len_b) in scenarios {
@@ -2748,6 +2812,7 @@ mod tests {
                 snapshot.mode,
                 snapshot.mul_min_total,
                 snapshot.mul_max_total,
+                0,
                 snapshot.max_lane_ratio,
                 len_a,
                 len_b,
@@ -2756,6 +2821,7 @@ mod tests {
                 snapshot.mode,
                 snapshot.addmul_min_total,
                 snapshot.addmul_max_total,
+                snapshot.addmul_min_lane,
                 snapshot.max_lane_ratio,
                 len_a,
                 len_b,
@@ -2870,6 +2936,7 @@ mod tests {
             mul_max_total: 24576,
             addmul_min_total: 12288,
             addmul_max_total: 16384,
+            addmul_min_lane: 2048,
             max_lane_ratio: 8,
         };
         let copied = snap;
@@ -2933,10 +3000,13 @@ mod tests {
     #[test]
     fn simd_profile_packs_raise_addmul_floor_for_small_lane_regression_guard() {
         let catalog = gf256_profile_pack_catalog();
+        assert_eq!(catalog[0].addmul_min_lane, 0);
         for metadata in &catalog[1..] {
             assert_eq!(metadata.addmul_min_total, 12 * 1024);
             assert!(metadata.addmul_min_total > (4096 + 4096));
             assert!(metadata.addmul_max_total >= 16 * 1024);
+            assert_eq!(metadata.addmul_min_lane, 2 * 1024);
+            assert!(metadata.addmul_min_lane > 1536);
         }
     }
 
@@ -3062,6 +3132,10 @@ mod tests {
                 .rejected_tuning_candidate_ids,
             policy.rejected_tuning_candidate_ids
         );
+        assert_eq!(
+            manifest.active_profile_metadata.addmul_min_lane,
+            policy.addmul_min_lane
+        );
         assert!(
             manifest
                 .profile_pack_catalog
@@ -3097,7 +3171,7 @@ mod tests {
     #[test]
     fn dual_policy_decisions_are_symmetric_under_lane_swap() {
         let seed = 0u64;
-        let replay_ref = "replay:rq-u-gf256-dual-policy-v2";
+        let replay_ref = "replay:rq-u-gf256-dual-policy-v3";
         let context = failure_context(
             "RQ-U-GF256-DUAL-POLICY",
             seed,
@@ -3111,6 +3185,7 @@ mod tests {
             (7168usize, 1024usize),
             (7424usize, 768usize),
             (12288usize, 12288usize),
+            (12288usize, 1536usize),
             (16384usize, 16384usize),
         ] {
             assert_eq!(
