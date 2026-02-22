@@ -765,6 +765,18 @@ impl StreamStore {
         Ok(id)
     }
 
+    /// Get the total number of streams (including closed).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.streams.len()
+    }
+
+    /// Return whether the store has zero streams.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.streams.is_empty()
+    }
+
     /// Remove closed streams.
     pub fn prune_closed(&mut self) {
         self.streams.retain(|_, stream| !stream.state.is_closed());
@@ -844,6 +856,7 @@ mod tests {
     #[test]
     fn test_stream_store_allocation() {
         let mut store = StreamStore::new(true, 65535, DEFAULT_MAX_HEADER_LIST_SIZE);
+        assert!(store.is_empty());
 
         let id1 = store.allocate_stream_id().unwrap();
         assert_eq!(id1, 1);
@@ -853,6 +866,7 @@ mod tests {
 
         let id3 = store.allocate_stream_id().unwrap();
         assert_eq!(id3, 5);
+        assert!(!store.is_empty());
     }
 
     #[test]

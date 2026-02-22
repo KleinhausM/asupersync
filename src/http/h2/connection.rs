@@ -24,6 +24,16 @@ pub const CLIENT_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 /// Default connection-level window size.
 pub const DEFAULT_CONNECTION_WINDOW_SIZE: i32 = 65535;
 
+/// Default RST_STREAM rate limit: max frames within the window before GOAWAY.
+///
+/// Protects against CVE-2023-44487 (Rapid Reset) class attacks where a peer
+/// opens and immediately resets streams in a tight loop, exhausting server
+/// resources while each individual stream appears short-lived.
+const RST_STREAM_RATE_LIMIT: u32 = 100;
+
+/// Window duration for RST_STREAM rate limiting (in milliseconds).
+const RST_STREAM_RATE_WINDOW_MS: u128 = 30_000;
+
 /// Connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -217,6 +227,10 @@ pub struct Connection {
     continuation_started_at: Option<Instant>,
     /// Pending PUSH_PROMISE header block, if any.
     pending_push_promise: Option<PushPromiseAccumulator>,
+    /// RST_STREAM frames received in the current rate-limit window.
+    rst_stream_count: u32,
+    /// Start of the current RST_STREAM rate-limit window.
+    rst_stream_window_start: Instant,
 }
 
 impl Connection {
@@ -245,6 +259,8 @@ impl Connection {
             continuation_stream_id: None,
             continuation_started_at: None,
             pending_push_promise: None,
+            rst_stream_count: 0,
+            rst_stream_window_start: Instant::now(),
         }
     }
 
@@ -273,6 +289,8 @@ impl Connection {
             continuation_stream_id: None,
             continuation_started_at: None,
             pending_push_promise: None,
+            rst_stream_count: 0,
+            rst_stream_window_start: Instant::now(),
         }
     }
 
@@ -493,7 +511,7 @@ impl Connection {
             }
         }
 
-        match frame {
+        let result = match frame {
             Frame::Data(f) => self.process_data(f),
             Frame::Headers(f) => self.process_headers(f),
             Frame::Priority(f) => {
@@ -509,7 +527,17 @@ impl Connection {
             Frame::GoAway(f) => Ok(Some(self.process_goaway(f))),
             Frame::WindowUpdate(f) => self.process_window_update(f),
             Frame::Continuation(f) => self.process_continuation(f),
+        };
+
+        // Prune closed streams when the map grows large relative to the
+        // configured maximum. This prevents unbounded memory growth on
+        // long-lived connections where many streams are opened and closed.
+        let max = self.local_settings.max_concurrent_streams as usize;
+        if self.streams.len() > max.saturating_mul(2) {
+            self.streams.prune_closed();
         }
+
+        result
     }
 
     /// Update last_stream_id to track the highest processed stream.
@@ -757,6 +785,11 @@ impl Connection {
     ///
     /// RFC 7540 §5.1: RST_STREAM received on a stream in the idle state MUST
     /// be treated as a connection error of type PROTOCOL_ERROR.
+    ///
+    /// Includes rate limiting to protect against CVE-2023-44487 (HTTP/2 Rapid
+    /// Reset) class attacks. If the peer sends more than `RST_STREAM_RATE_LIMIT`
+    /// RST_STREAM frames within `RST_STREAM_RATE_WINDOW_MS`, the connection is
+    /// terminated with ENHANCE_YOUR_CALM.
     fn process_rst_stream(&mut self, frame: RstStreamFrame) -> Result<ReceivedFrame, H2Error> {
         // RFC 7540 §6.4: RST_STREAM frames MUST NOT be sent for stream 0.
         if frame.stream_id == 0 {
@@ -767,6 +800,22 @@ impl Connection {
         // treated as a connection error of type PROTOCOL_ERROR.
         if self.streams.is_idle_stream_id(frame.stream_id) {
             return Err(H2Error::protocol("RST_STREAM received on idle stream"));
+        }
+
+        // Rate-limit RST_STREAM frames (CVE-2023-44487 mitigation).
+        let elapsed = self.rst_stream_window_start.elapsed().as_millis();
+        if elapsed >= RST_STREAM_RATE_WINDOW_MS {
+            // Reset the window.
+            self.rst_stream_count = 1;
+            self.rst_stream_window_start = Instant::now();
+        } else {
+            self.rst_stream_count += 1;
+            if self.rst_stream_count > RST_STREAM_RATE_LIMIT {
+                return Err(H2Error::connection(
+                    ErrorCode::EnhanceYourCalm,
+                    "RST_STREAM flood detected",
+                ));
+            }
         }
 
         if let Some(stream) = self.streams.get_mut(frame.stream_id) {
@@ -3073,6 +3122,37 @@ mod tests {
     // =========================================================================
     // last_stream_id Pollution Tests (asupersync-32jl1)
     // =========================================================================
+
+    /// CVE-2023-44487: RST_STREAM flood beyond rate limit triggers ENHANCE_YOUR_CALM.
+    #[test]
+    fn rst_stream_flood_triggers_enhance_your_calm() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open and reset streams up to the rate limit.
+        for i in 0..RST_STREAM_RATE_LIMIT {
+            let stream_id = i * 2 + 1;
+            let headers = Frame::Headers(HeadersFrame::new(stream_id, Bytes::new(), false, true));
+            conn.process_frame(headers).unwrap();
+
+            let rst = Frame::RstStream(RstStreamFrame::new(stream_id, ErrorCode::Cancel));
+            conn.process_frame(rst).unwrap();
+        }
+
+        // One more RST_STREAM should trigger the rate limit.
+        let stream_id = RST_STREAM_RATE_LIMIT * 2 + 1;
+        let headers = Frame::Headers(HeadersFrame::new(stream_id, Bytes::new(), false, true));
+        conn.process_frame(headers).unwrap();
+
+        let rst = Frame::RstStream(RstStreamFrame::new(stream_id, ErrorCode::Cancel));
+        let err = conn.process_frame(rst).unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::EnhanceYourCalm);
+        assert!(
+            err.stream_id.is_none(),
+            "RST_STREAM flood must be a connection error"
+        );
+    }
 
     /// Regression: HEADERS on a stream with invalid parity must NOT bump
     /// last_stream_id. If it did, a subsequent GOAWAY would advertise a higher
