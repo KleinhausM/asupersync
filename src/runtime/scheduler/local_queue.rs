@@ -309,6 +309,14 @@ impl Stealer {
     pub fn steal(&self) -> Option<TaskId> {
         self.tasks.with_tasks_arena_mut(|arena| {
             let mut stack = self.inner.lock();
+            if !stack.has_local_tasks() {
+                // Common case: queue contains only stealable tasks.
+                // Skip locality bookkeeping and temporary local buffering.
+                let stolen = stack.steal_one_assume_non_local(arena);
+                drop(stack);
+                return stolen;
+            }
+
             let mut remaining_attempts = stack.len();
             // Keep the common "few local tasks skipped" path allocation-free.
             let mut skipped_locals = SmallVec::<[TaskId; Self::SKIPPED_LOCALS_INLINE_CAP]>::new();
