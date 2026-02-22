@@ -21,6 +21,7 @@ use crate::types::ObjectId;
 
 use std::collections::{BTreeSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 // ============================================================================
 // Decoder types
@@ -274,7 +275,7 @@ enum DenseFactorCacheResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DenseFactorCacheLookup {
-    Hit(DenseFactorArtifact),
+    Hit(Arc<DenseFactorArtifact>),
     MissNoEntry,
     MissFingerprintCollision,
 }
@@ -299,45 +300,44 @@ impl DenseFactorArtifact {
 struct DenseFactorSignature {
     fingerprint: u64,
     unsolved: Vec<usize>,
-    row_terms: Vec<Vec<(usize, u8)>>,
+    row_offsets: Vec<usize>,
+    row_terms_flat: Vec<(usize, u8)>,
 }
 
 impl DenseFactorSignature {
     fn from_equations(equations: &[Equation], dense_rows: &[usize], unsolved: &[usize]) -> Self {
-        let mut unsolved_mask = Vec::new();
-        if let Some(max_col) = unsolved.iter().copied().max() {
-            unsolved_mask = vec![false; max_col.saturating_add(1)];
-            for &col in unsolved {
-                unsolved_mask[col] = true;
+        let mut row_offsets = Vec::with_capacity(dense_rows.len());
+        let mut row_terms_flat = Vec::new();
+        for &eq_idx in dense_rows {
+            let mut unsolved_cursor = 0usize;
+            for &(col, coef) in &equations[eq_idx].terms {
+                if coef.is_zero() {
+                    continue;
+                }
+                while unsolved_cursor < unsolved.len() && unsolved[unsolved_cursor] < col {
+                    unsolved_cursor += 1;
+                }
+                if unsolved_cursor >= unsolved.len() {
+                    break;
+                }
+                if unsolved[unsolved_cursor] == col {
+                    row_terms_flat.push((col, coef.raw()));
+                }
             }
+            row_offsets.push(row_terms_flat.len());
         }
-
-        let row_terms: Vec<Vec<(usize, u8)>> = dense_rows
-            .iter()
-            .map(|&eq_idx| {
-                equations[eq_idx]
-                    .terms
-                    .iter()
-                    .filter_map(|(col, coef)| {
-                        let is_unsolved = unsolved_mask.get(*col).copied().unwrap_or(false);
-                        if !is_unsolved || coef.is_zero() {
-                            return None;
-                        }
-                        Some((*col, coef.raw()))
-                    })
-                    .collect()
-            })
-            .collect();
 
         let mut hasher = crate::util::DetHasher::default();
         unsolved.hash(&mut hasher);
-        row_terms.hash(&mut hasher);
+        row_offsets.hash(&mut hasher);
+        row_terms_flat.hash(&mut hasher);
         let fingerprint = hasher.finish();
 
         Self {
             fingerprint,
             unsolved: unsolved.to_vec(),
-            row_terms,
+            row_offsets,
+            row_terms_flat,
         }
     }
 }
@@ -345,7 +345,7 @@ impl DenseFactorSignature {
 #[derive(Debug, Clone)]
 struct DenseFactorCacheEntry {
     signature: DenseFactorSignature,
-    artifact: DenseFactorArtifact,
+    artifact: Arc<DenseFactorArtifact>,
 }
 
 #[derive(Debug, Default)]
@@ -376,7 +376,7 @@ impl DenseFactorCache {
     fn insert(
         &mut self,
         signature: DenseFactorSignature,
-        artifact: DenseFactorArtifact,
+        artifact: Arc<DenseFactorArtifact>,
     ) -> DenseFactorCacheResult {
         if let Some(existing) = self
             .entries
@@ -1319,7 +1319,7 @@ impl InactivationDecoder {
         equations: &[Equation],
         dense_rows: &[usize],
         unsolved: &[usize],
-    ) -> (DenseFactorArtifact, DenseFactorCacheObservation) {
+    ) -> (Arc<DenseFactorArtifact>, DenseFactorCacheObservation) {
         let signature = DenseFactorSignature::from_equations(equations, dense_rows, unsolved);
         let cache_key = signature.fingerprint;
         let (lookup, cache_entries_at_lookup) = {
@@ -1344,11 +1344,12 @@ impl InactivationDecoder {
 
         let saw_fingerprint_collision =
             matches!(lookup, DenseFactorCacheLookup::MissFingerprintCollision);
-        let artifact =
-            DenseFactorArtifact::new(sparse_first_dense_columns(equations, dense_rows, unsolved));
+        let artifact = Arc::new(DenseFactorArtifact::new(sparse_first_dense_columns(
+            equations, dense_rows, unsolved,
+        )));
         let (result, cache_entries) = {
             let mut cache = self.dense_factor_cache.lock();
-            let result = cache.insert(signature, artifact.clone());
+            let result = cache.insert(signature, Arc::clone(&artifact));
             (result, cache.len())
         };
         let reason = if saw_fingerprint_collision {
@@ -1554,10 +1555,8 @@ impl InactivationDecoder {
         let (dense_factor, cache_observation) =
             self.dense_factor_with_cache(&state.equations, &dense_rows, &unsolved);
         apply_dense_factor_cache_observation(&mut state.stats, cache_observation);
-        let DenseFactorArtifact {
-            dense_cols,
-            col_to_dense,
-        } = dense_factor;
+        let dense_cols = &dense_factor.dense_cols;
+        let col_to_dense = &dense_factor.col_to_dense;
 
         // Build dense submatrix for Gaussian elimination
         // Rows = unused equations, Columns = unsolved columns
@@ -1587,7 +1586,7 @@ impl InactivationDecoder {
         for (row, &eq_idx) in dense_rows.iter().enumerate() {
             let row_off = row * n_cols;
             for &(col, coef) in &state.equations[eq_idx].terms {
-                if let Some(dense_col) = dense_col_index(&col_to_dense, col) {
+                if let Some(dense_col) = dense_col_index(col_to_dense, col) {
                     a[row_off + dense_col] = coef;
                     if !coef.is_zero() {
                         dense_nonzeros += 1;
@@ -1645,7 +1644,7 @@ impl InactivationDecoder {
                 let pivot =
                     select_pivot_row(&a, n_rows, n_cols, col, &row_used, hard_regime, hard_plan);
                 let Some(prow) = pivot else {
-                    elimination_error = Some(singular_matrix_error(&dense_cols, col));
+                    elimination_error = Some(singular_matrix_error(dense_cols, col));
                     break;
                 };
 
@@ -1718,7 +1717,7 @@ impl InactivationDecoder {
                         rebuild_dense_matrix_from_equations(
                             &state.equations,
                             &dense_rows,
-                            &col_to_dense,
+                            col_to_dense,
                             n_cols,
                             &mut a,
                         );
@@ -1735,7 +1734,7 @@ impl InactivationDecoder {
                         rebuild_dense_matrix_from_equations(
                             &state.equations,
                             &dense_rows,
-                            &col_to_dense,
+                            col_to_dense,
                             n_cols,
                             &mut a,
                         );
@@ -1809,10 +1808,8 @@ impl InactivationDecoder {
         let (dense_factor, cache_observation) =
             self.dense_factor_with_cache(&state.equations, &dense_rows, &unsolved);
         apply_dense_factor_cache_observation(&mut state.stats, cache_observation);
-        let DenseFactorArtifact {
-            dense_cols,
-            col_to_dense,
-        } = dense_factor;
+        let dense_cols = &dense_factor.dense_cols;
+        let col_to_dense = &dense_factor.col_to_dense;
 
         // Build dense submatrix for Gaussian elimination
         // Rows = unused equations, Columns = unsolved columns
@@ -1841,7 +1838,7 @@ impl InactivationDecoder {
         for (row, &eq_idx) in dense_rows.iter().enumerate() {
             let row_off = row * n_cols;
             for &(col, coef) in &state.equations[eq_idx].terms {
-                if let Some(dense_col) = dense_col_index(&col_to_dense, col) {
+                if let Some(dense_col) = dense_col_index(col_to_dense, col) {
                     a[row_off + dense_col] = coef;
                     if !coef.is_zero() {
                         dense_nonzeros += 1;
@@ -1902,7 +1899,7 @@ impl InactivationDecoder {
                 let pivot =
                     select_pivot_row(&a, n_rows, n_cols, col, &row_used, hard_regime, hard_plan);
                 let Some(prow) = pivot else {
-                    elimination_error = Some(singular_matrix_error(&dense_cols, col));
+                    elimination_error = Some(singular_matrix_error(dense_cols, col));
                     break;
                 };
 
@@ -1988,7 +1985,7 @@ impl InactivationDecoder {
                         rebuild_dense_matrix_from_equations(
                             &state.equations,
                             &dense_rows,
-                            &col_to_dense,
+                            col_to_dense,
                             n_cols,
                             &mut a,
                         );
@@ -2014,7 +2011,7 @@ impl InactivationDecoder {
                         rebuild_dense_matrix_from_equations(
                             &state.equations,
                             &dense_rows,
-                            &col_to_dense,
+                            col_to_dense,
                             n_cols,
                             &mut a,
                         );
@@ -2307,12 +2304,15 @@ mod tests {
 
         let mut cache = DenseFactorCache::default();
         assert_eq!(
-            cache.insert(sig_a.clone(), DenseFactorArtifact::new(vec![1, 0])),
+            cache.insert(
+                sig_a.clone(),
+                Arc::new(DenseFactorArtifact::new(vec![1, 0]))
+            ),
             DenseFactorCacheResult::MissInserted
         );
         assert_eq!(
             cache.lookup(&sig_a),
-            DenseFactorCacheLookup::Hit(DenseFactorArtifact::new(vec![1, 0]))
+            DenseFactorCacheLookup::Hit(Arc::new(DenseFactorArtifact::new(vec![1, 0])))
         );
         assert_eq!(cache.lookup(&sig_b), DenseFactorCacheLookup::MissNoEntry);
     }
@@ -2330,7 +2330,7 @@ mod tests {
 
         let mut cache = DenseFactorCache::default();
         assert_eq!(
-            cache.insert(sig_a, DenseFactorArtifact::new(vec![1, 0])),
+            cache.insert(sig_a, Arc::new(DenseFactorArtifact::new(vec![1, 0]))),
             DenseFactorCacheResult::MissInserted
         );
         assert_eq!(
@@ -2348,7 +2348,8 @@ mod tests {
             let signature = DenseFactorSignature {
                 fingerprint: idx as u64,
                 unsolved: vec![idx],
-                row_terms: vec![vec![(idx, 1)]],
+                row_offsets: vec![1],
+                row_terms_flat: vec![(idx, 1)],
             };
             if idx == 0 {
                 first_signature = Some(signature.clone());
@@ -2359,7 +2360,7 @@ mod tests {
                 DenseFactorCacheResult::MissInserted
             };
             assert_eq!(
-                cache.insert(signature, DenseFactorArtifact::new(vec![idx])),
+                cache.insert(signature, Arc::new(DenseFactorArtifact::new(vec![idx]))),
                 expected
             );
         }

@@ -391,7 +391,9 @@ fn poll_next_blocking<S: SymbolStream + Unpin>(
         Poll::Ready(Some(Err(e))) => {
             Err(Error::new(ErrorKind::StreamEnded).with_message(e.to_string()))
         }
-        Poll::Ready(None) | Poll::Pending => Ok(None), // No symbol available in sync context
+        Poll::Ready(None) => Ok(None),
+        Poll::Pending => Err(Error::new(ErrorKind::SinkRejected)
+            .with_message("source stream not ready (sync context)")),
     }
 }
 
@@ -494,6 +496,19 @@ mod tests {
     }
 
     impl Unpin for VecStream {}
+
+    struct PendingStream;
+
+    impl SymbolStream for PendingStream {
+        fn poll_next(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<AuthenticatedSymbol, StreamError>>> {
+            Poll::Pending
+        }
+    }
+
+    impl Unpin for PendingStream {}
 
     fn params_for(
         object_id: ObjectId,
@@ -693,6 +708,18 @@ mod tests {
         let result = receiver.receive_object(&cx, &params);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::InsufficientSymbols);
+    }
+
+    #[test]
+    fn test_receive_object_pending_stream_returns_rejected() {
+        let cx: Cx = Cx::for_testing();
+        let stream = PendingStream;
+        let mut receiver = RaptorQReceiver::new(RaptorQConfig::default(), stream, None, None);
+
+        let params = params_for(ObjectId::new_for_test(12), 128, 256, 4);
+        let result = receiver.receive_object(&cx, &params);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::SinkRejected);
     }
 
     #[test]
