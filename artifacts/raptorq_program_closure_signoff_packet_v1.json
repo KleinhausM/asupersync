@@ -71,6 +71,73 @@
       }
     ]
   },
+  "track_completion_criteria": [
+    {
+      "track_code": "D",
+      "track_bead_id": "asupersync-np1co",
+      "required_status": "closed",
+      "current_status": "closed",
+      "status_reason": "Track-D conformance/differential/property closure is complete and verified.",
+      "closure_dependency_path": "direct",
+      "evidence_refs": [
+        "tests/raptorq_conformance.rs",
+        "docs/raptorq_unit_test_matrix.md",
+        "artifacts/raptorq_replay_catalog_v1.json"
+      ]
+    },
+    {
+      "track_code": "E",
+      "track_bead_id": "asupersync-2ncba",
+      "required_status": "closed",
+      "current_status": "in_progress",
+      "status_reason": "Track-E is still converging; H2 closure consumes this via Track-G governance closure path.",
+      "closure_dependency_path": "via asupersync-2cyx5",
+      "evidence_refs": [
+        "artifacts/raptorq_track_e_gf256_p95p99_highconf_v1.json",
+        "artifacts/raptorq_optimization_decision_records_v1.json",
+        "tests/ci_regression_gates.rs"
+      ]
+    },
+    {
+      "track_code": "F",
+      "track_bead_id": "asupersync-mg1qh",
+      "required_status": "closed",
+      "current_status": "closed",
+      "status_reason": "Track-F decoder algebra and inactivation optimization closure has been reconciled.",
+      "closure_dependency_path": "direct",
+      "evidence_refs": [
+        "artifacts/raptorq_expected_loss_decision_contract_v1.json",
+        "tests/ci_regression_gates.rs",
+        "docs/raptorq_unit_test_matrix.md"
+      ]
+    },
+    {
+      "track_code": "G",
+      "track_bead_id": "asupersync-2cyx5",
+      "required_status": "closed",
+      "current_status": "in_progress",
+      "status_reason": "Track-G final governance aggregation is still in progress and blocks final sign-off.",
+      "closure_dependency_path": "direct",
+      "evidence_refs": [
+        "artifacts/raptorq_controlled_rollout_policy_v1.json",
+        "artifacts/raptorq_expected_loss_decision_contract_v1.json",
+        "artifacts/raptorq_optimization_decision_records_v1.json"
+      ]
+    },
+    {
+      "track_code": "H",
+      "track_bead_id": "asupersync-p8o9m",
+      "required_status": "closed",
+      "current_status": "open",
+      "status_reason": "Track-H finalization/sign-off remains open until upstream closure dependencies are fully satisfied.",
+      "closure_dependency_path": "direct",
+      "evidence_refs": [
+        "docs/raptorq_program_closure_signoff_packet.md",
+        ".beads/issues.jsonl#asupersync-346lm",
+        "artifacts/raptorq_post_closure_opportunity_backlog_v1.json"
+      ]
+    }
+  ],
   "evidence_bundle_index": {
     "conformance": [
       "docs/raptorq_rfc6330_clause_matrix.md",

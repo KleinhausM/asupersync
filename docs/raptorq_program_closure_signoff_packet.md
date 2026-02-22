@@ -45,6 +45,25 @@ The packet ties together:
    - `artifacts/raptorq_controlled_rollout_policy_v1.json`
    - `artifacts/raptorq_expected_loss_decision_contract_v1.json`
 
+## Track Completion Matrix
+
+The packet includes an explicit Track D/E/F/G/H completion matrix in
+`track_completion_criteria` with per-track:
+
+1. `required_status`
+2. `current_status`
+3. `status_reason`
+4. `closure_dependency_path`
+5. evidence references
+
+Current state snapshot in the artifact:
+
+1. Track D (`asupersync-np1co`): `closed`
+2. Track E (`asupersync-2ncba`): `in_progress` (gated via Track G)
+3. Track F (`asupersync-mg1qh`): `closed`
+4. Track G (`asupersync-2cyx5`): `in_progress`
+5. Track H (`asupersync-p8o9m`): `open`
+
 ## Radical Lever Coverage Requirement
 
 The packet explicitly covers radical runtime levers with conservative
