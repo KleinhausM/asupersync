@@ -2591,6 +2591,71 @@ fn h2_closure_packet_schema_and_lever_coverage() {
         );
     }
 
+    let track_completion_criteria = artifact["track_completion_criteria"]
+        .as_array()
+        .expect("track_completion_criteria must be an array");
+    assert_eq!(
+        track_completion_criteria.len(),
+        5,
+        "H2 closure packet must include exactly 5 track completion entries (D/E/F/G/H)"
+    );
+
+    let expected_tracks: BTreeMap<&str, &str> = BTreeMap::from([
+        ("D", "asupersync-np1co"),
+        ("E", "asupersync-2ncba"),
+        ("F", "asupersync-mg1qh"),
+        ("G", "asupersync-2cyx5"),
+        ("H", "asupersync-p8o9m"),
+    ]);
+    let mut observed_tracks = BTreeMap::new();
+    for track in track_completion_criteria {
+        let track_code = track["track_code"]
+            .as_str()
+            .expect("track completion entry must include track_code");
+        let track_bead_id = track["track_bead_id"]
+            .as_str()
+            .expect("track completion entry must include track_bead_id");
+        observed_tracks.insert(track_code, track_bead_id);
+
+        assert_eq!(
+            track["required_status"].as_str(),
+            Some("closed"),
+            "track {track_code} must require closed status for final sign-off"
+        );
+        assert!(
+            !track["current_status"]
+                .as_str()
+                .expect("track completion entry must include current_status")
+                .is_empty(),
+            "track {track_code} must include current_status"
+        );
+        assert!(
+            !track["status_reason"]
+                .as_str()
+                .expect("track completion entry must include status_reason")
+                .is_empty(),
+            "track {track_code} must include status_reason"
+        );
+        assert!(
+            !track["closure_dependency_path"]
+                .as_str()
+                .expect("track completion entry must include closure_dependency_path")
+                .is_empty(),
+            "track {track_code} must include closure_dependency_path"
+        );
+        assert!(
+            !track["evidence_refs"]
+                .as_array()
+                .expect("track completion entry must include evidence_refs array")
+                .is_empty(),
+            "track {track_code} must include at least one evidence reference"
+        );
+    }
+    assert_eq!(
+        observed_tracks, expected_tracks,
+        "track completion criteria must cover exactly D/E/F/G/H with canonical bead IDs"
+    );
+
     let levers = artifact["radical_runtime_lever_coverage"]
         .as_array()
         .expect("radical_runtime_lever_coverage must be an array");
@@ -2711,6 +2776,7 @@ fn h2_closure_packet_schema_and_lever_coverage() {
 
 /// Validate H2 closure packet dependency status fields stay aligned with Beads state.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn h2_closure_packet_dependency_status_alignment() {
     let artifact: serde_json::Value = serde_json::from_str(RAPTORQ_H2_CLOSURE_PACKET_JSON)
         .expect("H2 closure packet artifact must be valid JSON");
@@ -2762,6 +2828,43 @@ fn h2_closure_packet_dependency_status_alignment() {
         }
     }
 
+    let track_completion_criteria = artifact["track_completion_criteria"]
+        .as_array()
+        .expect("track_completion_criteria must be an array");
+    assert!(
+        !track_completion_criteria.is_empty(),
+        "track_completion_criteria must include at least one track entry"
+    );
+    for track in track_completion_criteria {
+        let track_code = track["track_code"]
+            .as_str()
+            .expect("track completion entry must include track_code");
+        let track_bead_id = track["track_bead_id"]
+            .as_str()
+            .expect("track completion entry must include track_bead_id");
+        let current_status = track["current_status"]
+            .as_str()
+            .expect("track completion entry must include current_status");
+        let closure_dependency_path = track["closure_dependency_path"]
+            .as_str()
+            .expect("track completion entry must include closure_dependency_path");
+
+        let issue_status = issue_status_by_id.get(track_bead_id).unwrap_or_else(|| {
+            panic!("missing track bead {track_bead_id} (track {track_code}) in issues")
+        });
+        assert_eq!(
+            issue_status, current_status,
+            "track {track_code} current_status must match .beads/issues.jsonl for {track_bead_id}"
+        );
+
+        if current_status != "closed" && closure_dependency_path == "direct" {
+            assert!(
+                blocking_dependencies.contains(track_bead_id),
+                "track {track_code} is not closed and has direct closure path; {track_bead_id} must be listed in packet_state.blocking_dependencies"
+            );
+        }
+    }
+
     for blocking in &blocking_dependencies {
         let current_status = issue_status_by_id.get(blocking).unwrap_or_else(|| {
             panic!("missing blocking dependency {blocking} in .beads/issues.jsonl")
@@ -2801,6 +2904,12 @@ fn h2_closure_packet_docs_are_cross_linked() {
     for required in [
         "asupersync-2f71w",
         "asupersync-p8o9m",
+        "Track Completion Matrix",
+        "track_completion_criteria",
+        "asupersync-np1co",
+        "asupersync-2ncba",
+        "asupersync-mg1qh",
+        "asupersync-2cyx5",
         "artifacts/raptorq_program_closure_signoff_packet_v1.json",
         "artifacts/raptorq_controlled_rollout_policy_v1.json",
         "artifacts/raptorq_expected_loss_decision_contract_v1.json",
