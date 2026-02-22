@@ -497,6 +497,9 @@ impl TimerWheel {
         match self.active.entry(handle.id) {
             Entry::Occupied(entry) if *entry.get() == handle.generation => {
                 entry.remove();
+                if self.active.is_empty() {
+                    self.purge_inactive_storage();
+                }
                 true
             }
             _ => false,
@@ -615,6 +618,12 @@ impl TimerWheel {
     }
 
     fn advance_to(&mut self, target_tick: u64) {
+        if self.active.is_empty() {
+            self.current_tick = target_tick;
+            self.realign_cursors_to_current_tick();
+            return;
+        }
+
         while self.current_tick < target_tick {
             // Optimization: Skip empty ticks
             let next_tick = self.next_skip_tick(target_tick);
@@ -667,6 +676,13 @@ impl TimerWheel {
         }
 
         next_l0
+    }
+
+    fn realign_cursors_to_current_tick(&mut self) {
+        let now_nanos = self.current_tick.saturating_mul(LEVEL0_RESOLUTION_NS);
+        for level in &mut self.levels {
+            level.cursor = ((now_nanos / level.resolution_ns) % SLOTS_PER_LEVEL as u64) as usize;
+        }
     }
 
     fn tick_level0(&mut self) {
@@ -846,6 +862,9 @@ impl TimerWheel {
 
         // Put the vec back — retains its capacity for the next tick.
         self.ready = ready;
+        if self.active.is_empty() {
+            self.purge_inactive_storage();
+        }
         wakers
     }
 
@@ -908,6 +927,17 @@ impl TimerWheel {
     #[allow(dead_code)]
     fn physical_range_ns(&self) -> u64 {
         self.levels.last().map_or(0, WheelLevel::range_ns)
+    }
+
+    fn purge_inactive_storage(&mut self) {
+        self.ready.clear();
+        self.overflow.clear();
+        for level in &mut self.levels {
+            for slot in &mut level.slots {
+                slot.clear();
+            }
+            level.occupied = [0u64; BITMAP_WORDS];
+        }
     }
 }
 
@@ -1155,6 +1185,70 @@ mod tests {
         crate::assert_with_log!(count == 1, "counter", 1, count);
         crate::assert_with_log!(wheel.is_empty(), "wheel empty", true, wheel.is_empty());
         crate::test_complete!("wheel_advance_large_jump");
+    }
+
+    #[test]
+    fn empty_wheel_large_jump_realigns_all_cursors() {
+        init_test("empty_wheel_large_jump_realigns_all_cursors");
+        let mut wheel = TimerWheel::new();
+        let jump = Time::from_secs(3600);
+
+        let wakers = wheel.collect_expired(jump);
+        crate::assert_with_log!(
+            wakers.is_empty(),
+            "no timers fire on empty wheel jump",
+            true,
+            wakers.len()
+        );
+        crate::assert_with_log!(
+            wheel.current_time() == jump,
+            "current time advances directly to jump",
+            jump.as_nanos(),
+            wheel.current_time().as_nanos()
+        );
+
+        let jump_nanos = jump.as_nanos();
+        for level in &wheel.levels {
+            let expected_cursor = ((jump_nanos / level.resolution_ns) % SLOTS_PER_LEVEL as u64)
+                as usize;
+            crate::assert_with_log!(
+                level.cursor == expected_cursor,
+                "cursor realigned to jumped time",
+                expected_cursor,
+                level.cursor
+            );
+        }
+        crate::test_complete!("empty_wheel_large_jump_realigns_all_cursors");
+    }
+
+    #[test]
+    fn cancel_last_timer_purges_stale_storage() {
+        init_test("cancel_last_timer_purges_stale_storage");
+        let mut wheel = TimerWheel::new();
+
+        let h1 = wheel.register(Time::from_millis(10), counter_waker(Arc::new(AtomicU64::new(0))));
+        let h2 = wheel.register(Time::from_millis(20), counter_waker(Arc::new(AtomicU64::new(0))));
+
+        crate::assert_with_log!(wheel.cancel(&h1), "first cancel succeeds", true, true);
+        crate::assert_with_log!(wheel.cancel(&h2), "second cancel succeeds", true, true);
+        crate::assert_with_log!(wheel.is_empty(), "wheel has no active timers", true, wheel.len());
+        crate::assert_with_log!(wheel.ready.is_empty(), "ready queue purged", true, wheel.ready.len());
+        crate::assert_with_log!(
+            wheel.overflow.is_empty(),
+            "overflow queue purged",
+            true,
+            wheel.overflow.len()
+        );
+        for level in &wheel.levels {
+            let occupied = level.occupied.iter().any(|&word| word != 0);
+            crate::assert_with_log!(
+                !occupied,
+                "occupied bitmap cleared when active set empties",
+                false,
+                occupied
+            );
+        }
+        crate::test_complete!("cancel_last_timer_purges_stale_storage");
     }
 
     // =========================================================================
