@@ -217,16 +217,22 @@ where
 {
     fn drop(&mut self) {
         // Determine the release future to drive:
+        // - Acquiring phase: if resource_for_release is Some, use_fn panicked during transition.
         // - Using phase: resource acquired but use not complete; construct release future.
         // - Releasing phase: release already started but not complete; drive existing future.
         let release_fut: Option<Pin<Box<RF>>> = match &self.state.phase {
-            BracketPhase::Using(_) => {
-                // Cancel during use: construct the release future from saved state.
+            BracketPhase::Acquiring(_) | BracketPhase::Using(_) => {
+                // Cancel during use or if use_fn panicked during transition:
+                // construct the release future from saved state.
                 if let (Some(release_fn), Some(resource)) = (
                     self.state.release_fn.take(),
                     self.state.resource_for_release.take(),
                 ) {
-                    Some(Box::pin(release_fn(resource)))
+                    // Catch panic from release_fn itself
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        release_fn(resource)
+                    }));
+                    result.ok().map(|fut| Box::pin(fut))
                 } else {
                     None
                 }
@@ -238,7 +244,7 @@ where
                     _ => unreachable!(),
                 }
             }
-            _ => None,
+            BracketPhase::Done => None,
         };
 
         if let Some(mut release_fut) = release_fut {
@@ -251,9 +257,12 @@ where
             // Poll until complete (bounded iteration to prevent infinite loops)
             // Most release futures complete quickly or immediately.
             for _ in 0..10_000 {
-                match release_fut.as_mut().poll(&mut cx) {
-                    Poll::Ready(()) => return,
-                    Poll::Pending => {
+                let poll_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    release_fut.as_mut().poll(&mut cx)
+                }));
+                match poll_result {
+                    Ok(Poll::Ready(())) | Err(_) => return,
+                    Ok(Poll::Pending) => {
                         // Yield to allow progress
                         std::hint::spin_loop();
                     }

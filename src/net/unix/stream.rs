@@ -24,6 +24,7 @@ use crate::runtime::reactor::Interest;
 use nix::errno::Errno;
 use nix::sys::socket::{self, ControlMessage, ControlMessageOwned, MsgFlags};
 use parking_lot::Mutex;
+use socket2::{Domain, SockAddr, Socket, Type};
 use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{self, SocketAddr};
@@ -32,7 +33,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use socket2::{Domain, SockAddr, Socket, Type};
 
 fn connect_in_progress(err: &io::Error) -> bool {
     matches!(
@@ -250,14 +250,22 @@ impl UnixStream {
     /// ```
     #[cfg(target_os = "linux")]
     pub async fn connect_abstract(name: &[u8]) -> io::Result<Self> {
-        use std::os::linux::net::SocketAddrExt;
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
 
-        let addr = std::os::unix::net::SocketAddr::from_abstract_name(name)?;
+        // `socket2::SockAddr` can represent Linux abstract namespace addresses
+        // by encoding a leading NUL byte in the AF_UNIX path bytes.
+        let mut path_bytes = Vec::with_capacity(name.len() + 1);
+        path_bytes.push(0);
+        path_bytes.extend_from_slice(name);
+
+        let abstract_path = PathBuf::from(OsString::from_vec(path_bytes));
         let domain = Domain::UNIX;
         let socket = Socket::new(domain, Type::STREAM, None)?;
         socket.set_nonblocking(true)?;
 
-        let sock_addr = SockAddr::from(addr);
+        let sock_addr = SockAddr::unix(abstract_path)?;
         let registration = match socket.connect(&sock_addr) {
             Ok(()) => None,
             Err(err) if connect_in_progress(&err) => wait_for_connect(&socket).await?,
@@ -1010,10 +1018,53 @@ mod tests {
         // Test that connect_abstract compiles and returns an error when no listener exists
         futures_lite::future::block_on(async {
             // This will fail because no listener, but validates the API
-            let result = UnixStream::connect_abstract(b"nonexistent_test_socket").await;
-            crate::assert_with_log!(result.is_err(), "result err", true, result.is_err());
+            let err = UnixStream::connect_abstract(b"nonexistent_test_socket")
+                .await
+                .expect_err("connect should fail without a listener");
+            // A broken abstract-address encoding would fail earlier as InvalidInput.
+            crate::assert_with_log!(
+                err.kind() != io::ErrorKind::InvalidInput,
+                "connect_abstract error kind",
+                "non-InvalidInput",
+                err.kind()
+            );
         });
         crate::test_complete!("test_connect_abstract");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_connect_abstract_listener_interop() {
+        use std::os::linux::net::SocketAddrExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        init_test("test_connect_abstract_listener_interop");
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let name = format!(
+            "asupersync_connect_abstract_{}_{}",
+            std::process::id(),
+            nonce
+        );
+        let addr =
+            net::SocketAddr::from_abstract_name(name.as_bytes()).expect("build abstract addr");
+        let listener = net::UnixListener::bind_addr(&addr).expect("bind abstract listener");
+
+        let accept_handle = std::thread::spawn(move || {
+            let (_stream, _addr) = listener.accept().expect("accept client");
+        });
+
+        futures_lite::future::block_on(async {
+            let _client = UnixStream::connect_abstract(name.as_bytes())
+                .await
+                .expect("connect abstract listener");
+        });
+
+        accept_handle.join().expect("accept thread panicked");
+        crate::test_complete!("test_connect_abstract_listener_interop");
     }
 
     #[cfg(any(

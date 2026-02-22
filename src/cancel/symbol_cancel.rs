@@ -220,8 +220,12 @@ impl SymbolCancelToken {
             };
 
             // Notify listeners without holding the lock to avoid reentrancy deadlocks.
+            // Catch panics per-listener so that a single misbehaving listener
+            // cannot prevent remaining listeners and child cancellation from running.
             for listener in listeners {
-                listener.on_cancel(reason, now);
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    listener.on_cancel(reason, now);
+                }));
             }
 
             // Drain children without holding the lock. Safe because

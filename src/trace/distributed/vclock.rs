@@ -217,7 +217,12 @@ impl HybridClock {
     pub fn now(&self) -> HybridTime {
         let state = self.state.lock();
         let physical = self.physical_now(&state);
-        HybridTime::new(physical, state.logical)
+        let logical = if physical == state.last_physical {
+            state.logical
+        } else {
+            0
+        };
+        HybridTime::new(physical, logical)
     }
 
     /// Records a local event and returns the updated time.
@@ -919,6 +924,23 @@ mod tests {
         virtual_clock.advance(1_000);
         let t3 = hlc.tick();
         assert!(t3.physical() >= t2.physical());
+    }
+
+    #[test]
+    fn hybrid_now_resets_logical_when_physical_advances() {
+        let virtual_clock = Arc::new(VirtualClock::new());
+        let hlc = HybridClock::new(virtual_clock.clone());
+
+        let t1 = hlc.tick();
+        assert_eq!(t1.logical(), 1);
+
+        virtual_clock.advance(1_000);
+        let observed = hlc.now();
+        assert!(observed.physical() > t1.physical());
+        assert_eq!(observed.logical(), 0);
+
+        let t2 = hlc.tick();
+        assert!(t2 >= observed);
     }
 
     #[test]

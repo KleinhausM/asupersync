@@ -775,6 +775,9 @@ impl Drop for Child {
         if self.kill_on_drop {
             if let Some(ref mut child) = self.inner {
                 let _ = child.kill();
+                // Best-effort reap to avoid leaving a zombie process.
+                // try_wait is non-blocking so it is safe in Drop.
+                let _ = child.try_wait();
             }
         }
     }

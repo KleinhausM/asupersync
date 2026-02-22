@@ -434,7 +434,7 @@ impl BlockPlan {
 
 #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn compute_repair_count(k: usize, overhead: f64) -> usize {
-    let desired = (f64::from(k as u32) * overhead).ceil() as usize;
+    let desired = ((k as f64) * overhead).ceil() as usize;
     desired.saturating_sub(k)
 }
 
@@ -810,9 +810,11 @@ mod tests {
 
     #[test]
     fn encoding_stats_reset_for() {
-        let mut stats = EncodingStats::default();
-        stats.source_symbols = 10;
-        stats.repair_symbols = 5;
+        let mut stats = EncodingStats {
+            source_symbols: 10,
+            repair_symbols: 5,
+            ..EncodingStats::default()
+        };
         stats.reset_for(1024, 4);
         assert_eq!(stats.bytes_in, 1024);
         assert_eq!(stats.blocks, 4);
@@ -869,6 +871,13 @@ mod tests {
         assert_eq!(compute_repair_count(10, 2.0), 10);
         // k=1 with overhead 1.5 means ceil(1.5)=2, so 1 repair
         assert_eq!(compute_repair_count(1, 1.5), 1);
+    }
+
+    #[test]
+    fn compute_repair_count_large_k_does_not_truncate() {
+        // Regression guard: casting k through u32 would wrap this to zero.
+        let k = (u32::MAX as usize) + 1;
+        assert_eq!(compute_repair_count(k, 1.25), k / 4);
     }
 
     #[test]

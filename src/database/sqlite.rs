@@ -364,7 +364,10 @@ impl SqliteConnection {
             Ok(Err(e)) => Outcome::Err(e),
             Err(crate::channel::oneshot::RecvError::Cancelled) => {
                 handle.cancel();
-                Outcome::Cancelled(cx.cancel_reason().unwrap_or_else(|| CancelReason::user("cancelled")))
+                Outcome::Cancelled(
+                    cx.cancel_reason()
+                        .unwrap_or_else(|| CancelReason::user("cancelled")),
+                )
             }
             Err(crate::channel::oneshot::RecvError::Closed) => {
                 Outcome::Err(SqliteError::Sqlite("failed to receive result".to_string()))
@@ -406,7 +409,10 @@ impl SqliteConnection {
             Ok(Err(e)) => Outcome::Err(e),
             Err(crate::channel::oneshot::RecvError::Cancelled) => {
                 handle.cancel();
-                Outcome::Cancelled(cx.cancel_reason().unwrap_or_else(|| CancelReason::user("cancelled")))
+                Outcome::Cancelled(
+                    cx.cancel_reason()
+                        .unwrap_or_else(|| CancelReason::user("cancelled")),
+                )
             }
             Err(crate::channel::oneshot::RecvError::Closed) => {
                 Outcome::Err(SqliteError::Sqlite("failed to receive result".to_string()))
@@ -462,7 +468,10 @@ impl SqliteConnection {
             Ok(Err(e)) => Outcome::Err(e),
             Err(crate::channel::oneshot::RecvError::Cancelled) => {
                 handle.cancel();
-                Outcome::Cancelled(cx.cancel_reason().unwrap_or_else(|| CancelReason::user("cancelled")))
+                Outcome::Cancelled(
+                    cx.cancel_reason()
+                        .unwrap_or_else(|| CancelReason::user("cancelled")),
+                )
             }
             Err(crate::channel::oneshot::RecvError::Closed) => {
                 Outcome::Err(SqliteError::Sqlite("failed to receive result".to_string()))
@@ -504,7 +513,10 @@ impl SqliteConnection {
             Ok(Err(e)) => Outcome::Err(e),
             Err(crate::channel::oneshot::RecvError::Cancelled) => {
                 handle.cancel();
-                Outcome::Cancelled(cx.cancel_reason().unwrap_or_else(|| CancelReason::user("cancelled")))
+                Outcome::Cancelled(
+                    cx.cancel_reason()
+                        .unwrap_or_else(|| CancelReason::user("cancelled")),
+                )
             }
             Err(crate::channel::oneshot::RecvError::Closed) => {
                 Outcome::Err(SqliteError::Sqlite("failed to receive result".to_string()))
@@ -590,7 +602,10 @@ impl SqliteConnection {
             Ok(Err(e)) => Outcome::Err(e),
             Err(crate::channel::oneshot::RecvError::Cancelled) => {
                 handle.cancel();
-                Outcome::Cancelled(cx.cancel_reason().unwrap_or_else(|| CancelReason::user("cancelled")))
+                Outcome::Cancelled(
+                    cx.cancel_reason()
+                        .unwrap_or_else(|| CancelReason::user("cancelled")),
+                )
             }
             Err(crate::channel::oneshot::RecvError::Closed) => {
                 Outcome::Err(SqliteError::Sqlite("failed to receive result".to_string()))
@@ -706,9 +721,11 @@ impl<'a> SqliteTransaction<'a> {
         if self.finished {
             return Outcome::Err(SqliteError::TransactionFinished);
         }
-        self.finished = true;
         match self.conn.execute(cx, "COMMIT", &[]).await {
-            Outcome::Ok(_) => Outcome::Ok(()),
+            Outcome::Ok(_) => {
+                self.finished = true;
+                Outcome::Ok(())
+            }
             Outcome::Err(e) => Outcome::Err(e),
             Outcome::Cancelled(r) => Outcome::Cancelled(r),
             Outcome::Panicked(p) => Outcome::Panicked(p),
@@ -724,9 +741,11 @@ impl<'a> SqliteTransaction<'a> {
         if self.finished {
             return Outcome::Err(SqliteError::TransactionFinished);
         }
-        self.finished = true;
         match self.conn.execute(cx, "ROLLBACK", &[]).await {
-            Outcome::Ok(_) => Outcome::Ok(()),
+            Outcome::Ok(_) => {
+                self.finished = true;
+                Outcome::Ok(())
+            }
             Outcome::Err(e) => Outcome::Err(e),
             Outcome::Cancelled(r) => Outcome::Cancelled(r),
             Outcome::Panicked(p) => Outcome::Panicked(p),
@@ -768,7 +787,7 @@ impl Drop for SqliteTransaction<'_> {
             let inner = Arc::clone(&self.conn.inner);
             let pool = self.conn.pool.clone();
 
-            let handle = pool.spawn(move || {
+            let _rollback_handle = pool.spawn(move || {
                 let guard = inner.lock();
                 if let Ok(conn) = guard.get() {
                     let _ = conn.execute("ROLLBACK", []);
@@ -1171,6 +1190,64 @@ mod tests {
 
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].get_str("name").unwrap(), "alice");
+        });
+    }
+
+    #[test]
+    fn transaction_commit_cancelled_does_not_mark_finished_before_commit_runs() {
+        let cx = create_test_cx();
+        let cancelled_cx = create_test_cx();
+        cancelled_cx.cancel_fast(crate::types::CancelKind::User);
+
+        block_on(async {
+            let conn = match SqliteConnection::open_in_memory(&cx).await {
+                Outcome::Ok(conn) => conn,
+                other => panic!("open_in_memory failed: {other:?}"),
+            };
+
+            match conn
+                .execute_batch(&cx, "CREATE TABLE t (id INTEGER PRIMARY KEY);")
+                .await
+            {
+                Outcome::Ok(()) => {}
+                other => panic!("create table failed: {other:?}"),
+            }
+
+            let tx = match conn.begin(&cx).await {
+                Outcome::Ok(tx) => tx,
+                _ => panic!("begin failed"),
+            };
+
+            match tx.commit(&cancelled_cx).await {
+                Outcome::Cancelled(_) => {}
+                other => panic!("expected cancelled commit, got: {other:?}"),
+            }
+
+            // The cancelled commit path must keep `finished=false` so Drop can enqueue
+            // a best-effort rollback; otherwise the connection stays in-transaction.
+            for _ in 0..8 {
+                if conn
+                    .inner
+                    .lock()
+                    .get()
+                    .map_or(false, rusqlite::Connection::is_autocommit)
+                {
+                    break;
+                }
+
+                match conn.query(&cx, "SELECT 1", &[]).await {
+                    Outcome::Ok(_) => {}
+                    other => panic!("probe query failed: {other:?}"),
+                }
+            }
+
+            assert!(
+                conn.inner
+                    .lock()
+                    .get()
+                    .map_or(false, rusqlite::Connection::is_autocommit),
+                "connection should return to autocommit after cancelled commit drop path"
+            );
         });
     }
 }

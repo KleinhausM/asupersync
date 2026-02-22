@@ -806,11 +806,7 @@ fn seed_for(object_id: ObjectId, sbn: u8, esi: u32) -> u64 {
     let mut seed = hi ^ lo.rotate_left(13);
     seed ^= u64::from(sbn) << 56;
     seed ^= u64::from(esi);
-    if seed == 0 {
-        1
-    } else {
-        seed
-    }
+    if seed == 0 { 1 } else { seed }
 }
 
 #[cfg(test)]
@@ -1725,7 +1721,7 @@ mod tests {
         };
         let mut encoder = EncodingPipeline::new(config.clone(), pool());
         let object_id = ObjectId::new_for_test(110);
-        let data: Vec<u8> = (0..2048).map(|i| (i % 251) as u8).collect();
+        let data: Vec<u8> = (0u32..2048).map(|i| (i % 251) as u8).collect();
 
         let symbols: Vec<Symbol> = encoder
             .encode_with_repair(object_id, &data, 0)

@@ -136,7 +136,10 @@ impl HappyEyeballs {
     /// Returns the total number of remaining addresses.
     #[must_use]
     pub fn remaining(&self) -> usize {
-        (self.v6.len() - self.v6_idx) + (self.v4.len() - self.v4_idx)
+        self.v6
+            .len()
+            .saturating_sub(self.v6_idx)
+            .saturating_add(self.v4.len().saturating_sub(self.v4_idx))
     }
 }
 
@@ -389,8 +392,7 @@ mod tests {
     fn lookup_ip_into_iter_owned() {
         init_test("lookup_ip_into_iter_owned");
         let lookup = LookupIp::new(vec!["10.0.0.1".parse().unwrap()], Duration::from_secs(5));
-        let addrs: Vec<_> = lookup.into_iter().collect();
-        assert_eq!(addrs.len(), 1);
+        assert_eq!(lookup.into_iter().count(), 1);
         crate::test_complete!("lookup_ip_into_iter_owned");
     }
 
@@ -398,8 +400,7 @@ mod tests {
     fn lookup_ip_into_iter_ref() {
         init_test("lookup_ip_into_iter_ref");
         let lookup = LookupIp::new(vec!["10.0.0.1".parse().unwrap()], Duration::from_secs(5));
-        let addrs: Vec<_> = (&lookup).into_iter().collect();
-        assert_eq!(addrs.len(), 1);
+        assert_eq!((&lookup).into_iter().count(), 1);
         crate::test_complete!("lookup_ip_into_iter_ref");
     }
 
@@ -427,19 +428,17 @@ mod tests {
             vec!["10.0.0.1".parse().unwrap(), "::1".parse().unwrap()],
             Duration::from_mins(1),
         );
-        let v6: Vec<_> = lookup.ipv6_addrs().collect();
-        assert_eq!(v6.len(), 1);
+        assert_eq!(lookup.ipv6_addrs().count(), 1);
         crate::test_complete!("lookup_ip_ipv6_only");
     }
 
     #[test]
     fn happy_eyeballs_empty() {
         init_test("happy_eyeballs_empty");
-        let he = HappyEyeballs::new(vec![], vec![]);
+        let mut he = HappyEyeballs::new(vec![], vec![]);
         assert!(he.is_empty());
         assert_eq!(he.remaining(), 0);
-        let addrs: Vec<_> = he.collect();
-        assert!(addrs.is_empty());
+        assert!(he.next().is_none());
         crate::test_complete!("happy_eyeballs_empty");
     }
 
@@ -493,6 +492,20 @@ mod tests {
         let cloned = he;
         assert_eq!(cloned.remaining(), 1);
         crate::test_complete!("happy_eyeballs_debug_clone");
+    }
+
+    #[test]
+    fn happy_eyeballs_remaining_saturates_for_invalid_internal_indices() {
+        init_test("happy_eyeballs_remaining_saturates_for_invalid_internal_indices");
+        let he = HappyEyeballs {
+            v6: vec![],
+            v4: vec![],
+            v6_idx: 3,
+            v4_idx: 7,
+            prefer_v6: true,
+        };
+        assert_eq!(he.remaining(), 0);
+        crate::test_complete!("happy_eyeballs_remaining_saturates_for_invalid_internal_indices");
     }
 
     #[test]

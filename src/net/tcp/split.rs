@@ -314,11 +314,10 @@ impl TcpStreamInner {
         if !clear_registration {
             let combined = combined_waker(guard.read_waker.as_ref(), guard.write_waker.as_ref());
             let is_some = guard.registration.is_some();
-            let rearm_ok = if let Some(reg) = guard.registration.as_mut() {
-                matches!(reg.rearm(desired_interest, &combined), Ok(true))
-            } else {
-                false
-            };
+            let rearm_ok = guard
+                .registration
+                .as_mut()
+                .is_some_and(|reg| matches!(reg.rearm(desired_interest, &combined), Ok(true)));
 
             if is_some {
                 if !rearm_ok {
