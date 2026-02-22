@@ -4,7 +4,6 @@
 //! replicas and tracking acknowledgements with quorum semantics.
 
 use crate::combinator::quorum::{QuorumResult, quorum_outcomes};
-use crate::combinator::select::SelectAllDrain;
 use crate::error::ErrorKind;
 use crate::record::distributed_region::{ConsistencyLevel, ReplicaInfo};
 use crate::security::SecurityContext;
@@ -12,7 +11,6 @@ use crate::security::authenticated::AuthenticatedSymbol;
 use crate::types::symbol::ObjectId;
 use crate::types::{Outcome, Time};
 use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use super::assignment::{AssignmentStrategy, SymbolAssigner};
@@ -145,8 +143,6 @@ pub struct SymbolDistributor {
     pub metrics: DistributionMetrics,
 }
 
-type SendFuture<'a> = Pin<Box<dyn Future<Output = Result<ReplicaAck, ReplicaFailure>> + Send + 'a>>;
-
 impl SymbolDistributor {
     /// Creates a new distributor with the given configuration.
     #[must_use]
@@ -176,59 +172,31 @@ impl SymbolDistributor {
         let start = std::time::Instant::now();
         let assignments = Self::compute_assignments(encoded, replicas);
         let mut outcomes = Vec::with_capacity(assignments.len());
-        let parallelism = self.config.max_concurrent.max(1);
-        let mut assignment_iter = assignments.into_iter();
-        let mut in_flight: Vec<SendFuture<'_>> = Vec::with_capacity(parallelism);
         let mut symbols_sent_total = 0_u64;
+        for assignment in assignments {
+            let symbols_for_replica: Vec<AuthenticatedSymbol> = assignment
+                .symbol_indices
+                .iter()
+                .map(|&idx| {
+                    let sym = &encoded.symbols[idx];
+                    auth_context.sign_symbol(sym)
+                })
+                .collect();
 
-        let mut enqueue =
-            |assignment: super::assignment::ReplicaAssignment| -> Option<SendFuture<'_>> {
-                let symbols_for_replica: Vec<AuthenticatedSymbol> = assignment
-                    .symbol_indices
-                    .iter()
-                    .map(|&idx| {
-                        let sym = &encoded.symbols[idx];
-                        auth_context.sign_symbol(sym)
-                    })
-                    .collect();
-
-                if symbols_for_replica.is_empty() {
-                    return None;
-                }
-
-                symbols_sent_total =
-                    symbols_sent_total.saturating_add(symbols_for_replica.len() as u64);
-                let replica_id = assignment.replica_id;
-                Some(Box::pin(async move {
-                    transport
-                        .send_symbols(&replica_id, symbols_for_replica)
-                        .await
-                }))
-            };
-
-        while in_flight.len() < parallelism {
-            let Some(assignment) = assignment_iter.next() else {
-                break;
-            };
-            if let Some(fut) = enqueue(assignment) {
-                in_flight.push(fut);
+            if symbols_for_replica.is_empty() {
+                continue;
             }
-        }
 
-        while !in_flight.is_empty() {
-            let selected = SelectAllDrain::new(in_flight).await;
-            in_flight = selected.losers;
+            symbols_sent_total =
+                symbols_sent_total.saturating_add(symbols_for_replica.len() as u64);
+            let result = transport
+                .send_symbols(&assignment.replica_id, symbols_for_replica)
+                .await;
 
-            outcomes.push(match selected.value {
+            outcomes.push(match result {
                 Ok(ack) => Outcome::Ok(ack),
                 Err(fail) => Outcome::Err(fail),
             });
-
-            if let Some(assignment) = assignment_iter.next()
-                && let Some(fut) = enqueue(assignment)
-            {
-                in_flight.push(fut);
-            }
         }
 
         self.evaluate_outcomes_with_sent(
