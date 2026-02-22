@@ -1364,10 +1364,10 @@ impl InactivationDecoder {
             }
 
             // Scan newly added equations for degree-1 candidates.
-            for idx in base_eq_idx..state.equations.len() {
-                if !queued[idx] && active_degree_one_col(&state, &state.equations[idx]).is_some() {
+            for (idx, queued_flag) in queued.iter_mut().enumerate().skip(base_eq_idx) {
+                if !*queued_flag && active_degree_one_col(&state, &state.equations[idx]).is_some() {
                     queue.push_back(idx);
-                    queued[idx] = true;
+                    *queued_flag = true;
                     state.stats.peel_queue_pushes += 1;
                 }
             }
@@ -1435,8 +1435,14 @@ impl InactivationDecoder {
             state.stats.peeled += 1;
 
             // Propagate to other equations.
-            for i in 0..state.equations.len() {
-                let eq = &state.equations[i];
+            let active_cols = &state.active_cols;
+            let solved = &state.solved;
+            for (i, (eq, rhs)) in state
+                .equations
+                .iter_mut()
+                .zip(state.rhs.iter_mut())
+                .enumerate()
+            {
                 if eq.used {
                     continue;
                 }
@@ -1444,17 +1450,14 @@ impl InactivationDecoder {
                 if eq_coef.is_zero() {
                     continue;
                 }
-                gf256_addmul_slice(&mut state.rhs[i], &solution, eq_coef);
-                if let Ok(pos) = state.equations[i]
-                    .terms
-                    .binary_search_by_key(&col, |(c, _)| *c)
-                {
-                    state.equations[i].terms.remove(pos);
+                gf256_addmul_slice(rhs, &solution, eq_coef);
+                if let Ok(pos) = eq.terms.binary_search_by_key(&col, |(c, _)| *c) {
+                    eq.terms.remove(pos);
                 }
 
-                if !queued[i] && !state.equations[i].used && state.equations[i].degree() == 1 {
-                    let next_col = state.equations[i].terms[0].0;
-                    if state.active_cols.contains(&next_col) && state.solved[next_col].is_none() {
+                if !queued[i] && eq.degree() == 1 {
+                    let next_col = eq.terms[0].0;
+                    if active_cols.contains(&next_col) && solved[next_col].is_none() {
                         queue.push_back(i);
                         queued[i] = true;
                         state.stats.peel_queue_pushes += 1;
