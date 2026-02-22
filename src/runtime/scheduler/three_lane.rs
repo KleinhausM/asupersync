@@ -78,8 +78,10 @@ const DEFAULT_ENABLE_PARKING: bool = true;
 const LOCAL_SCHEDULER_BURST_BUDGET: usize = 2048;
 const LOCAL_SCHEDULER_MIN_CAPACITY: usize = 128;
 const LOCAL_SCHEDULER_MAX_CAPACITY: usize = 1024;
-const SPIN_LIMIT: u32 = 64;
-const YIELD_LIMIT: u32 = 16;
+// Keep a short spin/yield window for wakeup handoff while still reducing
+// runaway idle burn on noisy wake paths.
+const SPIN_LIMIT: u32 = 8;
+const YIELD_LIMIT: u32 = 2;
 
 type LocalReadyQueue = Mutex<Vec<TaskId>>;
 
@@ -1061,9 +1063,13 @@ impl ThreeLaneWorker {
             // If we can acquire the IO driver lock, we become the I/O leader
             // and poll the reactor for ready events (e.g. TCP connect completion).
             if let Some(io) = &self.io_driver {
-                if let Some(mut driver) = io.try_lock() {
-                    let _ = driver.turn_with(Some(Duration::from_millis(1)), |_, _| {});
-                    continue;
+                // When no sockets are registered, polling the reactor can return
+                // immediately and starve parking, causing runaway idle CPU.
+                if !io.is_empty() {
+                    if let Some(mut driver) = io.try_lock() {
+                        let _ = driver.turn_with(Some(Duration::from_millis(1)), |_, _| {});
+                        continue;
+                    }
                 }
             }
 
@@ -1817,7 +1823,7 @@ impl ThreeLaneWorker {
 
         trace!(task_id = ?task_id, worker_id = self.id, "executing task");
 
-        let (mut stored, wake_state, priority, cx_inner, cached_waker, cached_cancel_waker) = {
+        let (mut stored, wake_state, priority, task_cx, cx_inner, cached_waker, cached_cancel_waker) = {
             // Fast path: single lock for global tasks (remove stored future + read record).
             let merged = self.with_task_table(|tt| {
                 let global_stored = tt.remove_stored_future(task_id)?;
@@ -1826,6 +1832,8 @@ impl ThreeLaneWorker {
                 record.wake_state.begin_poll();
                 let priority = record.sched_priority;
                 let wake_state = Arc::clone(&record.wake_state);
+                // Preserve full Cx so scheduler sets CURRENT_CX during poll.
+                let task_cx = record.cx.clone();
                 let cached_waker = record.cached_waker.take();
                 let cached_cancel_waker = record.cached_cancel_waker.take();
                 // Skip cx_inner Arc clone when both wakers are cached with correct
@@ -1844,6 +1852,7 @@ impl ThreeLaneWorker {
                     AnyStoredTask::Global(global_stored),
                     wake_state,
                     priority,
+                    task_cx,
                     cx_inner,
                     cached_waker,
                     cached_cancel_waker,
@@ -1864,6 +1873,8 @@ impl ThreeLaneWorker {
                     record.wake_state.begin_poll();
                     let priority = record.sched_priority;
                     let wake_state = Arc::clone(&record.wake_state);
+                    // Preserve full Cx so scheduler sets CURRENT_CX during poll.
+                    let task_cx = record.cx.clone();
                     let cached_waker = record.cached_waker.take();
                     let cached_cancel_waker = record.cached_cancel_waker.take();
                     let both_cached = cached_waker.is_some()
@@ -1878,12 +1889,13 @@ impl ThreeLaneWorker {
                     Some((
                         wake_state,
                         priority,
+                        task_cx,
                         cx_inner,
                         cached_waker,
                         cached_cancel_waker,
                     ))
                 });
-                let Some((wake_state, priority, cx_inner, cached_waker, cached_cancel_waker)) =
+                let Some((wake_state, priority, task_cx, cx_inner, cached_waker, cached_cancel_waker)) =
                     record_info
                 else {
                     return;
@@ -1892,6 +1904,7 @@ impl ThreeLaneWorker {
                     AnyStoredTask::Local(local),
                     wake_state,
                     priority,
+                    task_cx,
                     cx_inner,
                     cached_waker,
                     cached_cancel_waker,
@@ -1980,6 +1993,9 @@ impl ThreeLaneWorker {
         };
 
         let poll_result = {
+            // Install the task context while polling so async I/O can reach
+            // runtime drivers via `Cx::current()`.
+            let _cx_guard = crate::cx::Cx::set_current(task_cx);
             let mut cx = Context::from_waker(&waker);
             stored.poll(&mut cx)
         };
@@ -1990,10 +2006,6 @@ impl ThreeLaneWorker {
                 let task_outcome = outcome
                     .map_err(|()| crate::error::Error::new(crate::error::ErrorKind::Internal));
                 let mut state = self.state.lock().expect("lock poisoned");
-                // Deferred Cx clone: only set task context on completion path (skips 3
-                // Arc increments + decrements on the much more common Pending path).
-                let _cx_guard =
-                    crate::cx::Cx::set_current(state.task(task_id).and_then(|r| r.cx.clone()));
                 let cancel_ack = Self::consume_cancel_ack_locked(&mut state, task_id);
                 if let Some(record) = state.task_mut(task_id) {
                     if !record.state.is_terminal() {
