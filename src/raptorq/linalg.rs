@@ -1632,29 +1632,29 @@ mod tests {
 
     #[test]
     fn eliminate_row_pivot_only_with_rhs_nonone_updates_rhs_only() {
-        let mut solver = GaussianSolver::new(2, 1);
-        solver.set_row(0, &[7], DenseRow::new(vec![0x55]));
-        solver.set_row(1, &[1], DenseRow::new(vec![0x23]));
+        let mut solver = GaussianSolver::new(2, 2);
+        solver.set_row(0, &[0xAA, 7], DenseRow::new(vec![0x55]));
+        solver.set_row(1, &[0xCC, 1], DenseRow::new(vec![0x23]));
 
         let factor = Gf256::new(0x0f);
         solver.eliminate_row(0, 1, factor);
 
         let expected_rhs = Gf256::new(0x55) + (factor * Gf256::new(0x23));
-        assert_eq!(solver.matrix[0], vec![0]);
+        assert_eq!(solver.matrix[0], vec![0xAA, 0]);
         assert_eq!(solver.rhs[0].as_slice(), &[expected_rhs.raw()]);
         assert_eq!(solver.stats.scale_adds, 1);
     }
 
     #[test]
     fn eliminate_row_pivot_only_with_rhs_one_updates_rhs_only() {
-        let mut solver = GaussianSolver::new(2, 1);
-        solver.set_row(0, &[7], DenseRow::new(vec![0x55]));
-        solver.set_row(1, &[1], DenseRow::new(vec![0x23]));
+        let mut solver = GaussianSolver::new(2, 2);
+        solver.set_row(0, &[0xAA, 7], DenseRow::new(vec![0x55]));
+        solver.set_row(1, &[0xCC, 1], DenseRow::new(vec![0x23]));
 
         solver.eliminate_row(0, 1, Gf256::ONE);
 
         let expected_rhs = Gf256::new(0x55) + Gf256::new(0x23);
-        assert_eq!(solver.matrix[0], vec![0]);
+        assert_eq!(solver.matrix[0], vec![0xAA, 0]);
         assert_eq!(solver.rhs[0].as_slice(), &[expected_rhs.raw()]);
         assert_eq!(solver.stats.scale_adds, 1);
     }

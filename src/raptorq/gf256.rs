@@ -1817,7 +1817,11 @@ fn gf256_addmul_slice_aarch64_neon(dst: &mut [u8], src: &[u8], c: Gf256) {
 #[target_feature(enable = "avx2")]
 unsafe fn gf256_mul_slice_x86_avx2_impl(dst: &mut [u8], c: Gf256) {
     let (low_tbl_arr, high_tbl_arr) = mul_nibble_tables(c);
-    gf256_mul_slice_x86_avx2_impl_tables(dst, low_tbl_arr, high_tbl_arr, mul_table_for(c));
+    // SAFETY: this function requires AVX2 via `target_feature`, and delegates to
+    // another AVX2-only helper over the same validated slice.
+    unsafe {
+        gf256_mul_slice_x86_avx2_impl_tables(dst, low_tbl_arr, high_tbl_arr, mul_table_for(c));
+    }
 }
 
 #[cfg(all(
@@ -1864,7 +1868,17 @@ unsafe fn gf256_mul_slice_x86_avx2_impl_tables(
 #[target_feature(enable = "avx2")]
 unsafe fn gf256_addmul_slice_x86_avx2_impl(dst: &mut [u8], src: &[u8], c: Gf256) {
     let (low_tbl_arr, high_tbl_arr) = mul_nibble_tables(c);
-    gf256_addmul_slice_x86_avx2_impl_tables(dst, src, low_tbl_arr, high_tbl_arr, mul_table_for(c));
+    // SAFETY: this function requires AVX2 via `target_feature`, and delegates to
+    // another AVX2-only helper with matching slice invariants.
+    unsafe {
+        gf256_addmul_slice_x86_avx2_impl_tables(
+            dst,
+            src,
+            low_tbl_arr,
+            high_tbl_arr,
+            mul_table_for(c),
+        );
+    }
 }
 
 #[cfg(all(
