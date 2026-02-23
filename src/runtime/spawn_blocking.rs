@@ -102,6 +102,12 @@ struct BlockingOneshotReceiver<T> {
     state: Arc<Mutex<BlockingOneshotState<T>>>,
 }
 
+impl<T> Drop for BlockingOneshotReceiver<T> {
+    fn drop(&mut self) {
+        self.state.lock().waker = None;
+    }
+}
+
 impl<T> std::future::Future for BlockingOneshotReceiver<T> {
     type Output = T;
 
