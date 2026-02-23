@@ -811,7 +811,48 @@ impl<P: Policy> Scope<'_, P> {
             .map_or(self.budget, crate::record::RegionRecord::budget);
         let child_scope = Scope::<P2>::new(child_region, child_budget);
 
-        let result = CatchUnwind(Box::pin(f(child_scope, state))).await;
+        let fut = f(child_scope, &mut *state);
+
+        struct RegionRunner<'a, Fut> {
+            fut: CatchUnwind<Fut>,
+            state: Option<&'a mut RuntimeState>,
+            child_region: RegionId,
+        }
+
+        impl<'a, Fut: Future> Future for RegionRunner<'a, Fut> {
+            type Output = (Fut::Output, &'a mut RuntimeState);
+
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                // SAFETY: RegionRunner is pinned, so projecting to fut is safe.
+                let this = unsafe { self.get_unchecked_mut() };
+                let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
+                match fut.poll(cx) {
+                    Poll::Ready(res) => {
+                        let state = this.state.take().expect("polled after ready");
+                        Poll::Ready((res, state))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+
+        impl<Fut> Drop for RegionRunner<'_, Fut> {
+            fn drop(&mut self) {
+                if let Some(state) = self.state.take() {
+                    let reason = CancelReason::fail_fast().with_region(self.child_region);
+                    let _ = state.cancel_request(self.child_region, &reason, None);
+                    state.advance_region_state(self.child_region);
+                }
+            }
+        }
+
+        let runner = RegionRunner {
+            fut: CatchUnwind(Box::pin(fut)),
+            state: Some(state),
+            child_region,
+        };
+
+        let (result, state) = runner.await;
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(payload) => {
