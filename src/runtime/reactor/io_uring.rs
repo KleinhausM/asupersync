@@ -216,12 +216,6 @@ mod imp {
 
             let mut ring = self.ring.lock();
 
-            // If no registrations and no timeout, avoid blocking forever.
-            if self.registrations.lock().is_empty() {
-                ring.submit()?;
-                return Ok(0);
-            }
-
             match timeout {
                 None => {
                     ring.submitter().submit_and_wait(1)?;
