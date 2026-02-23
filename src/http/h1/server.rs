@@ -17,7 +17,7 @@ use std::future::{Future, poll_fn};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Configuration for HTTP/1.1 server connections.
 #[derive(Debug, Clone)]
@@ -91,9 +91,9 @@ pub struct ConnectionState {
     /// Number of requests processed on this connection.
     pub requests_served: u64,
     /// When the connection was established.
-    pub connected_at: Instant,
+    pub connected_at: crate::types::Time,
     /// When the last request completed.
-    pub last_request_at: Instant,
+    pub last_request_at: crate::types::Time,
     /// Current phase of the connection.
     pub phase: ConnectionPhase,
 }
@@ -120,8 +120,7 @@ enum ReadOutcome {
 }
 
 impl ConnectionState {
-    fn new() -> Self {
-        let now = Instant::now();
+    fn new(now: crate::types::Time) -> Self {
         Self {
             requests_served: 0,
             connected_at: now,
@@ -132,14 +131,14 @@ impl ConnectionState {
 
     /// Returns the duration since the last request completed (or since connect).
     #[must_use]
-    pub fn idle_duration(&self) -> Duration {
-        self.last_request_at.elapsed()
+    pub fn idle_duration(&self, now: crate::types::Time) -> Duration {
+        Duration::from_nanos(now.as_nanos().saturating_sub(self.last_request_at.as_nanos()))
     }
 
     /// Returns the total connection lifetime.
     #[must_use]
-    pub fn connection_age(&self) -> Duration {
-        self.connected_at.elapsed()
+    pub fn connection_age(&self, now: crate::types::Time) -> Duration {
+        Duration::from_nanos(now.as_nanos().saturating_sub(self.connected_at.as_nanos()))
     }
 
     /// Returns whether the connection has exceeded the request limit.
@@ -148,8 +147,8 @@ impl ConnectionState {
     }
 
     /// Returns whether the connection has exceeded the idle timeout.
-    fn exceeded_idle_timeout(&self, timeout: Option<Duration>) -> bool {
-        timeout.is_some_and(|timeout| self.idle_duration() > timeout)
+    fn exceeded_idle_timeout(&self, timeout: Option<Duration>, now: crate::types::Time) -> bool {
+        timeout.is_some_and(|timeout| self.idle_duration(now) > timeout)
     }
 }
 
@@ -278,7 +277,11 @@ where
             .max_headers_size(self.config.max_headers_size)
             .max_body_size(self.config.max_body_size);
         let mut framed = Framed::new(io, codec);
-        let mut state = ConnectionState::new();
+        let mut state = ConnectionState::new(
+            Cx::current()
+                .and_then(|cx| cx.timer_driver())
+                .map_or_else(wall_now, |timer| timer.now()),
+        );
 
         loop {
             state.phase = ConnectionPhase::Idle;
@@ -298,8 +301,12 @@ where
                 break;
             }
 
+            let now = Cx::current()
+                .and_then(|cx| cx.timer_driver())
+                .map_or_else(wall_now, |timer| timer.now());
+
             // Check idle timeout
-            if state.requests_served > 0 && state.exceeded_idle_timeout(self.config.idle_timeout) {
+            if state.requests_served > 0 && state.exceeded_idle_timeout(self.config.idle_timeout, now) {
                 state.phase = ConnectionPhase::Closing;
                 break;
             }
@@ -354,7 +361,9 @@ where
                 .map_err(HttpError::Io)?;
 
             state.requests_served += 1;
-            state.last_request_at = Instant::now();
+            state.last_request_at = Cx::current()
+                .and_then(|cx| cx.timer_driver())
+                .map_or_else(wall_now, |timer| timer.now());
 
             if close_after {
                 state.phase = ConnectionPhase::Closing;
