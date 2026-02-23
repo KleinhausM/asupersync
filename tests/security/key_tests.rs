@@ -72,18 +72,18 @@ fn derive_subkey_changes_with_purpose() {
 }
 
 #[test]
-fn derive_subkey_differs_from_master() {
+fn derive_subkey_differs_from_primary() {
     init_test_logging();
-    test_phase!("derive_subkey_differs_from_master");
+    test_phase!("derive_subkey_differs_from_primary");
     let key = AuthKey::from_seed(123);
     let derived = key.derive_subkey(b"subkey");
     assert_with_log!(
         key != derived,
-        "derived should differ from master",
+        "derived should differ from primary",
         key,
         derived
     );
-    test_complete!("derive_subkey_differs_from_master");
+    test_complete!("derive_subkey_differs_from_primary");
 }
 
 #[test]

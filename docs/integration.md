@@ -1341,7 +1341,7 @@ and wire codec.
 
 Asupersync centralizes configuration in `RaptorQConfig` and related structs.
 
-- `RaptorQConfig`: master configuration facade
+- `RaptorQConfig`: primary configuration facade
 - `EncodingConfig`: symbol size, block size, repair overhead
 - `DecodingConfig`: buffer caps, timeouts, verification flags
 - `TransportConfig`: buffer sizes, multipath policy, routing

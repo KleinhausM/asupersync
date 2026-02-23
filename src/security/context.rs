@@ -227,12 +227,12 @@ mod tests {
 
     /// Invariant: derived contexts with different purposes produce incompatible keys.
     /// A tag signed by derive_context("transport") must fail verification under
-    /// derive_context("storage"), even though both derive from the same master key.
+    /// derive_context("storage"), even though both derive from the same primary key.
     #[test]
     fn cross_context_verification_isolation() {
-        let master = SecurityContext::for_testing(99);
-        let transport_ctx = master.derive_context(b"transport");
-        let storage_ctx = master.derive_context(b"storage");
+        let primary = SecurityContext::for_testing(99);
+        let transport_ctx = primary.derive_context(b"transport");
+        let storage_ctx = primary.derive_context(b"storage");
 
         let id = SymbolId::new_for_test(1, 0, 0);
         let symbol = Symbol::new(id, vec![10, 20, 30], SymbolKind::Source);
@@ -321,14 +321,14 @@ mod tests {
     /// Invariant: derived contexts get fresh stats (not shared with parent).
     #[test]
     fn derived_context_has_independent_stats() {
-        let master = SecurityContext::for_testing(42);
-        let derived = master.derive_context(b"child");
+        let primary = SecurityContext::for_testing(42);
+        let derived = primary.derive_context(b"child");
 
         let id = SymbolId::new_for_test(1, 0, 0);
         let symbol = Symbol::new(id, vec![1], SymbolKind::Source);
 
-        let _ = master.sign_symbol(&symbol);
-        assert_eq!(master.stats().signed.load(Ordering::Relaxed), 1);
+        let _ = primary.sign_symbol(&symbol);
+        assert_eq!(primary.stats().signed.load(Ordering::Relaxed), 1);
         assert_eq!(
             derived.stats().signed.load(Ordering::Relaxed),
             0,

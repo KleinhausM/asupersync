@@ -88,7 +88,7 @@ This migration harmonizes the asupersync bead hierarchy to eliminate duplicates,
 
 | ID | Purpose |
 |----|---------|
-| bd-zs64 | Master harmonization tracking EPIC |
+| bd-zs64 | Primary harmonization tracking EPIC |
 | bd-q0om | I/O EPIC merge tracking |
 | bd-hzrb | Parallel runtime merge tracking |
 | bd-kh65 | Naming standardization tracking |

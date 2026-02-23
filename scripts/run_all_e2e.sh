@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Master E2E Orchestrator (bd-26l3)
+# Primary E2E Orchestrator (bd-26l3)
 #
 # Runs all subsystem E2E test suites sequentially, collects per-suite results,
 # and produces a unified summary report with deterministic artifact manifests.
@@ -459,7 +459,7 @@ if [[ "$VERIFY_MATRIX_ONLY" -eq 1 ]]; then
 fi
 
 echo "==================================================================="
-echo "           Asupersync Master E2E Orchestrator                      "
+echo "           Asupersync Primary E2E Orchestrator                      "
 echo "==================================================================="
 echo ""
 echo "Config:"
@@ -804,7 +804,7 @@ fi
 # --- Summary ---
 echo ""
 echo "==================================================================="
-echo "                   MASTER E2E SUMMARY                              "
+echo "                   PRIMARY E2E SUMMARY                              "
 echo "==================================================================="
 echo ""
 echo "  Seed:     ${TEST_SEED}"

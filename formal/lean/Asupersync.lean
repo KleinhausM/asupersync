@@ -888,7 +888,7 @@ theorem quiescent_no_finalizers {Value Error Panic : Type}
   hQ.2.2.2
 
 /-- Close produces a full quiescence decomposition: all four properties hold.
-    Master theorem combining all quiescence properties at close time. -/
+    Primary theorem combining all quiescence properties at close time. -/
 theorem close_quiescence_decomposition {Value Error Panic : Type}
     {s s' : State Value Error Panic} {r : RegionId}
     {outcome : Outcome Value Error CancelReason Panic}
@@ -2564,7 +2564,7 @@ theorem scheduler_change_preserves_wellformed {Value Error Panic : Type}
 -- General preservation helper: replacing a task (same region) preserves WF
 -- Covers: schedule, complete, cancelMasked, cancelAcknowledge,
 --         cancelFinalize, cancelComplete, cancelChild
--- Ordering rationale: define this before master preservation dispatch to
+-- Ordering rationale: define this before primary preservation dispatch to
 -- avoid declaration-order/helper-availability regressions.
 -- ==========================================================================
 
@@ -2582,7 +2582,7 @@ theorem setTask_same_region_preserves_wellformed {Value Error Panic : Type}
 -- ==========================================================================
 -- General preservation helper: replacing a region (same structural fields)
 -- Covers: cancelPropagate, close, cancelRequest (region part)
--- Ordering rationale: this structural lemma is referenced by the master
+-- Ordering rationale: this structural lemma is referenced by the primary
 -- preservation theorem and must be available before that dispatch point.
 -- ==========================================================================
 
@@ -3157,7 +3157,7 @@ theorem resolved_obligation_stable {Value Error Panic : Type}
     exact ⟨ob', hOb', Or.inr hState'⟩
 
 -- ==========================================================================
--- Master preservation theorem: every step preserves well-formedness (bd-330st)
+-- Primary preservation theorem: every step preserves well-formedness (bd-330st)
 -- This is the core type-safety result for the operational semantics.
 -- ==========================================================================
 
@@ -3675,7 +3675,7 @@ theorem abort_resolves_obligation
     subst hUpdate
     exact ⟨_, hOb, hState, by simp [getObligation, setObligation, setRegion]⟩
 
-/-- Master simulation: every spec step preserves well-formedness, confirming
+/-- Primary simulation: every spec step preserves well-formedness, confirming
     the refinement map sends valid implementation states through any
     observable transition to valid specification states. -/
 theorem refinement_preserves_wellformed

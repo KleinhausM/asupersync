@@ -231,7 +231,7 @@ fn frontier_errors_have_single_primary_taxonomy_code() {
 }
 
 #[test]
-fn declaration_order_helpers_precede_master_preservation_theorem() {
+fn declaration_order_helpers_precede_primary_preservation_theorem() {
     let helper_markers = [
         "theorem scheduler_change_preserves_wellformed {Value Error Panic : Type}",
         "theorem setTask_same_region_preserves_wellformed {Value Error Panic : Type}",
@@ -239,17 +239,17 @@ fn declaration_order_helpers_precede_master_preservation_theorem() {
     ];
     let rationale_markers = [
         "Ordering rationale: keep this helper before `step_preserves_wellformed`",
-        "Ordering rationale: define this before master preservation dispatch",
-        "Ordering rationale: this structural lemma is referenced by the master",
+        "Ordering rationale: define this before primary preservation dispatch",
+        "Ordering rationale: this structural lemma is referenced by the primary",
     ];
-    let master_marker = "theorem step_preserves_wellformed";
+    let primary_marker = "theorem step_preserves_wellformed";
     let prelude_start_marker =
         "-- Preservation helper prelude (high-reuse helpers for preservation dispatch)";
     let prelude_end_marker = "-- End preservation helper prelude";
 
-    let master_pos = ASUPERSYNC_LEAN
-        .find(master_marker)
-        .expect("master preservation theorem must exist");
+    let primary_pos = ASUPERSYNC_LEAN
+        .find(primary_marker)
+        .expect("primary preservation theorem must exist");
     let prelude_start_pos = ASUPERSYNC_LEAN
         .find(prelude_start_marker)
         .expect("preservation helper prelude start marker must exist");
@@ -276,7 +276,7 @@ fn declaration_order_helpers_precede_master_preservation_theorem() {
             .find(marker)
             .unwrap_or_else(|| panic!("helper theorem marker must exist: {marker}"));
         assert!(
-            helper_pos < master_pos,
+            helper_pos < primary_pos,
             "helper theorem '{marker}' must be declared before step_preserves_wellformed"
         );
     }

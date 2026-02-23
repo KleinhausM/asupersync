@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn test_derived_key_not_equal_to_master() {
+    fn test_derived_key_not_equal_to_primary() {
         let key = AuthKey::from_seed(100);
         let sub = key.derive_subkey(b"test");
         assert_ne!(key, sub);

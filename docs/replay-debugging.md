@@ -868,7 +868,7 @@ runtime.step_n(1000);  // Capture just the problematic section
 
 ```rust
 pub struct RecorderConfig {
-    pub enabled: bool,           // Master switch
+    pub enabled: bool,           // Primary switch
     pub initial_capacity: usize, // Pre-allocated event buffer
     pub record_rng: bool,        // Include RNG values
     pub record_wakers: bool,     // Include waker events
