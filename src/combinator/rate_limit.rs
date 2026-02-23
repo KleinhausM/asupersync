@@ -645,7 +645,7 @@ impl RateLimiter {
     }
 
     /// Cancel a queued entry.
-    pub fn cancel_entry(&self, entry_id: u64) {
+    pub fn cancel_entry(&self, entry_id: u64, now: Time) {
         if entry_id == u64::MAX {
             return; // Special sentinel, nothing to cancel
         }
@@ -661,6 +661,8 @@ impl RateLimiter {
                     (state.tokens + f64::from(entry.cost)).min(f64::from(self.policy.burst));
                 // We could decrement total_allowed here, but the operation was technically
                 // allowed from the rate limiter's perspective, just not consumed.
+                drop(state);
+                let _ = self.process_queue(now);
             }
         }
     }
@@ -1473,7 +1475,7 @@ mod tests {
         let entry_id = rl.enqueue(1, now).unwrap();
 
         // Cancel
-        rl.cancel_entry(entry_id);
+        rl.cancel_entry(entry_id, now);
 
         // Check - should return Cancelled
         let result = rl.check_entry(entry_id, now);

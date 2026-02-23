@@ -484,7 +484,7 @@ impl Bulkhead {
     }
 
     /// Cancel a queued entry.
-    pub fn cancel_entry(&self, entry_id: u64) {
+    pub fn cancel_entry(&self, entry_id: u64, now: Time) {
         let mut queue = self.queue.write();
         if let Some(idx) = queue.iter().position(|e| e.id == entry_id) {
             let entry = queue.remove(idx);
@@ -494,6 +494,7 @@ impl Bulkhead {
                 // Permit was granted but not claimed. Release it.
                 self.release_permit(entry.weight);
                 self.total_cancelled_atomic.fetch_add(1, Ordering::Relaxed);
+                let _ = self.process_queue(now);
             } else if entry.result.is_none() {
                 // Still waiting. Mark as cancelled.
                 self.pending_queue_count.fetch_sub(1, Ordering::Relaxed);
@@ -1062,7 +1063,7 @@ mod tests {
         let entry_id = bh.enqueue(1, now).unwrap();
 
         // Cancel
-        bh.cancel_entry(entry_id);
+        bh.cancel_entry(entry_id, now);
 
         assert_eq!(bh.metrics().total_cancelled, 1);
     }
@@ -1516,7 +1517,7 @@ mod tests {
         assert_eq!(bh.available(), 0);
 
         // 5. Cancel the entry (simulate user dropping the future)
-        bh.cancel_entry(entry_id);
+        bh.cancel_entry(entry_id, now);
 
         // 6. Verify permit is returned
         // BUG: Without the fix, this assertion fails because the permit is leaked.
@@ -1544,7 +1545,7 @@ mod tests {
         let entry_id = bh.enqueue(1, now).unwrap();
 
         // 3. Cancel the entry
-        bh.cancel_entry(entry_id);
+        bh.cancel_entry(entry_id, now);
 
         // 4. Verify queue is empty
         let metrics = bh.metrics();
@@ -1580,7 +1581,7 @@ mod tests {
         bh.process_queue(later);
 
         // 4. Cancel the entry
-        bh.cancel_entry(entry_id);
+        bh.cancel_entry(entry_id, now);
 
         // 5. Verify queue is empty
         let metrics = bh.metrics();
