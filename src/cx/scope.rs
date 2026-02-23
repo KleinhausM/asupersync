@@ -835,7 +835,32 @@ impl<P: Policy> Scope<'_, P> {
             }
         }
 
+        let close_notify = state.region(child_region).map(|r| r.close_notify.clone());
         state.advance_region_state(child_region);
+
+        if let Some(notify) = close_notify {
+            struct RegionCloseFuture {
+                state: Arc<parking_lot::Mutex<crate::record::region::RegionCloseState>>,
+            }
+            
+            impl Future for RegionCloseFuture {
+                type Output = ();
+                fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                    let mut state = self.state.lock();
+                    if state.closed {
+                        Poll::Ready(())
+                    } else {
+                        if !state.waker.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
+                            state.waker = Some(cx.waker().clone());
+                        }
+                        Poll::Pending
+                    }
+                }
+            }
+
+            RegionCloseFuture { state: notify }.await;
+        }
+
         Ok(outcome)
     }
 

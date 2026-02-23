@@ -11,6 +11,15 @@ use crate::types::{Budget, CancelReason, CurveBudget, RRefAccess, RegionId, Task
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+/// State for waking tasks waiting on a region to close.
+#[derive(Debug)]
+pub struct RegionCloseState {
+    /// Whether the region is fully closed.
+    pub closed: bool,
+    /// Waker for a task waiting for the region to close.
+    pub waker: Option<std::task::Waker>,
+}
+
 /// The state of a region in its lifecycle.
 ///
 /// State machine:
@@ -272,6 +281,8 @@ pub struct RegionRecord {
     pub parent: Option<RegionId>,
     /// Logical time when the region was created.
     pub created_at: Time,
+    /// Notification state for tasks waiting on this region to close.
+    pub close_notify: std::sync::Arc<parking_lot::Mutex<RegionCloseState>>,
     /// Current state (atomic for concurrent access).
     state: AtomicRegionState,
     /// Inner mutable state (guarded by a lock).
@@ -323,6 +334,10 @@ impl RegionRecord {
             id,
             parent,
             created_at,
+            close_notify: std::sync::Arc::new(parking_lot::Mutex::new(RegionCloseState {
+                closed: false,
+                waker: None,
+            })),
             state: AtomicRegionState::new(RegionState::Open),
             inner: RwLock::new(RegionInner {
                 budget,
@@ -755,6 +770,11 @@ impl RegionRecord {
         if transitioned {
             self.trace_state_change(RegionState::Closed);
             self.clear_heap();
+            let mut notify = self.close_notify.lock();
+            notify.closed = true;
+            if let Some(waker) = notify.waker.take() {
+                waker.wake();
+            }
         }
         transitioned
     }
@@ -989,6 +1009,11 @@ impl RegionRecord {
         // Ensure heap is reclaimed if the snapshot forces the region closed
         if state == RegionState::Closed && prev_state != RegionState::Closed {
             self.clear_heap();
+            let mut notify = self.close_notify.lock();
+            notify.closed = true;
+            if let Some(waker) = notify.waker.take() {
+                waker.wake();
+            }
         }
     }
 }
