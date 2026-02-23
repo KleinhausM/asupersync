@@ -632,19 +632,35 @@ fn spawn_thread_on_inner(inner: &Arc<BlockingPoolInner>) {
     let name = format!("{}-blocking-{}", inner.thread_name_prefix, thread_id);
 
     match thread::Builder::new().name(name).spawn(move || {
+        struct ThreadExitGuard<'a> {
+            inner: &'a Arc<BlockingPoolInner>,
+            retired_with_claim: bool,
+        }
+
+        impl Drop for ThreadExitGuard<'_> {
+            fn drop(&mut self) {
+                if let Some(ref callback) = self.inner.on_thread_stop {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        callback();
+                    }));
+                }
+
+                if !self.retired_with_claim {
+                    self.inner.active_threads.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let mut guard = ThreadExitGuard {
+            inner: &inner_clone,
+            retired_with_claim: false,
+        };
+
         if let Some(ref callback) = inner_clone.on_thread_start {
             callback();
         }
 
-        let retired_with_claim = blocking_worker_loop(&inner_clone);
-
-        if let Some(ref callback) = inner_clone.on_thread_stop {
-            callback();
-        }
-
-        if !retired_with_claim {
-            inner_clone.active_threads.fetch_sub(1, Ordering::Relaxed);
-        }
+        guard.retired_with_claim = blocking_worker_loop(&inner_clone);
     }) {
         Ok(handle) => {
             let mut handles = inner.thread_handles.lock();
@@ -756,6 +772,11 @@ fn blocking_worker_loop(inner: &BlockingPoolInner) -> bool {
                     continue;
                 }
 
+                if inner.shutdown.load(Ordering::Acquire) {
+                    drop(guard);
+                    break;
+                }
+
                 let wait_result = inner.condvar.wait_for(&mut guard, inner.idle_timeout);
                 drop(guard);
                 wait_result.timed_out()
@@ -775,6 +796,11 @@ fn blocking_worker_loop(inner: &BlockingPoolInner) -> bool {
                 if !inner.queue.is_empty() {
                     drop(guard);
                     continue;
+                }
+
+                if inner.shutdown.load(Ordering::Acquire) {
+                    drop(guard);
+                    break;
                 }
 
                 inner.condvar.wait(&mut guard);
