@@ -328,32 +328,6 @@ impl WheelLevel {
         None
     }
 
-    /// Finds the earliest occupied slot circularly from `cursor`.
-    fn next_occupied_circular(&self) -> Option<usize> {
-        let mut min_dist = None;
-        let mut best_slot = None;
-        for word_idx in 0..BITMAP_WORDS {
-            let mut word = self.occupied[word_idx];
-            while word != 0 {
-                let bit_idx = word.trailing_zeros();
-                let slot = word_idx * 64 + bit_idx as usize;
-
-                let dist = if slot >= self.cursor {
-                    slot - self.cursor
-                } else {
-                    slot + SLOTS_PER_LEVEL - self.cursor
-                };
-
-                if min_dist.is_none_or(|min| dist < min) {
-                    min_dist = Some(dist);
-                    best_slot = Some(slot);
-                }
-
-                word &= !(1u64 << bit_idx);
-            }
-        }
-        best_slot
-    }
 }
 
 /// Hierarchical timing wheel for timers.
