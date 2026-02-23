@@ -453,7 +453,7 @@ mod tests {
     #[test]
     fn should_close_connection_header_close() {
         let config = Http1Config::default();
-        let state = ConnectionState::new();
+        let state = ConnectionState::new(crate::types::Time::ZERO);
         let req = make_request(Version::Http11, vec![("Connection".into(), "close".into())]);
         assert!(should_close_connection(&req, &config, &state));
     }
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn should_close_connection_header_keepalive() {
         let config = Http1Config::default();
-        let state = ConnectionState::new();
+        let state = ConnectionState::new(crate::types::Time::ZERO);
         let req = make_request(
             Version::Http11,
             vec![("Connection".into(), "keep-alive".into())],
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn should_close_http10_default() {
         let config = Http1Config::default();
-        let state = ConnectionState::new();
+        let state = ConnectionState::new(crate::types::Time::ZERO);
         let req = make_request(Version::Http10, vec![]);
         assert!(should_close_connection(&req, &config, &state));
     }
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn should_close_http10_with_keepalive() {
         let config = Http1Config::default();
-        let state = ConnectionState::new();
+        let state = ConnectionState::new(crate::types::Time::ZERO);
         let req = make_request(
             Version::Http10,
             vec![("Connection".into(), "keep-alive".into())],
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn should_close_http11_default() {
         let config = Http1Config::default();
-        let state = ConnectionState::new();
+        let state = ConnectionState::new(crate::types::Time::ZERO);
         let req = make_request(Version::Http11, vec![]);
         assert!(!should_close_connection(&req, &config, &state));
     }
@@ -502,7 +502,7 @@ mod tests {
             keep_alive: false,
             ..Default::default()
         };
-        let state = ConnectionState::new();
+        let state = ConnectionState::new(crate::types::Time::ZERO);
         let req = make_request(Version::Http11, vec![]);
         assert!(should_close_connection(&req, &config, &state));
     }
@@ -513,7 +513,7 @@ mod tests {
             max_requests_per_connection: Some(5),
             ..Default::default()
         };
-        let mut state = ConnectionState::new();
+        let mut state = ConnectionState::new(crate::types::Time::ZERO);
         let req = make_request(Version::Http11, vec![]);
 
         // At 4 served (next will be 5th = limit), should close
@@ -531,7 +531,7 @@ mod tests {
             max_requests_per_connection: None,
             ..Default::default()
         };
-        let mut state = ConnectionState::new();
+        let mut state = ConnectionState::new(crate::types::Time::ZERO);
         let req = make_request(Version::Http11, vec![]);
 
         state.requests_served = 1_000_000;
@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn connection_state_tracking() {
-        let state = ConnectionState::new();
+        let state = ConnectionState::new(crate::types::Time::ZERO);
         assert_eq!(state.requests_served, 0);
         assert_eq!(state.phase, ConnectionPhase::Idle);
         assert!(!state.exceeded_request_limit(Some(10)));
@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn connection_state_request_limit() {
-        let mut state = ConnectionState::new();
+        let mut state = ConnectionState::new(crate::types::Time::ZERO);
         state.requests_served = 10;
         assert!(state.exceeded_request_limit(Some(10)));
         assert!(state.exceeded_request_limit(Some(5)));
