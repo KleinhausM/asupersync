@@ -364,7 +364,10 @@ impl Future for Notified<'_> {
                         match &mut waiters.entries[index].waker {
                             Some(existing) if existing.will_wake(cx.waker()) => {}
                             Some(existing) => existing.clone_from(cx.waker()),
-                            slot @ None => *slot = Some(cx.waker().clone()),
+                            slot @ None => {
+                                *slot = Some(cx.waker().clone());
+                                waiters.active += 1;
+                            }
                         }
                     } else {
                         // Entry was popped by tail shrinking. This only
