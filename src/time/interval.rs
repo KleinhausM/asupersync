@@ -164,8 +164,6 @@ pub struct Interval {
     period: Duration,
     /// Behavior for missed ticks.
     missed_tick_behavior: MissedTickBehavior,
-    /// Whether the first tick has been returned.
-    first_tick_done: bool,
 }
 
 impl Interval {
@@ -194,7 +192,6 @@ impl Interval {
             deadline: start,
             period,
             missed_tick_behavior: MissedTickBehavior::default(),
-            first_tick_done: false,
         }
     }
 
@@ -264,7 +261,6 @@ impl Interval {
     /// ```
     pub fn poll_tick(&mut self, now: Time) -> Option<Time> {
         if now >= self.deadline {
-            self.first_tick_done = true;
             let tick_time = self.deadline;
             self.advance_deadline(now);
             Some(tick_time)
@@ -302,7 +298,6 @@ impl Interval {
             return self.deadline;
         }
 
-        self.first_tick_done = true;
         let tick_time = self.deadline;
         self.advance_deadline(now);
         tick_time
@@ -347,7 +342,6 @@ impl Interval {
     /// ```
     pub fn reset(&mut self, now: Time) {
         self.deadline = now;
-        self.first_tick_done = false;
     }
 
     /// Resets the interval to start at a specific time.
@@ -365,7 +359,6 @@ impl Interval {
     /// ```
     pub fn reset_at(&mut self, instant: Time) {
         self.deadline = instant;
-        self.first_tick_done = false;
     }
 
     /// Resets the interval to fire after a delay from now.
@@ -383,7 +376,6 @@ impl Interval {
     /// ```
     pub fn reset_after(&mut self, now: Time, after: Duration) {
         self.deadline = now.saturating_add_nanos(duration_as_nanos_u64_saturating(after));
-        self.first_tick_done = false;
     }
 
     /// Advances the deadline according to the missed tick behavior.
