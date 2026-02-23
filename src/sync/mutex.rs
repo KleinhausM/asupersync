@@ -286,21 +286,26 @@ impl<'a, T> Future for LockFuture<'a, '_, T> {
 impl<T> Drop for LockFuture<'_, '_, T> {
     fn drop(&mut self) {
         if let Some(waiter_id) = self.waiter_id {
-            let mut state = self.mutex.state.lock();
+            let waker_to_wake = {
+                let mut state = self.mutex.state.lock();
 
-            // Try to remove from queue
-            let initial_len = state.waiters.len();
-            state.waiters.retain(|w| w.id != waiter_id);
-            let removed = initial_len != state.waiters.len();
+                // Try to remove from queue
+                state.waiters.retain(|w| w.id != waiter_id);
 
-            if !removed {
-                // We weren't in the queue — unlock() already dequeued us.
                 // If the lock is free, pass the baton to the next waiter.
+                // This is safe even if we were not the designated heir, as spurious
+                // wakeups are harmless. We do this unconditionally (without checking
+                // if we were in the queue) because a chain of dropped waiters might
+                // include some that were still in the queue when they dropped.
                 if !state.locked {
-                    if let Some(next) = state.waiters.front() {
-                        next.waker.wake_by_ref();
-                    }
+                    state.waiters.front().map(|next| next.waker.clone())
+                } else {
+                    None
                 }
+            };
+            
+            if let Some(waker) = waker_to_wake {
+                waker.wake();
             }
         }
     }
@@ -372,21 +377,21 @@ impl<T> OwnedMutexGuard<T> {
         impl<T> Drop for OwnedLockFuture<T> {
             fn drop(&mut self) {
                 if let Some(waiter_id) = self.waiter_id {
-                    let mut state = self.mutex.state.lock();
+                    let waker_to_wake = {
+                        let mut state = self.mutex.state.lock();
 
-                    // Try to remove from queue
-                    let initial_len = state.waiters.len();
-                    state.waiters.retain(|w| w.id != waiter_id);
-                    let removed = initial_len != state.waiters.len();
+                        // Try to remove from queue
+                        state.waiters.retain(|w| w.id != waiter_id);
 
-                    if !removed {
-                        // We weren't in the queue — unlock() already dequeued us.
-                        // If the lock is free, pass the baton to the next waiter.
                         if !state.locked {
-                            if let Some(next) = state.waiters.front() {
-                                next.waker.wake_by_ref();
-                            }
+                            state.waiters.front().map(|next| next.waker.clone())
+                        } else {
+                            None
                         }
+                    };
+                    
+                    if let Some(waker) = waker_to_wake {
+                        waker.wake();
                     }
                 }
             }

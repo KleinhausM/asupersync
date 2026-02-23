@@ -413,20 +413,9 @@ impl<'a, T> Future for ReadFuture<'a, '_, T> {
 
 impl<T> Drop for ReadFuture<'_, '_, T> {
     fn drop(&mut self) {
-        let mut writer_waker = None;
         if let Some(waiter_id) = self.waiter_id {
             let mut state = self.lock.state.lock();
-            let initial_len = state.reader_waiters.len();
             state.reader_waiters.retain(|w| w.id != waiter_id);
-            let removed = initial_len != state.reader_waiters.len();
-
-            if !removed && state.readers == 0 && !state.writer_active && state.writer_waiters > 0 {
-                writer_waker = RwLock::<T>::pop_writer_waiter(&mut state);
-            }
-        }
-
-        if let Some(waker) = writer_waker {
-            waker.wake();
         }
     }
 }
@@ -756,20 +745,9 @@ impl<T> Future for OwnedReadFuture<'_, T> {
 
 impl<T> Drop for OwnedReadFuture<'_, T> {
     fn drop(&mut self) {
-        let mut writer_waker = None;
         if let Some(waiter_id) = self.waiter_id {
             let mut state = self.lock.state.lock();
-            let initial_len = state.reader_waiters.len();
             state.reader_waiters.retain(|w| w.id != waiter_id);
-            let removed = initial_len != state.reader_waiters.len();
-
-            if !removed && state.readers == 0 && !state.writer_active && state.writer_waiters > 0 {
-                writer_waker = RwLock::<T>::pop_writer_waiter(&mut state);
-            }
-        }
-
-        if let Some(waker) = writer_waker {
-            waker.wake();
         }
     }
 }
