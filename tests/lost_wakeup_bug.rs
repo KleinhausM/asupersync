@@ -1,11 +1,11 @@
-use asupersync::sync::Mutex;
 use asupersync::cx::Cx;
-use asupersync::types::{RegionId, TaskId, Budget};
+use asupersync::sync::Mutex;
+use asupersync::types::{Budget, RegionId, TaskId};
 use asupersync::util::ArenaIndex;
 use std::future::Future;
-use std::task::{Context, Poll, Waker, Wake};
-use std::sync::Arc;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
 
 struct NoopWaker;
 impl Wake for NoopWaker {
@@ -40,10 +40,10 @@ fn main() {
     // Queue W1, W2, W3
     let mut fut1 = mutex.lock(&cx);
     let _ = poll_once(&mut fut1);
-    
+
     let mut fut2 = mutex.lock(&cx);
     let _ = poll_once(&mut fut2);
-    
+
     let mut fut3 = mutex.lock(&cx);
     let _ = poll_once(&mut fut3);
 
@@ -51,7 +51,7 @@ fn main() {
 
     // Unlock pops W1
     drop(guard);
-    
+
     println!("Waiters after unlock: {}", mutex.waiters()); // 2 (W2, W3)
 
     // W1 drops, passes baton to W2 (wakes W2, but doesn't pop W2)
@@ -67,7 +67,7 @@ fn main() {
     // Now W3 polls. It should acquire the lock since lock is free!
     let mut fut4 = mutex.lock(&cx); // Just to check if we can lock
     let res = poll_once(&mut fut3);
-    
+
     println!("W3 acquired: {}", res.is_some());
     if res.is_none() {
         println!("BUG REPRODUCED! Lock is free but W3 is stuck.");

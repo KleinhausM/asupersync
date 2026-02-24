@@ -303,7 +303,7 @@ impl<T> Drop for LockFuture<'_, '_, T> {
                     None
                 }
             };
-            
+
             if let Some(waker) = waker_to_wake {
                 waker.wake();
             }
@@ -389,7 +389,7 @@ impl<T> OwnedMutexGuard<T> {
                             None
                         }
                     };
-                    
+
                     if let Some(waker) = waker_to_wake {
                         waker.wake();
                     }

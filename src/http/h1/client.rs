@@ -1190,7 +1190,8 @@ mod tests {
 
     #[test]
     fn request_streaming_skips_informational_response() {
-        let response_bytes = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+        let response_bytes =
+            b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
         let io = TestIo::new(response_bytes);
 
         let req = Request {

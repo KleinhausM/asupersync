@@ -1236,7 +1236,8 @@ where
 
         state.idle.retain(|idle| {
             let idle_ok = now.saturating_duration_since(idle.idle_since) < self.config.idle_timeout;
-            let lifetime_ok = now.saturating_duration_since(idle.created_at) < self.config.max_lifetime;
+            let lifetime_ok =
+                now.saturating_duration_since(idle.created_at) < self.config.max_lifetime;
 
             #[cfg(feature = "metrics")]
             {

@@ -1064,11 +1064,17 @@ impl ThreeLaneWorker {
             // and poll the reactor for ready events (e.g. TCP connect completion).
             let mut io_leader = false;
             if let Some(io) = &self.io_driver {
-                let now = self.timer_driver.as_ref().map_or(Time::ZERO, TimerDriverHandle::now);
+                let now = self
+                    .timer_driver
+                    .as_ref()
+                    .map_or(Time::ZERO, TimerDriverHandle::now);
                 let local_deadline = self.local.lock().next_deadline();
-                let timer_deadline = self.timer_driver.as_ref().and_then(TimerDriverHandle::next_deadline);
+                let timer_deadline = self
+                    .timer_driver
+                    .as_ref()
+                    .and_then(TimerDriverHandle::next_deadline);
                 let global_deadline = self.global.peek_earliest_deadline();
-                
+
                 let next_deadline = [timer_deadline, local_deadline, global_deadline]
                     .into_iter()
                     .flatten()
@@ -1085,9 +1091,16 @@ impl ThreeLaneWorker {
                 };
 
                 // We only block in I/O if we have no fast_queue work
-                let io_timeout = if self.fast_queue.is_empty() { timeout } else { Some(Duration::ZERO) };
+                let io_timeout = if self.fast_queue.is_empty() {
+                    timeout
+                } else {
+                    Some(Duration::ZERO)
+                };
 
-                if io.try_turn_with(io_timeout, |_, _| {}).is_ok_and(|n| n > 0 || io_timeout != Some(Duration::ZERO)) {
+                if io
+                    .try_turn_with(io_timeout, |_, _| {})
+                    .is_ok_and(|n| n > 0 || io_timeout != Some(Duration::ZERO))
+                {
                     io_leader = true;
                     // We polled I/O, so we might have woken tasks. Continue loop.
                     continue;

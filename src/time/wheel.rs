@@ -327,7 +327,6 @@ impl WheelLevel {
         }
         None
     }
-
 }
 
 /// Hierarchical timing wheel for timers.

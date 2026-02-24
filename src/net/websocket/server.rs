@@ -419,7 +419,7 @@ where
                     let time_now = crate::cx::Cx::current()
                         .and_then(|current| current.timer_driver())
                         .map_or_else(crate::time::wall_now, |driver| driver.now());
-                    
+
                     match crate::time::timeout(time_now, remaining, self.read_more()).await {
                         Ok(Ok(n)) => {
                             if n == 0 {

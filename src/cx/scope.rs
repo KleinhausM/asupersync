@@ -883,7 +883,7 @@ impl<P: Policy> Scope<'_, P> {
             struct RegionCloseFuture {
                 state: Arc<parking_lot::Mutex<crate::record::region::RegionCloseState>>,
             }
-            
+
             impl Future for RegionCloseFuture {
                 type Output = ();
                 fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
@@ -891,7 +891,11 @@ impl<P: Policy> Scope<'_, P> {
                     if state.closed {
                         Poll::Ready(())
                     } else {
-                        if !state.waker.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
+                        if !state
+                            .waker
+                            .as_ref()
+                            .is_some_and(|w| w.will_wake(cx.waker()))
+                        {
                             state.waker = Some(cx.waker().clone());
                         }
                         Poll::Pending

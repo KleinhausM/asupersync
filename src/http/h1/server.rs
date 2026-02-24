@@ -132,7 +132,10 @@ impl ConnectionState {
     /// Returns the duration since the last request completed (or since connect).
     #[must_use]
     pub fn idle_duration(&self, now: crate::types::Time) -> Duration {
-        Duration::from_nanos(now.as_nanos().saturating_sub(self.last_request_at.as_nanos()))
+        Duration::from_nanos(
+            now.as_nanos()
+                .saturating_sub(self.last_request_at.as_nanos()),
+        )
     }
 
     /// Returns the total connection lifetime.
@@ -306,7 +309,9 @@ where
                 .map_or_else(wall_now, |timer| timer.now());
 
             // Check idle timeout
-            if state.requests_served > 0 && state.exceeded_idle_timeout(self.config.idle_timeout, now) {
+            if state.requests_served > 0
+                && state.exceeded_idle_timeout(self.config.idle_timeout, now)
+            {
                 state.phase = ConnectionPhase::Closing;
                 break;
             }

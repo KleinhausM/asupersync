@@ -327,7 +327,11 @@ impl IoDriver {
     }
 
     /// Restores the events buffer and returns wakers for the events it contains.
-    pub(crate) fn restore_and_extract_wakers<F>(&mut self, mut events: Events, mut on_event: F) -> Vec<Waker>
+    pub(crate) fn restore_and_extract_wakers<F>(
+        &mut self,
+        mut events: Events,
+        mut on_event: F,
+    ) -> Vec<Waker>
     where
         F: FnMut(&Event, Option<Interest>),
     {
@@ -558,7 +562,11 @@ impl IoDriverHandle {
     where
         F: FnMut(&Event, Option<Interest>),
     {
-        if self.is_polling.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+        if self
+            .is_polling
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             let events = {
                 let mut driver = self.inner.lock();
                 if driver.is_empty() {
@@ -601,11 +609,11 @@ impl IoDriverHandle {
                     Vec::new()
                 }
             };
-            
+
             for waker in wakers {
                 waker.wake();
             }
-            
+
             poll_result
         } else {
             Ok(0)

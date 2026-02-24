@@ -245,8 +245,12 @@ impl UnixStreamInner {
             drop(guard);
             drop(dropped_reg);
             if let Some((rw, ww)) = wakers_to_wake {
-                if let Some(w) = rw { w.wake(); }
-                if let Some(w) = ww { w.wake(); }
+                if let Some(w) = rw {
+                    w.wake();
+                }
+                if let Some(w) = ww {
+                    w.wake();
+                }
             }
             return res;
         }
@@ -335,8 +339,12 @@ impl UnixStreamInner {
         drop(dropped_reg);
 
         if let Some((rw, ww)) = wakers_to_wake {
-            if let Some(w) = rw { w.wake(); }
-            if let Some(w) = ww { w.wake(); }
+            if let Some(w) = rw {
+                w.wake();
+            }
+            if let Some(w) = ww {
+                w.wake();
+            }
         }
     }
 }
