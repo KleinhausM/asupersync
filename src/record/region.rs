@@ -470,14 +470,14 @@ impl RegionRecord {
     /// admission error if the region is closed or at capacity.
     pub fn add_child(&self, child: RegionId) -> Result<(), AdmissionError> {
         // Optimistic check (atomic)
-        if !self.state.load().can_accept_work() {
+        if !self.state.load().can_spawn() {
             return Err(AdmissionError::Closed);
         }
 
         let mut inner = self.inner.write();
 
         // Double check under lock (though state is atomic, consistency matters)
-        if !self.state.load().can_accept_work() {
+        if !self.state.load().can_spawn() {
             return Err(AdmissionError::Closed);
         }
 
@@ -764,6 +764,13 @@ impl RegionRecord {
     ///
     /// Returns true if the transition succeeded.
     pub fn complete_close(&self) -> bool {
+        // Enforce structural quiescence: a region cannot close if it still has live
+        // tasks, children, or pending obligations, as doing so would prematurely clear
+        // its heap memory and violate structured concurrency invariants.
+        if !self.is_quiescent() {
+            return false;
+        }
+
         let transitioned = self
             .state
             .transition(RegionState::Finalizing, RegionState::Closed);

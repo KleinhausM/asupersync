@@ -337,13 +337,11 @@ pub struct RuntimeState {
     /// `mark_obligation_leaked → advance_region_state → collect_obligation_leaks`
     /// discovers obligations already being processed by the outer caller.
     handling_leaks: bool,
-    /// Count of regions currently in `Finalizing` state.
+    /// Regions currently in `Finalizing` state.
     ///
-    /// Incremented when `begin_finalize()` succeeds, decremented when
-    /// `complete_close()` succeeds.  Allows `drain_ready_async_finalizers`
-    /// to skip a full region-arena scan on every poll (the common case has
-    /// zero finalizing regions).
-    finalizing_region_count: usize,
+    /// Allows `drain_ready_async_finalizers` to skip a full region-arena scan
+    /// on every poll.
+    finalizing_regions: Vec<RegionId>,
 }
 
 impl std::fmt::Debug for RuntimeState {
@@ -367,7 +365,7 @@ impl std::fmt::Debug for RuntimeState {
             .field("leak_escalation", &self.leak_escalation)
             .field("leak_count", &self.leak_count)
             .field("handling_leaks", &self.handling_leaks)
-            .field("finalizing_region_count", &self.finalizing_region_count)
+            .field("finalizing_region_count", &self.finalizing_regions.len())
             .finish()
     }
 }
@@ -404,7 +402,7 @@ impl RuntimeState {
             leak_escalation: None,
             leak_count: 0,
             handling_leaks: false,
-            finalizing_region_count: 0,
+            finalizing_regions: Vec::new(),
         }
     }
 
@@ -1952,20 +1950,21 @@ impl RuntimeState {
     /// This runs sync finalizers inline and schedules at most one async
     /// finalizer per region (respecting the async barrier).
     pub fn drain_ready_async_finalizers(&mut self) -> SmallVec<[(TaskId, u8); 2]> {
-        if self.finalizing_region_count == 0 {
+        if self.finalizing_regions.is_empty() {
             return SmallVec::new();
         }
         let mut scheduled = SmallVec::new();
-        let regions: SmallVec<[RegionId; 8]> = self
-            .regions
-            .iter()
-            .filter(|(_, region)| {
-                region.state() == RegionState::Finalizing && !region.finalizers_empty()
-            })
-            .map(|(idx, _)| RegionId::from_arena(idx))
-            .collect();
+        let mut regions_to_process = SmallVec::<[RegionId; 8]>::new();
 
-        for region_id in regions {
+        for &region_id in &self.finalizing_regions {
+            if let Some(region) = self.regions.get(region_id.arena_index()) {
+                if !region.finalizers_empty() {
+                    regions_to_process.push(region_id);
+                }
+            }
+        }
+
+        for region_id in regions_to_process {
             let Some(finalizer) = self.run_sync_finalizers(region_id) else {
                 continue;
             };
@@ -2159,23 +2158,20 @@ impl RuntimeState {
             return false;
         }
 
-        // All tasks must be terminal (including any spawned by finalizers).
-        // Use map_or(false, ...) instead of is_none_or: a task that was removed
-        // from the arena but still appears in the region's task list (ghost task
-        // during mid-cleanup in task_completed) must NOT be treated as terminal,
-        // otherwise re-entrant advance_region_state calls can prematurely close
-        // the region while task_completed is still processing obligations.
-        let all_tasks_done = region
-            .task_ids_small()
-            .iter()
-            .all(|&task_id| self.task(task_id).is_some_and(|t| t.state.is_terminal()));
-
-        if !all_tasks_done {
+        // All tasks must be fully completed and cleaned up.
+        // We cannot just check if they are terminal, because their `task_completed`
+        // cleanup might not have run yet, and closing the region clears the heap prematurely.
+        if region.task_count() > 0 {
             return false;
         }
 
         // All obligations must be resolved
         if region.pending_obligations() > 0 {
+            return false;
+        }
+
+        // All children must be fully closed and removed
+        if region.child_count() > 0 {
             return false;
         }
 
@@ -2230,7 +2226,7 @@ impl RuntimeState {
                     };
 
                     if transition_to_finalizing {
-                        self.finalizing_region_count += 1;
+                        self.finalizing_regions.push(region_id);
                         // Re-process same region as Finalizing in next iteration
                         current = Some(region_id);
                     }
@@ -2279,8 +2275,7 @@ impl RuntimeState {
                         };
 
                         if closed {
-                            self.finalizing_region_count =
-                                self.finalizing_region_count.saturating_sub(1);
+                            self.finalizing_regions.retain(|&r| r != region_id);
                             // Emit RegionCloseComplete trace event (pairs
                             // with RegionCloseBegin emitted in cancel_request).
                             let seq = self.next_trace_seq();
@@ -3710,6 +3705,12 @@ mod tests {
             .task_mut(task)
             .expect("task")
             .complete(Outcome::Ok(()));
+
+        // Under the new strict quiescence checks, a terminal task must be removed from
+        // the region (which happens naturally in `task_completed` cleanup) before the
+        // region is allowed to close.
+        let region_record = state.regions.get(region.arena_index()).expect("region");
+        region_record.remove_task(task);
 
         // Now should be able to close
         let can_close = state.can_region_complete_close(region);

@@ -698,10 +698,14 @@ mod tests {
 
         // Force-close the region for testing purposes.
         if let Some(r) = state.region(app_region) {
+            // Remove tasks to satisfy strict quiescence
+            for task in r.task_ids() {
+                r.remove_task(task);
+            }
             r.begin_close(None);
             r.begin_drain();
             r.begin_finalize();
-            r.complete_close();
+            assert!(r.complete_close(), "should be able to close empty region");
         }
 
         assert!(
@@ -801,10 +805,17 @@ mod tests {
 
         // Force region through lifecycle.
         if let Some(r) = state.region(app_region) {
+            // Remove tasks and children to satisfy strict quiescence
+            for task in r.task_ids() {
+                r.remove_task(task);
+            }
+            for child in r.child_ids() {
+                r.remove_child(child);
+            }
             r.begin_close(None);
             r.begin_drain();
             r.begin_finalize();
-            r.complete_close();
+            assert!(r.complete_close(), "should close empty region");
         }
 
         let region = state.region(app_region).expect("region exists");
@@ -1155,6 +1166,13 @@ mod tests {
         let _stopped = handle.stop(&mut state).expect("stop ok");
 
         if let Some(r) = state.region(app_region) {
+            // Remove tasks and children to satisfy strict quiescence
+            for task in r.task_ids() {
+                r.remove_task(task);
+            }
+            for child in r.child_ids() {
+                r.remove_child(child);
+            }
             if r.state() == RegionState::Closing {
                 r.begin_drain();
             }
@@ -1162,7 +1180,7 @@ mod tests {
                 r.begin_finalize();
             }
             if r.state() == RegionState::Finalizing {
-                r.complete_close();
+                assert!(r.complete_close(), "should complete close");
             }
         }
 
