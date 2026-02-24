@@ -1030,6 +1030,46 @@ impl ThreeLaneWorker {
         self.cached_suggestion = suggestion;
     }
 
+    fn drive_io_phase(&self) -> bool {
+        let Some(io) = &self.io_driver else {
+            return false;
+        };
+
+        let now = self
+            .timer_driver
+            .as_ref()
+            .map_or(Time::ZERO, TimerDriverHandle::now);
+        let local_deadline = self.local.lock().next_deadline();
+        let timer_deadline = self
+            .timer_driver
+            .as_ref()
+            .and_then(TimerDriverHandle::next_deadline);
+        let global_deadline = self.global.peek_earliest_deadline();
+
+        let next_deadline = [timer_deadline, local_deadline, global_deadline]
+            .into_iter()
+            .flatten()
+            .min();
+
+        let timeout = next_deadline.map(|deadline| {
+            if deadline > now {
+                Duration::from_nanos(deadline.duration_since(now))
+            } else {
+                Duration::ZERO
+            }
+        });
+
+        // We only block in I/O if we have no fast_queue work.
+        let io_timeout = if self.fast_queue.is_empty() {
+            timeout
+        } else {
+            Some(Duration::ZERO)
+        };
+
+        io.try_turn_with(io_timeout, |_, _| {})
+            .is_ok_and(|n| n > 0 || io_timeout != Some(Duration::ZERO))
+    }
+
     /// Runs the worker scheduling loop.
     ///
     /// The loop maintains strict priority ordering:
@@ -1059,50 +1099,10 @@ impl ThreeLaneWorker {
                 continue;
             }
 
-            // PHASE 5: Drive I/O (Leader/Follower pattern)
-            // If we can acquire the IO driver polling lock, we become the I/O leader
-            // and poll the reactor for ready events (e.g. TCP connect completion).
-            if let Some(io) = &self.io_driver {
-                let now = self
-                    .timer_driver
-                    .as_ref()
-                    .map_or(Time::ZERO, TimerDriverHandle::now);
-                let local_deadline = self.local.lock().next_deadline();
-                let timer_deadline = self
-                    .timer_driver
-                    .as_ref()
-                    .and_then(TimerDriverHandle::next_deadline);
-                let global_deadline = self.global.peek_earliest_deadline();
-
-                let next_deadline = [timer_deadline, local_deadline, global_deadline]
-                    .into_iter()
-                    .flatten()
-                    .min();
-
-                let timeout = if let Some(deadline) = next_deadline {
-                    if deadline > now {
-                        Some(Duration::from_nanos(deadline.duration_since(now)))
-                    } else {
-                        Some(Duration::ZERO)
-                    }
-                } else {
-                    None
-                };
-
-                // We only block in I/O if we have no fast_queue work
-                let io_timeout = if self.fast_queue.is_empty() {
-                    timeout
-                } else {
-                    Some(Duration::ZERO)
-                };
-
-                if io
-                    .try_turn_with(io_timeout, |_, _| {})
-                    .is_ok_and(|n| n > 0 || io_timeout != Some(Duration::ZERO))
-                {
-                    // We polled I/O, so we might have woken tasks. Continue loop.
-                    continue;
-                }
+            // PHASE 5: Drive I/O (Leader/Follower pattern).
+            if self.drive_io_phase() {
+                // We polled I/O, so we might have woken tasks. Continue loop.
+                continue;
             }
 
             // PHASE 6: Backoff before parking

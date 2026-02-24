@@ -130,6 +130,54 @@ fn parse_status_line(line: &str) -> Result<(Version, u16, String), HttpError> {
     Ok((version, status, reason))
 }
 
+fn response_body_kind(
+    headers: &[(String, String)],
+    status: u16,
+    request_method: &Method,
+) -> Result<ClientBodyKind, HttpError> {
+    // Responses with these status codes have no body.
+    let no_body_status = (100..=199).contains(&status) || matches!(status, 204 | 304);
+    if no_body_status || *request_method == Method::Head {
+        return Ok(ClientBodyKind::Empty);
+    }
+
+    let te = unique_header_value(headers, "Transfer-Encoding")?;
+    let cl = unique_header_value(headers, "Content-Length")?;
+
+    // RFC 7230 3.3.3: Reject responses with both Transfer-Encoding
+    // and Content-Length to prevent response smuggling.
+    if te.is_some() && cl.is_some() {
+        return Err(HttpError::AmbiguousBodyLength);
+    }
+
+    if let Some(te) = te {
+        require_transfer_encoding_chunked(te)?;
+        return Ok(ClientBodyKind::Chunked {
+            state: ChunkedReadState::SizeLine,
+            trailers: HeaderMap::new(),
+            trailers_bytes: 0,
+        });
+    }
+
+    if let Some(cl) = cl {
+        let content_length: u64 = cl.trim().parse().map_err(|_| HttpError::BadContentLength)?;
+        if content_length == 0 {
+            return Ok(ClientBodyKind::Empty);
+        }
+
+        let max_body_size = u64::try_from(DEFAULT_MAX_BODY_SIZE).unwrap_or(u64::MAX);
+        if content_length > max_body_size {
+            return Err(HttpError::BodyTooLarge);
+        }
+
+        return Ok(ClientBodyKind::ContentLength {
+            remaining: content_length,
+        });
+    }
+
+    Ok(ClientBodyKind::Eof)
+}
+
 impl crate::codec::Decoder for Http1ClientCodec {
     type Item = Response;
     type Error = HttpError;
@@ -563,48 +611,7 @@ impl Http1Client {
                     continue;
                 }
 
-                // Responses with these status codes have no body.
-                let no_body_status = (100..=199).contains(&status) || matches!(status, 204 | 304);
-                let kind = if no_body_status || request_method == Method::Head {
-                    ClientBodyKind::Empty
-                } else {
-                    let te = unique_header_value(&headers, "Transfer-Encoding")?;
-                    let cl = unique_header_value(&headers, "Content-Length")?;
-
-                    // RFC 7230 3.3.3: Reject responses with both Transfer-Encoding
-                    // and Content-Length to prevent response smuggling.
-                    if te.is_some() && cl.is_some() {
-                        return Err(HttpError::AmbiguousBodyLength);
-                    }
-
-                    if let Some(te) = te {
-                        require_transfer_encoding_chunked(te)?;
-                        ClientBodyKind::Chunked {
-                            state: ChunkedReadState::SizeLine,
-                            trailers: HeaderMap::new(),
-                            trailers_bytes: 0,
-                        }
-                    } else if let Some(cl) = cl {
-                        let content_length: u64 =
-                            cl.trim().parse().map_err(|_| HttpError::BadContentLength)?;
-
-                        if content_length == 0 {
-                            ClientBodyKind::Empty
-                        } else {
-                            let max_body_size =
-                                u64::try_from(DEFAULT_MAX_BODY_SIZE).unwrap_or(u64::MAX);
-                            if content_length > max_body_size {
-                                return Err(HttpError::BodyTooLarge);
-                            }
-
-                            ClientBodyKind::ContentLength {
-                                remaining: content_length,
-                            }
-                        }
-                    } else {
-                        ClientBodyKind::Eof
-                    }
-                };
+                let kind = response_body_kind(&headers, status, &request_method)?;
 
                 let head = crate::http::h1::stream::ResponseHead {
                     version,

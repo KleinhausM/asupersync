@@ -297,10 +297,10 @@ impl<T> Drop for LockFuture<'_, '_, T> {
                 // wakeups are harmless. We do this unconditionally (without checking
                 // if we were in the queue) because a chain of dropped waiters might
                 // include some that were still in the queue when they dropped.
-                if !state.locked {
-                    state.waiters.front().map(|next| next.waker.clone())
-                } else {
+                if state.locked {
                     None
+                } else {
+                    state.waiters.front().map(|next| next.waker.clone())
                 }
             };
 
@@ -383,10 +383,10 @@ impl<T> OwnedMutexGuard<T> {
                         // Try to remove from queue
                         state.waiters.retain(|w| w.id != waiter_id);
 
-                        if !state.locked {
-                            state.waiters.front().map(|next| next.waker.clone())
-                        } else {
+                        if state.locked {
                             None
+                        } else {
+                            state.waiters.front().map(|next| next.waker.clone())
                         }
                     };
 

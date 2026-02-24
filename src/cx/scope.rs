@@ -150,6 +150,62 @@ pub(crate) fn payload_to_string(payload: &Box<dyn std::any::Any + Send>) -> Stri
         .unwrap_or_else(|| "unknown panic".to_string())
 }
 
+struct RegionRunner<'a, Fut> {
+    fut: CatchUnwind<Fut>,
+    state: Option<&'a mut RuntimeState>,
+    child_region: RegionId,
+}
+
+impl<'a, Fut: Future> Future for RegionRunner<'a, Fut> {
+    type Output = (std::thread::Result<Fut::Output>, &'a mut RuntimeState);
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let fut = Pin::new(&mut this.fut);
+        match fut.poll(cx) {
+            Poll::Ready(res) => {
+                let state = this.state.take().expect("polled after ready");
+                Poll::Ready((res, state))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<Fut> Drop for RegionRunner<'_, Fut> {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            let reason = CancelReason::fail_fast().with_region(self.child_region);
+            let _ = state.cancel_request(self.child_region, &reason, None);
+            state.advance_region_state(self.child_region);
+        }
+    }
+}
+
+struct RegionCloseFuture {
+    state: Arc<parking_lot::Mutex<crate::record::region::RegionCloseState>>,
+}
+
+impl Future for RegionCloseFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let mut state = self.state.lock();
+        if state.closed {
+            Poll::Ready(())
+        } else {
+            if !state
+                .waker
+                .as_ref()
+                .is_some_and(|w| w.will_wake(cx.waker()))
+            {
+                state.waker = Some(cx.waker().clone());
+            }
+            Poll::Pending
+        }
+    }
+}
+
 impl<P: Policy> Scope<'_, P> {
     /// Creates a new scope (internal use).
     #[must_use]
@@ -813,38 +869,6 @@ impl<P: Policy> Scope<'_, P> {
 
         let fut = f(child_scope, &mut *state);
 
-        struct RegionRunner<'a, Fut> {
-            fut: CatchUnwind<Fut>,
-            state: Option<&'a mut RuntimeState>,
-            child_region: RegionId,
-        }
-
-        impl<'a, Fut: Future> Future for RegionRunner<'a, Fut> {
-            type Output = (std::thread::Result<Fut::Output>, &'a mut RuntimeState);
-
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = self.get_mut();
-                let fut = Pin::new(&mut this.fut);
-                match fut.poll(cx) {
-                    Poll::Ready(res) => {
-                        let state = this.state.take().expect("polled after ready");
-                        Poll::Ready((res, state))
-                    }
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-
-        impl<Fut> Drop for RegionRunner<'_, Fut> {
-            fn drop(&mut self) {
-                if let Some(state) = self.state.take() {
-                    let reason = CancelReason::fail_fast().with_region(self.child_region);
-                    let _ = state.cancel_request(self.child_region, &reason, None);
-                    state.advance_region_state(self.child_region);
-                }
-            }
-        }
-
         let runner = RegionRunner {
             fut: CatchUnwind(Box::pin(fut)),
             state: Some(state),
@@ -879,29 +903,6 @@ impl<P: Policy> Scope<'_, P> {
         state.advance_region_state(child_region);
 
         if let Some(notify) = close_notify {
-            struct RegionCloseFuture {
-                state: Arc<parking_lot::Mutex<crate::record::region::RegionCloseState>>,
-            }
-
-            impl Future for RegionCloseFuture {
-                type Output = ();
-                fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-                    let mut state = self.state.lock();
-                    if state.closed {
-                        Poll::Ready(())
-                    } else {
-                        if !state
-                            .waker
-                            .as_ref()
-                            .is_some_and(|w| w.will_wake(cx.waker()))
-                        {
-                            state.waker = Some(cx.waker().clone());
-                        }
-                        Poll::Pending
-                    }
-                }
-            }
-
             RegionCloseFuture { state: notify }.await;
         }
 
@@ -1043,7 +1044,16 @@ impl<P: Policy> Scope<'_, P> {
                     // Backup admission failed after primary already started.
                     // Request cancellation on primary to avoid orphaned work.
                     h1.abort_with_reason(CancelReason::resource_unavailable());
-                    let _ = h1.join(cx).await; // Drain h1
+
+                    // Best-effort single poll to allow immediate completion in
+                    // no-scheduler contexts (e.g. unit tests). Do not await
+                    // indefinitely here: without an active scheduler, awaiting
+                    // join can deadlock this path.
+                    let mut drain = Box::pin(h1.join(cx));
+                    let waker = std::task::Waker::noop();
+                    let mut poll_cx = Context::from_waker(waker);
+                    let _ = drain.as_mut().poll(&mut poll_cx);
+
                     return Err(JoinError::Cancelled(CancelReason::resource_unavailable()));
                 };
 
@@ -1835,10 +1845,9 @@ mod tests {
             other => unreachable!("expected Outcome::Ok(child_id), got {other:?}"),
         };
 
-        let child_record = state.region(child_id).expect("child record missing");
-        assert_eq!(
-            child_record.state(),
-            crate::record::region::RegionState::Closed
+        assert!(
+            state.region(child_id).is_none(),
+            "closed child region should be reclaimed from arena"
         );
 
         let parent_record = state.region(parent).expect("parent record missing");
@@ -1862,23 +1871,24 @@ mod tests {
             crate::types::policy::FailFast,
             |child, _state| {
                 let child_id = child.region_id();
-                async move { Outcome::Ok(child_id) }
+                let child_budget = child.budget();
+                async move { Outcome::Ok((child_id, child_budget)) }
             },
         ))
         .expect("child region created");
 
-        let child_id = match outcome {
-            Outcome::Ok(id) => id,
+        let (child_id, child_budget) = match outcome {
+            Outcome::Ok(tuple) => tuple,
             other => unreachable!("expected Outcome::Ok(child_id), got {other:?}"),
         };
 
-        let child_budget = state
-            .region(child_id)
-            .expect("child record missing")
-            .budget();
         assert_eq!(
             child_budget.deadline,
             Some(crate::types::Time::from_secs(10))
+        );
+        assert!(
+            state.region(child_id).is_none(),
+            "closed child region should be reclaimed from arena"
         );
     }
 

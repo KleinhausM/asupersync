@@ -409,11 +409,52 @@ pub struct IoDriverHandle {
     is_polling: Arc<AtomicBool>,
 }
 
+struct PollingGuard<'a> {
+    handle: &'a IoDriverHandle,
+    events: Option<Events>,
+    clear_poll_flag: bool,
+}
+
+impl<'a> PollingGuard<'a> {
+    fn new(handle: &'a IoDriverHandle, events: Events, clear_poll_flag: bool) -> Self {
+        Self {
+            handle,
+            events: Some(events),
+            clear_poll_flag,
+        }
+    }
+
+    fn events_mut(&mut self) -> &mut Events {
+        self.events
+            .as_mut()
+            .expect("polling guard events must exist while polling")
+    }
+
+    fn take_events(&mut self) -> Events {
+        self.events
+            .take()
+            .expect("polling guard events must be present")
+    }
+}
+
+impl Drop for PollingGuard<'_> {
+    fn drop(&mut self) {
+        if self.clear_poll_flag {
+            self.handle.is_polling.store(false, Ordering::Release);
+        }
+        if let Some(events) = self.events.take() {
+            let mut driver = self.handle.inner.lock();
+            driver.restore_events_only(events);
+        }
+    }
+}
+
 impl std::fmt::Debug for IoDriverHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IoDriverHandle")
             .field("inner", &self.inner)
             .field("reactor", &"<dyn Reactor>")
+            .field("is_polling", &self.is_polling.load(Ordering::Relaxed))
             .finish()
     }
 }
@@ -508,42 +549,28 @@ impl IoDriverHandle {
             driver.take_events()
         };
 
-        struct PollingGuard<'a> {
-            handle: &'a IoDriverHandle,
-            events: Option<Events>,
-        }
-
-        impl Drop for PollingGuard<'_> {
-            fn drop(&mut self) {
-                if let Some(events) = self.events.take() {
-                    let mut driver = self.handle.inner.lock();
-                    driver.restore_events_only(events);
-                }
-            }
-        }
-
-        let mut guard = PollingGuard {
-            handle: self,
-            events: Some(events),
-        };
+        let mut guard = PollingGuard::new(self, events, false);
 
         // 2. Poll the reactor without holding the driver lock.
         // This allows other threads to acquire the lock for `register`/`deregister`.
-        let poll_result = self.reactor.poll(guard.events.as_mut().unwrap(), timeout);
+        let poll_result = self.reactor.poll(guard.events_mut(), timeout);
 
         // 3. Re-acquire lock to dispatch wakers and restore the buffer
         let wakers = {
             let mut driver = self.inner.lock();
-            let events = guard.events.take().unwrap(); // Take events from guard
+            let events = guard.take_events();
 
             // Update stats and dispatch if poll succeeded
             if let Ok(n) = poll_result {
                 driver.stats.polls += 1;
                 driver.stats.events_received += n as u64;
-                driver.restore_and_extract_wakers(events, on_event)
+                let wakers = driver.restore_and_extract_wakers(events, on_event);
+                drop(driver);
+                wakers
             } else {
                 // Restore buffer even on error, but do not dispatch readiness.
                 driver.restore_events_only(events);
+                drop(driver);
                 Vec::new()
             }
         };
@@ -578,36 +605,22 @@ impl IoDriverHandle {
                 driver.take_events()
             };
 
-            struct PollingGuard<'a> {
-                handle: &'a IoDriverHandle,
-                events: Option<Events>,
-            }
-            impl Drop for PollingGuard<'_> {
-                fn drop(&mut self) {
-                    self.handle.is_polling.store(false, Ordering::Release);
-                    if let Some(events) = self.events.take() {
-                        let mut driver = self.handle.inner.lock();
-                        driver.restore_events_only(events);
-                    }
-                }
-            }
+            let mut guard = PollingGuard::new(self, events, true);
 
-            let mut guard = PollingGuard {
-                handle: self,
-                events: Some(events),
-            };
-
-            let poll_result = self.reactor.poll(guard.events.as_mut().unwrap(), timeout);
+            let poll_result = self.reactor.poll(guard.events_mut(), timeout);
 
             let wakers = {
                 let mut driver = self.inner.lock();
-                let events = guard.events.take().unwrap(); // Take events from guard
+                let events = guard.take_events();
                 if let Ok(n) = poll_result {
                     driver.stats.polls += 1;
                     driver.stats.events_received += n as u64;
-                    driver.restore_and_extract_wakers(events, on_event)
+                    let wakers = driver.restore_and_extract_wakers(events, on_event);
+                    drop(driver);
+                    wakers
                 } else {
                     driver.restore_events_only(events);
+                    drop(driver);
                     Vec::new()
                 }
             };
