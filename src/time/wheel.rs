@@ -835,7 +835,7 @@ impl TimerWheel {
         });
 
         // Process in-place with swap_remove — no separate `remaining` allocation.
-        let mut i = 0;
+        let i = 0;
         while i < ready.len() {
             if !self.is_live(&ready[i]) {
                 ready.swap_remove(i);

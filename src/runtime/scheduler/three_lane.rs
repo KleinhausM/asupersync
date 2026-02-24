@@ -1062,7 +1062,6 @@ impl ThreeLaneWorker {
             // PHASE 5: Drive I/O (Leader/Follower pattern)
             // If we can acquire the IO driver polling lock, we become the I/O leader
             // and poll the reactor for ready events (e.g. TCP connect completion).
-            let mut io_leader = false;
             if let Some(io) = &self.io_driver {
                 let now = self
                     .timer_driver
@@ -1101,7 +1100,6 @@ impl ThreeLaneWorker {
                     .try_turn_with(io_timeout, |_, _| {})
                     .is_ok_and(|n| n > 0 || io_timeout != Some(Duration::ZERO))
                 {
-                    io_leader = true;
                     // We polled I/O, so we might have woken tasks. Continue loop.
                     continue;
                 }
@@ -1179,11 +1177,6 @@ impl ThreeLaneWorker {
                             // If deadline is due or passed, don't park - break to process timers/tasks.
                             break;
                         }
-                    } else if io_leader {
-                        // Leader doesn't park here; it parks in epoll.
-                        // (But wait, if we got here, io.try_turn_with didn't match).
-                        // This branch is rarely hit for the leader unless io.try_turn_with returned 0 events.
-                        self.parker.park();
                     } else {
                         // Followers park indefinitely.
                         self.parker.park();
