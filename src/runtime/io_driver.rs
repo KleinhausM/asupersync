@@ -232,21 +232,23 @@ impl IoDriver {
     /// `NotFound` error is treated as already deregistered and the
     /// local waker state is still cleaned up.
     pub fn deregister(&mut self, token: Token) -> io::Result<()> {
-        // Deregister from reactor first, but treat "not found" as already removed.
-        match self.reactor.deregister(token) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err),
-        }
+        // Deregister from reactor first
+        let result = self.reactor.deregister(token);
 
-        // Remove waker from slab
+        // Always clean up local state to prevent memory leaks,
+        // even if the reactor fails (e.g. EBADF).
+        // ABA is prevented by generation counters in SlabToken.
         let slab_token = SlabToken::from_usize(token.0);
         if self.wakers.remove(slab_token).is_some() {
             self.stats.deregistrations += 1;
         }
         self.interests.remove(&token);
 
-        Ok(())
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 
     /// Deregisters a waker by its key.
@@ -558,7 +560,7 @@ impl IoDriverHandle {
     /// Returns `Ok(0)` immediately if another thread is already polling the reactor.
     /// This prevents multiple threads from blocking in the reactor and consuming empty
     /// event buffers, maintaining the Leader/Follower pattern efficiently.
-    pub fn try_turn_with<F>(&self, timeout: Option<Duration>, mut on_event: F) -> io::Result<usize>
+    pub fn try_turn_with<F>(&self, timeout: Option<Duration>, on_event: F) -> io::Result<usize>
     where
         F: FnMut(&Event, Option<Interest>),
     {
@@ -799,8 +801,19 @@ impl Drop for IoRegistration {
             return;
         }
         if let Some(driver) = self.driver.upgrade() {
-            let mut guard = driver.lock();
-            let _ = guard.deregister(self.token);
+            // Best-effort cleanup: retry once on non-NotFound errors to reduce
+            // stale-registration risk if the first deregister attempt fails transiently.
+            let first = {
+                let mut guard = driver.lock();
+                guard.deregister(self.token)
+            };
+            if first
+                .as_ref()
+                .is_err_and(|err| err.kind() != io::ErrorKind::NotFound)
+            {
+                let mut guard = driver.lock();
+                let _ = guard.deregister(self.token);
+            }
         }
     }
 }
@@ -1251,6 +1264,33 @@ mod tests {
     }
 
     #[test]
+    fn io_registration_drop_retries_transient_deregister_error() {
+        init_test("io_registration_drop_retries_transient_deregister_error");
+        let reactor = Arc::new(FlakyReactor::new());
+        let reactor_handle: Arc<dyn Reactor> = reactor.clone();
+        let driver = IoDriverHandle::new(reactor_handle);
+        let source = TestFdSource;
+
+        let (waker, _) = create_test_waker();
+        {
+            let reg = driver
+                .register(&source, Interest::READABLE, waker)
+                .expect("register should succeed");
+            drop(reg);
+        }
+
+        let calls = reactor.deregister_calls();
+        crate::assert_with_log!(
+            calls == 2,
+            "drop path retries transient deregister failure",
+            2usize,
+            calls
+        );
+        crate::assert_with_log!(driver.is_empty(), "driver empty", true, driver.is_empty());
+        crate::test_complete!("io_registration_drop_retries_transient_deregister_error");
+    }
+
+    #[test]
     fn io_registration_deregister_persistent_error_returns_err() {
         init_test("io_registration_deregister_persistent_error_returns_err");
         let reactor = Arc::new(AlwaysFailReactor::new());
@@ -1270,13 +1310,13 @@ mod tests {
             true,
             result.is_err()
         );
-        // deregister() performs two attempts, and Drop performs one final best-effort retry.
+        // deregister() performs two attempts.
         let calls = reactor.deregister_calls();
-        crate::assert_with_log!(calls == 3, "three total deregister attempts", 3usize, calls);
+        crate::assert_with_log!(calls == 2, "two total deregister attempts", 2usize, calls);
         crate::assert_with_log!(
-            !driver.is_empty(),
-            "driver retains registration after persistent failure",
-            false,
+            driver.is_empty(),
+            "driver cleans up local registration after persistent failure",
+            true,
             driver.is_empty()
         );
         crate::test_complete!("io_registration_deregister_persistent_error_returns_err");
