@@ -3,6 +3,7 @@
 //! Provides a thread-safe cache for DNS lookup results with TTL-based expiration.
 
 use parking_lot::RwLock;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -91,10 +92,12 @@ impl DnsCache {
 
     /// Looks up an IP address result from the cache.
     pub fn get_ip(&self, host: &str) -> Option<LookupIp> {
+        let key = normalize_host_key(host);
+
         // Fast path: check expiry under read lock, clone only the data.
         {
             let cache = self.ip_cache.read();
-            if let Some(entry) = cache.get(host) {
+            if let Some(entry) = cache.get(key.as_ref()) {
                 if !entry.is_expired() {
                     self.stat_hits.fetch_add(1, Ordering::Relaxed);
                     return Some(entry.data.clone());
@@ -109,14 +112,14 @@ impl DnsCache {
         let mut evicted_expired = false;
         let refreshed = {
             let mut cache = self.ip_cache.write();
-            let expired = cache.get(host).is_some_and(CacheEntry::is_expired);
+            let expired = cache.get(key.as_ref()).is_some_and(CacheEntry::is_expired);
             if expired {
-                cache.remove(host);
+                cache.remove(key.as_ref());
                 evicted_expired = true;
                 None
             } else {
                 // Another thread may have refreshed the entry between locks.
-                cache.get(host).map(|entry| entry.data.clone())
+                cache.get(key.as_ref()).map(|entry| entry.data.clone())
             }
         };
         if evicted_expired {
@@ -151,6 +154,7 @@ impl DnsCache {
         }
 
         let ttl = self.clamp_ttl(lookup.ttl());
+        let key = normalize_host_key(host);
 
         let mut cache = self.ip_cache.write();
 
@@ -167,13 +171,14 @@ impl DnsCache {
             }
         }
 
-        cache.insert(host.to_string(), CacheEntry::new(lookup.clone(), ttl));
+        cache.insert(key.into_owned(), CacheEntry::new(lookup.clone(), ttl));
     }
 
     /// Removes an entry from the cache.
     pub fn remove(&self, host: &str) {
+        let key = normalize_host_key(host);
         let mut cache = self.ip_cache.write();
-        cache.remove(host);
+        cache.remove(key.as_ref());
     }
 
     /// Clears all entries from the cache.
@@ -241,6 +246,14 @@ impl DnsCache {
 impl Default for DnsCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn normalize_host_key(host: &str) -> Cow<'_, str> {
+    if host.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        Cow::Owned(host.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(host)
     }
 }
 
@@ -336,6 +349,28 @@ mod tests {
         let hits = cache.stats().hits;
         crate::assert_with_log!(hits == 1, "hits", 1, hits);
         crate::test_complete!("cache_hit_miss");
+    }
+
+    #[test]
+    fn cache_lookup_is_case_insensitive() {
+        init_test("cache_lookup_is_case_insensitive");
+        let cache = DnsCache::new();
+        let lookup = LookupIp::new(
+            vec!["192.0.2.10".parse::<IpAddr>().unwrap()],
+            Duration::from_mins(5),
+        );
+
+        cache.put_ip("Example.COM", &lookup);
+
+        let lower = cache.get_ip("example.com");
+        let upper = cache.get_ip("EXAMPLE.COM");
+        crate::assert_with_log!(lower.is_some(), "lower lookup hit", true, lower.is_some());
+        crate::assert_with_log!(upper.is_some(), "upper lookup hit", true, upper.is_some());
+
+        let stats = cache.stats();
+        crate::assert_with_log!(stats.size == 1, "cache size", 1, stats.size);
+        crate::assert_with_log!(stats.hits == 2, "cache hits", 2, stats.hits);
+        crate::test_complete!("cache_lookup_is_case_insensitive");
     }
 
     #[test]
