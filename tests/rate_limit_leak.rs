@@ -21,13 +21,14 @@ fn rate_limit_cancel_leak() {
     // Enqueue a waiter
     let id = rl.enqueue(1, now).unwrap();
 
-    // Cancel the entry
-    rl.cancel_entry(id);
+    // Enqueue a second waiter that should be granted after cancellation.
+    let id2 = rl.enqueue(1, now).unwrap();
 
-    // Enqueue another waiter to ensure we can inspect
-    let _id2 = rl.enqueue(1, now).unwrap();
+    // Cancel the first entry.
+    rl.cancel_entry(id, now);
 
-    // The first entry is still in the queue?
-    // We can't easily check the private wait_queue length, but let's try to do it via another enqueue.
-    // Actually we can just run the test under UBS or check if it's leaked.
+    // If cancelled entries leak in the wait queue, id would still be granted first.
+    let later = Time::from_millis(10_000);
+    let granted = rl.process_queue(later);
+    assert_eq!(granted, Some(id2));
 }

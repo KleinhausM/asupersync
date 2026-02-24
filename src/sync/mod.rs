@@ -32,6 +32,8 @@ mod barrier;
 mod contended_mutex;
 mod mutex;
 mod notify;
+#[cfg(test)]
+mod notify_bug_test;
 mod once_cell;
 mod pool;
 mod rwlock;

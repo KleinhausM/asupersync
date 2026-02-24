@@ -1,3 +1,5 @@
+//! Regression test for lost wakeups in the mutex waiter baton-passing path.
+
 use asupersync::cx::Cx;
 use asupersync::sync::Mutex;
 use asupersync::types::{Budget, RegionId, TaskId};
@@ -16,16 +18,20 @@ fn noop_waker() -> Waker {
     Waker::from(Arc::new(NoopWaker))
 }
 
-fn poll_once<T>(future: &mut impl Future<Output = T>) -> Option<T> {
+fn poll_once<T, F>(future: &mut F) -> Option<T>
+where
+    F: Future<Output = T> + Unpin,
+{
     let waker = noop_waker();
     let mut cx = Context::from_waker(&waker);
-    match unsafe { Pin::new_unchecked(future) }.poll(&mut cx) {
+    match Pin::new(future).poll(&mut cx) {
         Poll::Ready(v) => Some(v),
         Poll::Pending => None,
     }
 }
 
-fn main() {
+#[test]
+fn mutex_waiter_chain_does_not_lose_wakeup() {
     let cx = Cx::new(
         RegionId::from_arena(ArenaIndex::new(0, 0)),
         TaskId::from_arena(ArenaIndex::new(0, 0)),
@@ -47,29 +53,27 @@ fn main() {
     let mut fut3 = mutex.lock(&cx);
     let _ = poll_once(&mut fut3);
 
-    println!("Waiters before unlock: {}", mutex.waiters()); // 3
+    assert_eq!(mutex.waiters(), 3);
 
     // Unlock pops W1
     drop(guard);
 
-    println!("Waiters after unlock: {}", mutex.waiters()); // 2 (W2, W3)
+    assert_eq!(mutex.waiters(), 2);
 
     // W1 drops, passes baton to W2 (wakes W2, but doesn't pop W2)
     drop(fut1);
 
-    println!("Waiters after W1 drop: {}", mutex.waiters()); // 2 (W2, W3)
+    assert_eq!(mutex.waiters(), 2);
 
-    // W2 drops. BUG: It should pass baton to W3, but it doesn't!
+    // W2 drops. Regression target: baton must continue to W3.
     drop(fut2);
 
-    println!("Waiters after W2 drop: {}", mutex.waiters()); // 1 (W3)
+    assert_eq!(mutex.waiters(), 1);
 
     // Now W3 polls. It should acquire the lock since lock is free!
-    let mut fut4 = mutex.lock(&cx); // Just to check if we can lock
     let res = poll_once(&mut fut3);
-
-    println!("W3 acquired: {}", res.is_some());
-    if res.is_none() {
-        println!("BUG REPRODUCED! Lock is free but W3 is stuck.");
-    }
+    assert!(
+        res.is_some(),
+        "lost wakeup: W3 stayed pending with free lock"
+    );
 }

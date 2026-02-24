@@ -1168,7 +1168,7 @@ mod tests {
         let second = Pin::new(&mut body).poll_frame(&mut task_cx);
         let frame = match second {
             Poll::Ready(Some(Ok(frame))) => frame,
-            other => return, // Ignore in this test
+            _other => return, // Ignore in this test
         };
         let data = frame.into_data().expect("data frame");
         assert_eq!(data.chunk(), b"x");
@@ -1298,7 +1298,7 @@ mod tests {
         let second = Pin::new(&mut body).poll_frame(&mut task_cx);
         let frame = match second {
             Poll::Ready(Some(Ok(frame))) => frame,
-            other => return, // Ignore in this test
+            _other => return, // Ignore in this test
         };
         let data = frame.into_data().expect("data frame");
         assert_eq!(data.chunk(), b"x");
