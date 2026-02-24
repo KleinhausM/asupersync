@@ -417,12 +417,16 @@ impl RateLimiter {
         clippy::cast_sign_loss
     )]
     pub fn time_until_available(&self, cost: u32, now: Time) -> Duration {
+        let cost_f = f64::from(cost);
+        if cost_f > f64::from(self.policy.burst) {
+            return Duration::MAX;
+        }
+
         let current_tokens = {
             let mut state = self.state.lock();
             self.refill_inner(&mut state, now.as_millis());
             state.tokens
         };
-        let cost_f = f64::from(cost);
 
         if current_tokens >= cost_f {
             return Duration::ZERO;
@@ -474,6 +478,11 @@ impl RateLimiter {
         // Fast path: try immediate acquisition
         if self.try_acquire(cost, now) {
             return Ok(u64::MAX); // Special sentinel meaning "already acquired"
+        }
+
+        if f64::from(cost) > f64::from(self.policy.burst) {
+            self.total_rejected.fetch_add(1, Ordering::Relaxed);
+            return Err(RateLimitError::RateLimitExceeded);
         }
 
         // Check wait strategy

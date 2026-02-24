@@ -391,6 +391,11 @@ impl Bulkhead {
     /// Returns `Ok(entry_id)` if enqueued, `Err(QueueFull)` if queue is full.
     #[allow(clippy::significant_drop_tightening, clippy::cast_precision_loss)]
     pub fn enqueue(&self, weight: u32, now: Time) -> Result<u64, BulkheadError<()>> {
+        if weight > self.policy.max_concurrent {
+            self.total_rejected_atomic.fetch_add(1, Ordering::Relaxed);
+            return Err(BulkheadError::Full);
+        }
+
         let now_millis = now.as_millis();
         let timeout_millis = self
             .policy
