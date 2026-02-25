@@ -3017,7 +3017,6 @@ mod tests {
             .find(|sym| !sym.is_source && sym.esi >= k as u32)
             .expect("must include at least one repair symbol");
         tampered.data[0] ^= 0x5A;
-        let tampered_esi = tampered.esi;
 
         let err = decoder
             .decode(&received)
@@ -3025,7 +3024,7 @@ mod tests {
         assert!(
             matches!(err, DecodeError::SingularMatrix { .. })
                 || matches!(err, DecodeError::CorruptDecodedOutput { .. }),
-            "expected corruption or inconsistency, got: {:?}", err
+            "expected corruption or inconsistency, got: {err:?}"
         );
     }
 
@@ -3060,7 +3059,7 @@ mod tests {
         assert!(
             matches!(err, DecodeError::SingularMatrix { .. })
                 || matches!(err, DecodeError::CorruptDecodedOutput { .. }),
-            "expected corruption or inconsistency, got: {:?}", err
+            "expected corruption or inconsistency, got: {err:?}"
         );
         assert!(
             matches!(
