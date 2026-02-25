@@ -72,7 +72,14 @@ pub struct SpectralThresholds {
     pub degraded_fiedler: f64,
     /// Rate of Fiedler value decrease that triggers a bifurcation warning.
     pub bifurcation_rate_threshold: f64,
-    /// Fiedler vector component magnitude above which a node is a bottleneck.
+    /// Oscillation ratio threshold for classifying flicker/livelock behavior.
+    pub oscillation_ratio_threshold: f64,
+    /// Lag-1 autocorrelation threshold for critical slowing down detection.
+    pub lag1_autocorr_threshold: f64,
+    /// Variance growth ratio threshold between recent and earlier windows.
+    pub variance_growth_ratio_threshold: f64,
+    /// Absolute Fiedler component distance from zero used to identify nodes
+    /// near the cut transition (`|component| <= threshold`).
     pub bottleneck_threshold: f64,
     /// Maximum number of power iteration steps.
     pub max_iterations: usize,
@@ -80,20 +87,31 @@ pub struct SpectralThresholds {
     pub convergence_tolerance: f64,
     /// Number of historical Fiedler values to retain for trend analysis.
     pub history_window: usize,
+    /// Miscoverage for one-step split-conformal lower prediction bound.
+    pub conformal_alpha: f64,
+    /// E-process lambda for anytime-valid deterioration evidence.
+    pub eprocess_lambda: f64,
 }
 
 impl SpectralThresholds {
-    /// Creates thresholds tuned for production runtime monitoring.
+    /// Creates default thresholds for runtime monitoring.
+    ///
+    /// These are starting values, not universal constants. Tune per workload.
     #[must_use]
     pub const fn production() -> Self {
         Self {
             critical_fiedler: 0.01,
             degraded_fiedler: 0.1,
             bifurcation_rate_threshold: -0.05,
+            oscillation_ratio_threshold: 0.5,
+            lag1_autocorr_threshold: 0.7,
+            variance_growth_ratio_threshold: 1.25,
             bottleneck_threshold: 0.4,
             max_iterations: 200,
             convergence_tolerance: 1e-10,
             history_window: 32,
+            conformal_alpha: 0.1,
+            eprocess_lambda: 0.5,
         }
     }
 }
@@ -617,16 +635,17 @@ pub fn classify_health(
 
 /// Identifies bottleneck nodes from the Fiedler vector.
 ///
-/// Nodes with large absolute Fiedler vector components lie near the minimum
-/// bisection of the graph and represent structural bottlenecks.
+/// Nodes with Fiedler components near zero lie near the minimum-cut transition
+/// and represent structural bottlenecks.
 #[must_use]
 pub fn identify_bottlenecks(fiedler_vector: &[f64], threshold: f64) -> Vec<usize> {
+    let threshold = threshold.abs();
     // Find the transition region: nodes whose Fiedler vector component is
     // close to zero are near the cut. We identify these as bottlenecks.
     fiedler_vector
         .iter()
         .enumerate()
-        .filter(|&(_, v)| v.abs() < threshold)
+        .filter(|&(_, v)| v.abs() <= threshold)
         .map(|(i, _)| i)
         .collect()
 }
@@ -751,18 +770,93 @@ impl fmt::Display for SpectralTrend {
     }
 }
 
+/// Severity level of the bifurcation early warning signal.
+///
+/// Combines all Scheffer et al. (2009) indicators — critical slowing down
+/// (rising autocorrelation), variance amplification, flickering, and trend
+/// slope — into a single actionable severity classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EarlyWarningSeverity {
+    /// No indicators are active. System appears stable.
+    None,
+    /// One indicator is weakly active. Monitor but no action needed.
+    Watch,
+    /// Two or more indicators are active, or one is strongly active.
+    Warning,
+    /// Multiple indicators strongly active. Intervention recommended.
+    Critical,
+}
+
+impl fmt::Display for EarlyWarningSeverity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Watch => f.write_str("watch"),
+            Self::Warning => f.write_str("warning"),
+            Self::Critical => f.write_str("critical"),
+        }
+    }
+}
+
 /// Bifurcation early warning signal.
 ///
 /// Detects approach to critical transitions in the dependency graph by
 /// monitoring the rate of change and oscillation pattern of the Fiedler value.
+/// Implements the full Scheffer et al. (2009) early warning toolkit:
+///
+/// 1. **Critical slowing down**: rising lag-1 autocorrelation (the system
+///    recovers more slowly from perturbations as it approaches bifurcation).
+/// 2. **Variance amplification**: increasing fluctuation magnitude in the
+///    second half of the observation window vs the first.
+/// 3. **Flickering**: rapid oscillation between states indicating proximity
+///    to a bistable tipping point.
+/// 4. **Skewness shift**: asymmetry growth as the system's potential landscape
+///    becomes lopsided near the bifurcation.
+/// 5. **Kendall's tau**: nonparametric monotone trend strength for robust
+///    deterioration detection even with non-linear decline patterns.
+/// 6. **Hoeffding's D**: nonparametric independence test that catches *any*
+///    dependence structure — including U-shaped, oscillatory, and non-monotone
+///    patterns that Kendall's tau would miss (Hoeffding, 1948).
 #[derive(Debug, Clone)]
 pub struct BifurcationWarning {
     /// Current spectral trend direction.
     pub trend: SpectralTrend,
+    /// Linear-trend slope of Fiedler value history (per step).
+    pub slope: f64,
     /// Estimated time steps until the Fiedler value crosses the critical
     /// threshold, based on linear extrapolation. `None` if the trend is not
     /// deteriorating or if the extrapolation is non-positive.
     pub time_to_critical: Option<f64>,
+    /// Lag-1 autocorrelation (critical slowing-down indicator).
+    pub lag1_autocorrelation: Option<f64>,
+    /// Rolling sample variance of the current history window.
+    pub rolling_variance: Option<f64>,
+    /// Ratio of second-half variance to first-half variance.
+    pub variance_ratio: Option<f64>,
+    /// Ratio of sign changes in first differences (flicker score).
+    pub flicker_score: f64,
+    /// Kendall's tau rank correlation for nonparametric trend detection.
+    /// Range `[-1, 1]`. Strong negative values indicate monotone deterioration.
+    /// More robust than linear R² for non-linear monotone trends.
+    pub kendall_tau: Option<f64>,
+    /// Hoeffding's D independence statistic.
+    /// Range `[-0.5, 1]` where `0` means independence and positive values
+    /// indicate dependence (of *any* form — monotone, U-shaped, oscillatory).
+    /// Complements Kendall's tau by detecting non-monotone patterns.
+    pub hoeffding_d: Option<f64>,
+    /// Sample skewness of the Fiedler history window.
+    /// Asymmetry growth near bifurcation points (Scheffer et al., 2009).
+    pub skewness: Option<f64>,
+    /// Estimated return rate: `1 - lag1_autocorrelation`.
+    /// Approaches zero at critical transitions (critical slowing down).
+    /// Directly interpretable as "recovery speed from perturbations."
+    pub return_rate: Option<f64>,
+    /// Split-conformal lower bound for the next Fiedler value.
+    pub conformal_lower_bound_next: Option<f64>,
+    /// Anytime-valid e-process against non-deteriorating null.
+    pub deterioration_e_value: f64,
+    /// Composite early warning severity level combining all indicators.
+    pub severity: EarlyWarningSeverity,
     /// Confidence in the warning (based on consistency of the trend).
     /// Range `[0.0, 1.0]`.
     pub confidence: f64,
@@ -771,9 +865,34 @@ pub struct BifurcationWarning {
 impl fmt::Display for BifurcationWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BifurcationWarning(trend={}", self.trend)?;
+        write!(f, ", severity={}", self.severity)?;
+        write!(f, ", slope={:.5}", self.slope)?;
         if let Some(ttc) = self.time_to_critical {
             write!(f, ", time_to_critical={ttc:.2}")?;
         }
+        if let Some(ac1) = self.lag1_autocorrelation {
+            write!(f, ", ac1={ac1:.3}")?;
+        }
+        if let Some(rr) = self.return_rate {
+            write!(f, ", return_rate={rr:.3}")?;
+        }
+        if let Some(vr) = self.variance_ratio {
+            write!(f, ", var_ratio={vr:.3}")?;
+        }
+        if let Some(kt) = self.kendall_tau {
+            write!(f, ", kendall_tau={kt:.3}")?;
+        }
+        if let Some(hd) = self.hoeffding_d {
+            write!(f, ", hoeffding_d={hd:.4}")?;
+        }
+        if let Some(sk) = self.skewness {
+            write!(f, ", skew={sk:.3}")?;
+        }
+        write!(
+            f,
+            ", flicker={:.3}, e_value={:.3}",
+            self.flicker_score, self.deterioration_e_value
+        )?;
         write!(f, ", confidence={:.2})", self.confidence)
     }
 }
@@ -843,6 +962,7 @@ impl SpectralHistory {
     /// Uses linear regression on the recent history to estimate the rate of
     /// change, and sign-change analysis for oscillation detection.
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn analyze(&self, thresholds: &SpectralThresholds) -> Option<BifurcationWarning> {
         if self.count < 3 {
             return None;
@@ -876,10 +996,46 @@ impl SpectralHistory {
         } else {
             0.0
         };
+        // --- Scheffer et al. (2009) early warning indicators ---
 
-        let trend = if oscillation_ratio > 0.5 {
+        // (1) Critical slowing down: rising lag-1 autocorrelation.
+        let lag1_autocorrelation = lag1_autocorrelation(&values);
+        let critical_slowing = lag1_autocorrelation
+            .is_some_and(|ac1| ac1 >= thresholds.lag1_autocorr_threshold && ac1.is_finite());
+
+        // (2) Return rate: 1 - AC1. Approaches zero at tipping points.
+        let return_rate = lag1_autocorrelation.map(|ac1| (1.0 - ac1).clamp(0.0, 2.0));
+
+        // (3) Variance amplification.
+        let rolling_variance = sample_variance(&values);
+        let variance_ratio = variance_ratio_halves(&values);
+        let variance_growth = variance_ratio
+            .is_some_and(|vr| vr >= thresholds.variance_growth_ratio_threshold && vr.is_finite());
+
+        // (4) Kendall's tau: nonparametric monotone trend test.
+        let kendall_tau_val = kendall_tau(&values);
+
+        // (5) Skewness: asymmetry growth near bifurcation.
+        let skewness = sample_skewness(&values);
+
+        // (5b) Hoeffding's D: nonparametric independence test.
+        // Catches non-monotone dependence that Kendall's tau would miss.
+        let hoeffding_d_val = hoeffding_d(&values);
+
+        // (6) Conformal prediction + e-process.
+        let conformal_lower_bound_next =
+            split_conformal_lower_next(&values, thresholds.conformal_alpha);
+        let deterioration_e_value = deterioration_eprocess(&values, thresholds.eprocess_lambda);
+
+        // --- Trend classification ---
+        // Uses Kendall's tau in addition to linear slope for more robust detection.
+        let strong_kendall_decline = kendall_tau_val.is_some_and(|kt| kt < -0.5);
+        let trend = if oscillation_ratio > thresholds.oscillation_ratio_threshold {
             SpectralTrend::Oscillating
-        } else if slope < thresholds.bifurcation_rate_threshold {
+        } else if slope < thresholds.bifurcation_rate_threshold
+            || (slope < 0.0 && critical_slowing)
+            || (slope < 0.0 && strong_kendall_decline)
+        {
             SpectralTrend::Deteriorating
         } else if slope > -thresholds.bifurcation_rate_threshold {
             SpectralTrend::Improving
@@ -901,12 +1057,98 @@ impl SpectralHistory {
                 None
             };
 
-        // Confidence: based on R-squared of the linear fit.
-        let confidence = linear_regression_r_squared(&values).clamp(0.0, 1.0);
+        // --- Composite severity classification ---
+        // Count active warning indicators per Scheffer et al. framework.
+        let mut active_indicators = 0_u32;
+        let mut strong_indicators = 0_u32;
+
+        if critical_slowing {
+            active_indicators += 1;
+            if lag1_autocorrelation.is_some_and(|ac1| ac1 > 0.85) {
+                strong_indicators += 1;
+            }
+        }
+        if variance_growth {
+            active_indicators += 1;
+            if variance_ratio.is_some_and(|vr| vr > 2.0) {
+                strong_indicators += 1;
+            }
+        }
+        if oscillation_ratio > thresholds.oscillation_ratio_threshold {
+            active_indicators += 1;
+        }
+        if strong_kendall_decline {
+            active_indicators += 1;
+        }
+        if skewness.is_some_and(|sk| sk.abs() > 1.0) {
+            active_indicators += 1;
+        }
+        if hoeffding_d_val.is_some_and(|d| d > 0.03) {
+            active_indicators += 1;
+            if hoeffding_d_val.is_some_and(|d| d > 0.10) {
+                strong_indicators += 1;
+            }
+        }
+        if deterioration_e_value > 20.0 {
+            active_indicators += 1;
+            if deterioration_e_value > 100.0 {
+                strong_indicators += 1;
+            }
+        }
+
+        let severity = if strong_indicators >= 2 || active_indicators >= 4 {
+            EarlyWarningSeverity::Critical
+        } else if active_indicators >= 2 || strong_indicators >= 1 {
+            EarlyWarningSeverity::Warning
+        } else if active_indicators >= 1 {
+            EarlyWarningSeverity::Watch
+        } else {
+            EarlyWarningSeverity::None
+        };
+
+        // Confidence blends linear fit consistency with all indicator signals.
+        // Weights: r2=0.25, slowing=0.12, variance=0.12, kendall=0.12,
+        //          hoeffding=0.12, oscillation=0.12, e_process=0.15 → sum=1.00
+        let r2 = linear_regression_r_squared(&values).clamp(0.0, 1.0);
+        let slowing_signal = if critical_slowing { 1.0 } else { 0.0 };
+        let variance_signal = if variance_growth { 1.0 } else { 0.0 };
+        let e_signal = (deterioration_e_value.ln_1p() / 4.0).clamp(0.0, 1.0);
+        let kendall_signal = kendall_tau_val.map_or(0.0, |kt| (-kt).clamp(0.0, 1.0));
+        let hoeffding_signal = hoeffding_d_val.map_or(0.0, |d| d.clamp(0.0, 1.0));
+        let confidence = 0.12f64
+            .mul_add(
+                oscillation_ratio.min(1.0),
+                0.15f64.mul_add(
+                    e_signal,
+                    0.12f64.mul_add(
+                        hoeffding_signal,
+                        0.12f64.mul_add(
+                            kendall_signal,
+                            0.12f64.mul_add(
+                                variance_signal,
+                                0.12f64.mul_add(slowing_signal, 0.25 * r2),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            .clamp(0.0, 1.0);
 
         Some(BifurcationWarning {
             trend,
+            slope,
             time_to_critical,
+            lag1_autocorrelation,
+            rolling_variance,
+            variance_ratio,
+            flicker_score: oscillation_ratio,
+            kendall_tau: kendall_tau_val,
+            hoeffding_d: hoeffding_d_val,
+            skewness,
+            return_rate,
+            conformal_lower_bound_next,
+            deterioration_e_value,
+            severity,
             confidence,
         })
     }
@@ -975,6 +1217,288 @@ fn linear_regression_r_squared(values: &[f64]) -> f64 {
     } else {
         1.0 - ss_res / ss_tot
     }
+}
+
+/// Sample variance with Bessel correction.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+fn sample_variance(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n < 2 {
+        return None;
+    }
+    let mean = values.iter().sum::<f64>() / n as f64;
+    let sum_sq: f64 = values.iter().map(|v| (v - mean).powi(2)).sum();
+    Some(sum_sq / (n as f64 - 1.0))
+}
+
+/// Lag-1 autocorrelation for critical-slowing-down detection.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+fn lag1_autocorrelation(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n < 3 {
+        return None;
+    }
+    let mean = values.iter().sum::<f64>() / n as f64;
+    let mut cov = 0.0_f64;
+    let mut var = 0.0_f64;
+    for i in 1..n {
+        cov += (values[i] - mean) * (values[i - 1] - mean);
+    }
+    for v in values {
+        var += (v - mean).powi(2);
+    }
+    if var <= f64::EPSILON {
+        None
+    } else {
+        Some((cov / var).clamp(-1.0, 1.0))
+    }
+}
+
+/// Ratio of second-half variance to first-half variance.
+#[must_use]
+fn variance_ratio_halves(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n < 6 {
+        return None;
+    }
+    let mid = n / 2;
+    let v1 = sample_variance(&values[..mid])?;
+    let v2 = sample_variance(&values[mid..])?;
+    if v1 <= f64::EPSILON {
+        None
+    } else {
+        Some(v2 / v1)
+    }
+}
+
+/// Kendall's tau-b rank correlation coefficient.
+///
+/// Measures monotone trend strength nonparametrically. Returns a value
+/// in `[-1, 1]` where `-1` means perfectly monotone decreasing, `+1` means
+/// perfectly monotone increasing, and `0` means no trend.
+///
+/// This is the standard trend statistic in the Scheffer et al. (2009)
+/// early warning literature because it is robust to outliers and does
+/// not assume linearity — critical since pre-bifurcation trajectories
+/// are typically non-linear.
+///
+/// Complexity: `O(n²)` pairwise comparisons. For our history windows
+/// (≤ 64 values) this is negligible.
+#[must_use]
+fn kendall_tau(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n < 3 {
+        return None;
+    }
+
+    let mut concordant = 0_i64;
+    let mut discordant = 0_i64;
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let diff = values[j] - values[i];
+            if diff > f64::EPSILON {
+                concordant += 1;
+            } else if diff < -f64::EPSILON {
+                discordant += 1;
+            }
+            // Ties are excluded (tau-b with continuous data assumption).
+        }
+    }
+
+    let total = concordant + discordant;
+    if total == 0 {
+        return Some(0.0);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    Some((concordant - discordant) as f64 / total as f64)
+}
+
+/// Computes 1-based average ranks (midrank method) for a slice of values.
+///
+/// Handles ties by assigning each member of a tie group the average of
+/// the ranks the group spans. Used by [`hoeffding_d`].
+#[must_use]
+fn average_rank_f64(values: &[f64]) -> Vec<f64> {
+    let n = values.len();
+    let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut ranks = vec![0.0_f64; n];
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n && (indexed[j].1 - indexed[i].1).abs() <= f64::EPSILON {
+            j += 1;
+        }
+        // Positions i..j in sorted order get 1-based ranks (i+1) through j.
+        // Average rank = (i + 1 + j) / 2.
+        #[allow(clippy::cast_precision_loss)]
+        let avg = (i + 1 + j) as f64 / 2.0;
+        for k in i..j {
+            ranks[indexed[k].0] = avg;
+        }
+        i = j;
+    }
+    ranks
+}
+
+/// Hoeffding's D statistic for nonparametric independence testing.
+///
+/// Tests for *any* kind of dependence between time index and the
+/// observed values — not just monotone association (which Kendall's
+/// tau already captures). This detects U-shaped, oscillatory, and
+/// other non-monotone deterioration patterns.
+///
+/// Range `[-0.5, 1]` where values near `0` indicate independence
+/// and positive values indicate dependence. Requires at least 5
+/// observations (the denominator involves `n(n−1)(n−2)(n−3)(n−4)`).
+///
+/// Complexity: `O(n²)`. For our history windows (≤ 64 values) this
+/// is negligible.
+///
+/// Reference: Hoeffding, W. (1948). "A Non-Parametric Test of
+/// Independence." *Annals of Mathematical Statistics*, 19(4), 546–557.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+fn hoeffding_d(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n < 5 {
+        return None;
+    }
+
+    // x-axis is the time index [0, 1, ..., n-1]; ranks are r[i] = i + 1.
+    // y-axis ranks are computed via average_rank_f64.
+    let s = average_rank_f64(values);
+    let n_f = n as f64;
+
+    // Guard: if all values are identical (zero variance), the rank-based
+    // formula degenerates. Return 0 — no dependence can be detected.
+    let all_tied = s.windows(2).all(|w| (w[1] - w[0]).abs() <= f64::EPSILON);
+    if all_tied {
+        return Some(0.0);
+    }
+
+    // Bivariate ranks Q[i].
+    // Since x-ranks are trivially r[i] = i+1 (all distinct), the formula
+    // simplifies to: Q[i] = 1 + #{j < i : s[j] < s[i]}
+    //                          + 0.5 * #{j < i : s[j] == s[i]}
+    let mut q = vec![0.0_f64; n];
+    for i in 0..n {
+        let mut count = 0.0_f64;
+        for j in 0..i {
+            let diff = s[i] - s[j];
+            if diff > f64::EPSILON {
+                count += 1.0;
+            } else if diff.abs() <= f64::EPSILON {
+                count += 0.5;
+            }
+        }
+        q[i] = 1.0 + count;
+    }
+
+    // D1 = sum_i (Q[i] - 1)(Q[i] - 2)
+    let d1: f64 = q.iter().map(|&qi| (qi - 1.0) * (qi - 2.0)).sum();
+
+    // D2 = sum_i (R[i]-1)(R[i]-2)(S[i]-1)(S[i]-2), with R[i] = i+1
+    let d2: f64 = (0..n)
+        .map(|i| {
+            let ri = i as f64; // R[i] - 1
+            ri * (ri - 1.0) * (s[i] - 1.0) * (s[i] - 2.0)
+        })
+        .sum();
+
+    // D3 = sum_i (R[i]-2)(S[i]-2)(Q[i]-1), with R[i] = i+1
+    let d3: f64 = (0..n)
+        .map(|i| (i as f64 - 1.0) * (s[i] - 2.0) * (q[i] - 1.0))
+        .sum();
+
+    // D = 30 * ((n-2)(n-3)*D1 + D2 - 2(n-2)*D3) / (n(n-1)(n-2)(n-3)(n-4))
+    let denom = n_f * (n_f - 1.0) * (n_f - 2.0) * (n_f - 3.0) * (n_f - 4.0);
+    if denom.abs() < f64::EPSILON {
+        return None;
+    }
+
+    let inner = (n_f - 3.0).mul_add(d1, -2.0 * d3);
+    let numer = 30.0 * (n_f - 2.0).mul_add(inner, d2);
+
+    Some(numer / denom)
+}
+
+/// Sample skewness (Fisher's definition).
+///
+/// Measures asymmetry of the distribution. Near bifurcation points,
+/// the potential landscape becomes asymmetric — one side of the
+/// potential well becomes shallower — causing the observable to become
+/// skewed even before the mean shifts (Scheffer et al., 2009).
+///
+/// Positive skew indicates the distribution has a right tail (rare
+/// high values), negative skew indicates a left tail.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+fn sample_skewness(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n < 3 {
+        return None;
+    }
+    let n_f = n as f64;
+    let mean = values.iter().sum::<f64>() / n_f;
+    let m2: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n_f;
+    let m3: f64 = values.iter().map(|v| (v - mean).powi(3)).sum::<f64>() / n_f;
+
+    if m2 <= f64::EPSILON {
+        return None;
+    }
+
+    Some(m3 / m2.powf(1.5))
+}
+
+/// Split-conformal lower prediction bound for the next value.
+///
+/// Uses one-step residuals `|x_t - x_{t-1}|` as conformity scores.
+#[must_use]
+#[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+fn split_conformal_lower_next(values: &[f64], alpha: f64) -> Option<f64> {
+    if values.len() < 4 {
+        return None;
+    }
+    let alpha = alpha.clamp(1e-6, 0.5);
+    let mut residuals: Vec<f64> = values
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .filter(|r| r.is_finite())
+        .collect();
+    if residuals.is_empty() {
+        return None;
+    }
+    residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let m = residuals.len();
+    let rank = (((m as f64 + 1.0) * (1.0 - alpha)).ceil() as usize)
+        .saturating_sub(1)
+        .min(m - 1);
+    let q = residuals[rank];
+    Some(values[values.len() - 1] - q)
+}
+
+/// Anytime-valid e-process for monotone deterioration evidence.
+///
+/// We map per-step decreases into `[0, 1]` and apply a Hoeffding-style
+/// nonnegative supermartingale factor with fixed lambda.
+#[must_use]
+fn deterioration_eprocess(values: &[f64], lambda: f64) -> f64 {
+    if values.len() < 2 {
+        return 1.0;
+    }
+    let lambda = lambda.clamp(1e-3, 1.0);
+    let mut log_e = 0.0_f64;
+    for window in values.windows(2) {
+        let step_drop = (window[0] - window[1]).clamp(0.0, 1.0);
+        log_e += lambda * (step_drop - 0.5) - (lambda * lambda / 8.0);
+    }
+    log_e.clamp(-60.0, 60.0).exp()
 }
 
 // ============================================================================
@@ -1836,17 +2360,45 @@ mod tests {
     fn bifurcation_warning_display() {
         let bw = BifurcationWarning {
             trend: SpectralTrend::Deteriorating,
+            slope: -0.1,
             time_to_critical: Some(5.3),
+            lag1_autocorrelation: Some(0.8),
+            rolling_variance: Some(0.02),
+            variance_ratio: Some(1.4),
+            flicker_score: 0.2,
+            kendall_tau: Some(-0.7),
+            hoeffding_d: Some(0.085),
+            skewness: Some(-0.3),
+            return_rate: Some(0.2),
+            conformal_lower_bound_next: Some(0.03),
+            deterioration_e_value: 2.0,
+            severity: EarlyWarningSeverity::Warning,
             confidence: 0.87,
         };
         let s = bw.to_string();
         assert!(s.contains("deteriorating"));
         assert!(s.contains("5.30"));
         assert!(s.contains("0.87"));
+        assert!(s.contains("warning"));
+        assert!(s.contains("return_rate"));
+        assert!(s.contains("kendall_tau"));
+        assert!(s.contains("hoeffding_d"));
 
         let bw_no_ttc = BifurcationWarning {
             trend: SpectralTrend::Stable,
+            slope: 0.0,
             time_to_critical: None,
+            lag1_autocorrelation: None,
+            rolling_variance: None,
+            variance_ratio: None,
+            flicker_score: 0.0,
+            kendall_tau: None,
+            hoeffding_d: None,
+            skewness: None,
+            return_rate: None,
+            conformal_lower_bound_next: None,
+            deterioration_e_value: 1.0,
+            severity: EarlyWarningSeverity::None,
             confidence: 0.5,
         };
         let s2 = bw_no_ttc.to_string();
@@ -1954,6 +2506,367 @@ mod tests {
             (decomp.spectral_radius - expected_radius).abs() < 0.1,
             "P100 spectral radius should be ~{expected_radius:.4}, got {:.4}",
             decomp.spectral_radius
+        );
+    }
+
+    // -- Kendall's tau --------------------------------------------------------
+
+    #[test]
+    fn kendall_tau_perfect_increasing() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let tau = kendall_tau(&values);
+        assert!(tau.is_some());
+        assert!(
+            (tau.unwrap() - 1.0).abs() < 1e-10,
+            "perfect increase should give tau = 1.0, got {tau:?}"
+        );
+    }
+
+    #[test]
+    fn kendall_tau_perfect_decreasing() {
+        let values = vec![5.0, 4.0, 3.0, 2.0, 1.0];
+        let tau = kendall_tau(&values);
+        assert!(tau.is_some());
+        assert!(
+            (tau.unwrap() - (-1.0)).abs() < 1e-10,
+            "perfect decrease should give tau = -1.0, got {tau:?}"
+        );
+    }
+
+    #[test]
+    fn kendall_tau_constant() {
+        let values = vec![3.0, 3.0, 3.0, 3.0];
+        let tau = kendall_tau(&values);
+        assert!(tau.is_some());
+        assert!(
+            tau.unwrap().abs() < 1e-10,
+            "constant series should give tau = 0, got {tau:?}"
+        );
+    }
+
+    #[test]
+    fn kendall_tau_insufficient() {
+        assert!(kendall_tau(&[1.0, 2.0]).is_none());
+        assert!(kendall_tau(&[1.0]).is_none());
+        assert!(kendall_tau(&[]).is_none());
+    }
+
+    #[test]
+    fn kendall_tau_non_linear_decrease() {
+        // Exponential decay: monotone but non-linear.
+        // Kendall's tau should still detect this perfectly.
+        let values: Vec<f64> = (0..10).map(|i| 100.0 * 0.7_f64.powi(i)).collect();
+        let tau = kendall_tau(&values).unwrap();
+        assert!(
+            (tau - (-1.0)).abs() < 1e-10,
+            "exponential decay is still monotone: tau should be -1.0, got {tau}"
+        );
+    }
+
+    // -- Sample skewness ------------------------------------------------------
+
+    #[test]
+    fn skewness_symmetric() {
+        // Symmetric distribution: skewness ≈ 0.
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let sk = sample_skewness(&values);
+        assert!(sk.is_some());
+        assert!(
+            sk.unwrap().abs() < 1e-10,
+            "symmetric series should have skewness ≈ 0, got {sk:?}"
+        );
+    }
+
+    #[test]
+    fn skewness_right_skewed() {
+        // Right-skewed: most values low, one outlier high.
+        let values = vec![1.0, 1.0, 1.0, 1.0, 10.0];
+        let sk = sample_skewness(&values).unwrap();
+        assert!(
+            sk > 0.0,
+            "right-skewed data should have positive skewness, got {sk}"
+        );
+    }
+
+    #[test]
+    fn skewness_left_skewed() {
+        // Left-skewed: most values high, one outlier low.
+        let values = vec![10.0, 10.0, 10.0, 10.0, 1.0];
+        let sk = sample_skewness(&values).unwrap();
+        assert!(
+            sk < 0.0,
+            "left-skewed data should have negative skewness, got {sk}"
+        );
+    }
+
+    #[test]
+    fn skewness_insufficient() {
+        assert!(sample_skewness(&[1.0, 2.0]).is_none());
+    }
+
+    #[test]
+    fn skewness_constant() {
+        assert!(sample_skewness(&[5.0, 5.0, 5.0, 5.0]).is_none());
+    }
+
+    // -- Return rate ----------------------------------------------------------
+
+    #[test]
+    fn return_rate_in_deteriorating_warning() {
+        let thresholds = SpectralThresholds::default();
+        let mut history = SpectralHistory::new(8);
+
+        // Steadily decreasing: high autocorrelation → low return rate.
+        for i in 0..6_i32 {
+            history.record(f64::from(i).mul_add(-0.15, 1.0));
+        }
+
+        let warning = history.analyze(&thresholds).unwrap();
+        assert!(warning.return_rate.is_some(), "should have return rate");
+        let rr = warning.return_rate.unwrap();
+        assert!(
+            rr.is_finite() && rr >= 0.0,
+            "return rate should be non-negative, got {rr}"
+        );
+    }
+
+    // -- Early warning severity -----------------------------------------------
+
+    #[test]
+    fn severity_none_for_stable() {
+        let thresholds = SpectralThresholds::default();
+        let mut history = SpectralHistory::new(8);
+
+        // Constant values: no indicators active.
+        for _ in 0..6 {
+            history.record(0.5);
+        }
+
+        let warning = history.analyze(&thresholds).unwrap();
+        assert_eq!(
+            warning.severity,
+            EarlyWarningSeverity::None,
+            "stable system should have severity None"
+        );
+    }
+
+    #[test]
+    fn severity_ordering() {
+        // Severity levels should be ordered.
+        assert!(EarlyWarningSeverity::None < EarlyWarningSeverity::Watch);
+        assert!(EarlyWarningSeverity::Watch < EarlyWarningSeverity::Warning);
+        assert!(EarlyWarningSeverity::Warning < EarlyWarningSeverity::Critical);
+    }
+
+    #[test]
+    fn severity_display() {
+        assert_eq!(EarlyWarningSeverity::None.to_string(), "none");
+        assert_eq!(EarlyWarningSeverity::Watch.to_string(), "watch");
+        assert_eq!(EarlyWarningSeverity::Warning.to_string(), "warning");
+        assert_eq!(EarlyWarningSeverity::Critical.to_string(), "critical");
+    }
+
+    #[test]
+    fn severity_elevated_for_strong_deterioration() {
+        let thresholds = SpectralThresholds::default();
+        let mut history = SpectralHistory::new(16);
+
+        // Rapidly deteriorating with high autocorrelation: should trigger
+        // elevated severity.
+        for i in 0..12_i32 {
+            // Strong linear decline.
+            history.record(f64::from(i).mul_add(-0.08, 1.0));
+        }
+
+        let warning = history.analyze(&thresholds).unwrap();
+        assert!(
+            warning.severity >= EarlyWarningSeverity::Watch,
+            "strong deterioration should elevate severity, got {:?}",
+            warning.severity
+        );
+    }
+
+    // -- Kendall in trend detection -------------------------------------------
+
+    #[test]
+    fn kendall_tau_in_warning() {
+        let thresholds = SpectralThresholds::default();
+        let mut history = SpectralHistory::new(8);
+
+        for i in 0..6_i32 {
+            history.record(f64::from(i).mul_add(-0.15, 1.0));
+        }
+
+        let warning = history.analyze(&thresholds).unwrap();
+        assert!(
+            warning.kendall_tau.is_some(),
+            "should compute Kendall's tau"
+        );
+        let kt = warning.kendall_tau.unwrap();
+        assert!(
+            kt < -0.5,
+            "monotone decrease should give strongly negative tau, got {kt}"
+        );
+    }
+
+    // -- Skewness in warning --------------------------------------------------
+
+    #[test]
+    fn skewness_in_warning() {
+        let thresholds = SpectralThresholds::default();
+        let mut history = SpectralHistory::new(8);
+
+        // Slightly skewed deterioration.
+        let values = [1.0, 0.9, 0.85, 0.82, 0.8, 0.3];
+        for &v in &values {
+            history.record(v);
+        }
+
+        let warning = history.analyze(&thresholds).unwrap();
+        assert!(warning.skewness.is_some(), "should compute skewness");
+    }
+
+    // -- Average rank ---------------------------------------------------------
+
+    #[test]
+    fn average_rank_no_ties() {
+        let values = vec![3.0, 1.0, 4.0, 1.5, 5.0];
+        let ranks = average_rank_f64(&values);
+        // Sorted: 1.0(idx1)→1, 1.5(idx3)→2, 3.0(idx0)→3, 4.0(idx2)→4, 5.0(idx4)→5
+        assert!((ranks[0] - 3.0).abs() < 1e-10);
+        assert!((ranks[1] - 1.0).abs() < 1e-10);
+        assert!((ranks[2] - 4.0).abs() < 1e-10);
+        assert!((ranks[3] - 2.0).abs() < 1e-10);
+        assert!((ranks[4] - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn average_rank_with_ties() {
+        let values = vec![2.0, 1.0, 2.0, 3.0];
+        let ranks = average_rank_f64(&values);
+        // Sorted: 1.0(idx1)→1, 2.0(idx0)→2.5, 2.0(idx2)→2.5, 3.0(idx3)→4
+        assert!((ranks[0] - 2.5).abs() < 1e-10);
+        assert!((ranks[1] - 1.0).abs() < 1e-10);
+        assert!((ranks[2] - 2.5).abs() < 1e-10);
+        assert!((ranks[3] - 4.0).abs() < 1e-10);
+    }
+
+    // -- Hoeffding's D --------------------------------------------------------
+
+    #[test]
+    fn hoeffding_d_perfect_increasing() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let d = hoeffding_d(&values);
+        assert!(d.is_some());
+        assert!(
+            d.unwrap() > 0.0,
+            "monotone increase should show dependence, got {d:?}"
+        );
+    }
+
+    #[test]
+    fn hoeffding_d_perfect_decreasing() {
+        let values = vec![5.0, 4.0, 3.0, 2.0, 1.0];
+        let d = hoeffding_d(&values);
+        assert!(d.is_some());
+        assert!(
+            d.unwrap() > 0.0,
+            "monotone decrease should show dependence, got {d:?}"
+        );
+    }
+
+    #[test]
+    fn hoeffding_d_u_shape_detected() {
+        // U-shaped pattern: Kendall's tau ≈ 0, but Hoeffding's D should
+        // detect the non-monotone dependence.
+        let values = vec![5.0, 3.0, 1.0, 0.5, 1.0, 3.0, 5.0];
+        let d = hoeffding_d(&values);
+        assert!(d.is_some());
+        let d_val = d.unwrap();
+        let tau = kendall_tau(&values);
+        assert!(
+            d_val > 0.0,
+            "U-shape should show dependence in Hoeffding's D, got {d_val}"
+        );
+        // Kendall's tau should be weak for U-shape (near-zero monotone trend).
+        assert!(
+            tau.unwrap().abs() < 0.5,
+            "U-shape should have weak Kendall's tau, got {tau:?}"
+        );
+    }
+
+    #[test]
+    fn hoeffding_d_insufficient() {
+        assert!(hoeffding_d(&[1.0, 2.0, 3.0, 4.0]).is_none());
+        assert!(hoeffding_d(&[1.0, 2.0, 3.0]).is_none());
+        assert!(hoeffding_d(&[1.0]).is_none());
+        assert!(hoeffding_d(&[]).is_none());
+    }
+
+    #[test]
+    fn hoeffding_d_constant() {
+        let values = vec![3.0, 3.0, 3.0, 3.0, 3.0];
+        let d = hoeffding_d(&values);
+        assert!(d.is_some());
+        // Constant values → all ranks tied → D should be near 0.
+        assert!(
+            d.unwrap().abs() < 0.01,
+            "constant series: D should be near 0, got {d:?}"
+        );
+    }
+
+    #[test]
+    fn hoeffding_d_symmetry_monotone() {
+        // Increasing and decreasing should give the same D
+        // (independence is direction-agnostic).
+        let inc = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let dec = vec![6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+        let d_inc = hoeffding_d(&inc).unwrap();
+        let d_dec = hoeffding_d(&dec).unwrap();
+        assert!(
+            (d_inc - d_dec).abs() < 1e-10,
+            "D should be symmetric: inc={d_inc}, dec={d_dec}"
+        );
+    }
+
+    #[test]
+    fn hoeffding_d_in_warning() {
+        let thresholds = SpectralThresholds::default();
+        let mut history = SpectralHistory::new(8);
+
+        for i in 0..6_i32 {
+            history.record(f64::from(i).mul_add(-0.15, 1.0));
+        }
+
+        let warning = history.analyze(&thresholds).unwrap();
+        assert!(
+            warning.hoeffding_d.is_some(),
+            "should compute Hoeffding's D"
+        );
+        let d = warning.hoeffding_d.unwrap();
+        assert!(
+            d > 0.0,
+            "monotone deterioration should show dependence, got {d}"
+        );
+    }
+
+    #[test]
+    fn hoeffding_d_stronger_than_tau_for_nonmonotone() {
+        // Quadratic (parabola): strong non-monotone dependence.
+        let values: Vec<f64> = (0..9)
+            .map(|i| {
+                let x = f64::from(i) - 4.0;
+                x * x
+            })
+            .collect();
+        let d = hoeffding_d(&values).unwrap();
+        let tau = kendall_tau(&values).unwrap();
+        // For a symmetric parabola, tau should be near 0.
+        assert!(tau.abs() < 0.3, "parabola should have weak tau, got {tau}");
+        // Hoeffding's D should detect the dependence.
+        assert!(
+            d > 0.0,
+            "parabola should have positive Hoeffding's D, got {d}"
         );
     }
 }

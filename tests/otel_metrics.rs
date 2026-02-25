@@ -561,9 +561,9 @@ mod otel_integration {
     fn otel_metric_names(finished: &[ResourceMetrics]) -> HashSet<String> {
         let mut names = HashSet::new();
         for rm in finished {
-            for sm in &rm.scope_metrics {
-                for m in &sm.metrics {
-                    names.insert(m.name.to_string());
+            for sm in rm.scope_metrics() {
+                for m in sm.metrics() {
+                    names.insert(m.name().to_string());
                 }
             }
         }

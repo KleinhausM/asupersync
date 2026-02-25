@@ -113,13 +113,13 @@ fn main() {
     println!("=== Exported Metrics ===\n");
 
     for resource_metrics in &finished {
-        for scope_metrics in &resource_metrics.scope_metrics {
-            for metric in &scope_metrics.metrics {
-                println!("Metric: {}", metric.name);
-                if !metric.description.is_empty() {
-                    println!("  Description: {}", metric.description);
+        for scope_metrics in resource_metrics.scope_metrics() {
+            for metric in scope_metrics.metrics() {
+                println!("Metric: {}", metric.name());
+                if !metric.description().is_empty() {
+                    println!("  Description: {}", metric.description());
                 }
-                println!("  Data: {:?}", metric.data);
+                println!("  Data: {:?}", metric.data());
                 println!();
             }
         }

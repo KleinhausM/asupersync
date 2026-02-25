@@ -51,8 +51,9 @@ pub mod task_inspector;
 pub use collector::LogCollector;
 pub use context::{DiagnosticContext, Span, SpanId};
 pub use diagnostics::{
-    BlockReason, CancelReasonInfo, CancellationExplanation, CancellationStep, Diagnostics,
-    ObligationLeak, Reason, RegionOpenExplanation, TaskBlockedExplanation,
+    BlockReason, CancelReasonInfo, CancellationExplanation, CancellationStep, DeadlockCycle,
+    DeadlockSeverity, Diagnostics, DirectionalDeadlockReport, ObligationLeak, Reason,
+    RegionOpenExplanation, TaskBlockedExplanation,
 };
 pub use entry::LogEntry;
 pub use level::LogLevel;

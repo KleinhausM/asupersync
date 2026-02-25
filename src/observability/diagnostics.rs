@@ -19,6 +19,9 @@
 //! ```
 
 use crate::console::Console;
+use crate::observability::spectral_health::{
+    SpectralHealthMonitor, SpectralHealthReport, SpectralThresholds,
+};
 use crate::record::ObligationState;
 use crate::record::region::RegionState;
 use crate::record::task::TaskState;
@@ -26,6 +29,7 @@ use crate::runtime::state::RuntimeState;
 use crate::time::TimerDriverHandle;
 use crate::tracing_compat::{debug, trace, warn};
 use crate::types::{CancelKind, ObligationId, RegionId, TaskId, Time};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -34,6 +38,7 @@ use std::sync::Arc;
 pub struct Diagnostics {
     state: Arc<RuntimeState>,
     console: Option<Console>,
+    spectral_monitor: parking_lot::Mutex<SpectralHealthMonitor>,
 }
 
 impl Diagnostics {
@@ -43,6 +48,9 @@ impl Diagnostics {
         Self {
             state,
             console: None,
+            spectral_monitor: parking_lot::Mutex::new(SpectralHealthMonitor::new(
+                SpectralThresholds::default(),
+            )),
         }
     }
 
@@ -52,6 +60,9 @@ impl Diagnostics {
         Self {
             state,
             console: Some(console),
+            spectral_monitor: parking_lot::Mutex::new(SpectralHealthMonitor::new(
+                SpectralThresholds::default(),
+            )),
         }
     }
 
@@ -60,6 +71,165 @@ impl Diagnostics {
         self.state
             .timer_driver()
             .map_or(Time::ZERO, TimerDriverHandle::now)
+    }
+
+    fn build_task_wait_graph(&self) -> TaskWaitGraph {
+        let mut task_ids: Vec<TaskId> = self
+            .state
+            .tasks_iter()
+            .filter_map(|(_, task)| (!task.state.is_terminal()).then_some(task.id))
+            .collect();
+        task_ids.sort();
+        let index_by_task: BTreeMap<TaskId, usize> = task_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+
+        let mut directed_edges = Vec::new();
+        for (_, task) in self.state.tasks_iter() {
+            if task.state.is_terminal() {
+                continue;
+            }
+            let Some(&target_idx) = index_by_task.get(&task.id) else {
+                continue;
+            };
+            // waiter -> task dependency edges
+            for waiter in &task.waiters {
+                if let Some(&waiter_idx) = index_by_task.get(waiter) {
+                    directed_edges.push((waiter_idx, target_idx));
+                }
+            }
+        }
+        directed_edges.sort_unstable();
+        directed_edges.dedup();
+
+        let undirected_edges: Vec<(usize, usize)> = directed_edges
+            .iter()
+            .map(|(u, v)| if u < v { (*u, *v) } else { (*v, *u) })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        TaskWaitGraph {
+            task_ids,
+            directed_edges,
+            undirected_edges,
+        }
+    }
+
+    /// Analyze structural runtime health from the live task wait graph.
+    ///
+    /// This is a default diagnostics path and updates the monitor's spectral
+    /// history each time it is called.
+    #[must_use]
+    pub fn analyze_structural_health(&self) -> SpectralHealthReport {
+        let graph = self.build_task_wait_graph();
+        let mut monitor = self.spectral_monitor.lock();
+        monitor.analyze(graph.task_ids.len(), &graph.undirected_edges)
+    }
+
+    /// Analyze directional deadlock risk from wait-for dependencies.
+    #[must_use]
+    pub fn analyze_directional_deadlock(&self) -> DirectionalDeadlockReport {
+        let graph = self.build_task_wait_graph();
+        if graph.task_ids.is_empty() {
+            return DirectionalDeadlockReport::empty();
+        }
+
+        let mut adjacency = vec![Vec::new(); graph.task_ids.len()];
+        for &(u, v) in &graph.directed_edges {
+            if u < adjacency.len() && v < adjacency.len() {
+                adjacency[u].push(v);
+            }
+        }
+        for edges in &mut adjacency {
+            edges.sort_unstable();
+            edges.dedup();
+        }
+
+        let sccs = strongly_connected_components(&adjacency);
+        let mut components = Vec::new();
+        let mut trapped = 0_u32;
+        let mut cycle_nodes = 0_usize;
+
+        for nodes in sccs {
+            let has_cycle = if nodes.len() > 1 {
+                true
+            } else {
+                let n0 = nodes[0];
+                adjacency[n0].contains(&n0)
+            };
+            if !has_cycle {
+                continue;
+            }
+            cycle_nodes += nodes.len();
+            let mut ingress = 0_u32;
+            let mut egress = 0_u32;
+            for &u in &nodes {
+                for &v in &adjacency[u] {
+                    if nodes.binary_search(&v).is_ok() {
+                        continue;
+                    }
+                    egress = egress.saturating_add(1);
+                }
+            }
+            let node_set: std::collections::BTreeSet<usize> = nodes.iter().copied().collect();
+            for (u, edges) in adjacency.iter().enumerate() {
+                if node_set.contains(&u) {
+                    continue;
+                }
+                for &v in edges {
+                    if node_set.contains(&v) {
+                        ingress = ingress.saturating_add(1);
+                    }
+                }
+            }
+            let trapped_component = egress == 0;
+            if trapped_component {
+                trapped = trapped.saturating_add(1);
+            }
+            let mut tasks: Vec<TaskId> = nodes.iter().map(|idx| graph.task_ids[*idx]).collect();
+            tasks.sort();
+            components.push(DeadlockCycle {
+                tasks,
+                ingress_edges: ingress,
+                egress_edges: egress,
+                trapped: trapped_component,
+            });
+        }
+
+        components.sort_by_key(|c| c.tasks.len());
+        components.reverse();
+
+        #[allow(clippy::cast_precision_loss)]
+        let cycle_ratio = if graph.task_ids.is_empty() {
+            0.0
+        } else {
+            cycle_nodes as f64 / graph.task_ids.len() as f64
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let trapped_ratio = if components.is_empty() {
+            0.0
+        } else {
+            f64::from(trapped) / components.len() as f64
+        };
+        let risk_score = 0.6f64
+            .mul_add(trapped_ratio, 0.4 * cycle_ratio)
+            .clamp(0.0, 1.0);
+        let severity = if trapped > 0 {
+            DeadlockSeverity::Critical
+        } else if !components.is_empty() {
+            DeadlockSeverity::Elevated
+        } else {
+            DeadlockSeverity::None
+        };
+
+        DirectionalDeadlockReport {
+            severity,
+            risk_score,
+            cycles: components,
+        }
     }
 
     /// Explain why a region cannot close.
@@ -156,6 +326,14 @@ impl Diagnostics {
         {
             recommendations
                 .push("Ensure obligations are committed/aborted before closing.".to_string());
+        }
+
+        let deadlock = self.analyze_directional_deadlock();
+        if deadlock.severity != DeadlockSeverity::None {
+            recommendations.push(format!(
+                "Directional deadlock risk {:?} (score {:.3}); inspect cycles and break wait-for loops.",
+                deadlock.severity, deadlock.risk_score
+            ));
         }
 
         debug!(
@@ -299,6 +477,123 @@ impl Diagnostics {
 
         leaks
     }
+}
+
+#[derive(Debug, Clone)]
+struct TaskWaitGraph {
+    task_ids: Vec<TaskId>,
+    directed_edges: Vec<(usize, usize)>,
+    undirected_edges: Vec<(usize, usize)>,
+}
+
+/// Directional deadlock severity from wait-for graph analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadlockSeverity {
+    /// No directed cycle risk observed.
+    None,
+    /// Directed cycles were found, but all have external exits.
+    Elevated,
+    /// At least one cycle is trapped (no outgoing edge).
+    Critical,
+}
+
+/// A directed wait-for cycle component.
+#[derive(Debug, Clone)]
+pub struct DeadlockCycle {
+    /// Tasks participating in the cycle.
+    pub tasks: Vec<TaskId>,
+    /// Incoming edges from outside the SCC.
+    pub ingress_edges: u32,
+    /// Outgoing edges to nodes outside the SCC.
+    pub egress_edges: u32,
+    /// Whether the cycle has no outgoing edge.
+    pub trapped: bool,
+}
+
+/// Directional deadlock risk report.
+#[derive(Debug, Clone)]
+pub struct DirectionalDeadlockReport {
+    /// Severity level.
+    pub severity: DeadlockSeverity,
+    /// Composite risk score in `[0, 1]`.
+    pub risk_score: f64,
+    /// Cycle components sorted by descending size.
+    pub cycles: Vec<DeadlockCycle>,
+}
+
+impl DirectionalDeadlockReport {
+    #[must_use]
+    fn empty() -> Self {
+        Self {
+            severity: DeadlockSeverity::None,
+            risk_score: 0.0,
+            cycles: Vec::new(),
+        }
+    }
+}
+
+/// Tarjan SCC decomposition over adjacency lists.
+#[must_use]
+fn strongly_connected_components(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    struct Tarjan<'a> {
+        adjacency: &'a [Vec<usize>],
+        index: usize,
+        stack: Vec<usize>,
+        on_stack: Vec<bool>,
+        indices: Vec<Option<usize>>,
+        lowlink: Vec<usize>,
+        sccs: Vec<Vec<usize>>,
+    }
+
+    impl Tarjan<'_> {
+        fn strongconnect(&mut self, v: usize) {
+            self.indices[v] = Some(self.index);
+            self.lowlink[v] = self.index;
+            self.index += 1;
+            self.stack.push(v);
+            self.on_stack[v] = true;
+
+            for &w in &self.adjacency[v] {
+                if self.indices[w].is_none() {
+                    self.strongconnect(w);
+                    self.lowlink[v] = self.lowlink[v].min(self.lowlink[w]);
+                } else if self.on_stack[w] {
+                    self.lowlink[v] = self.lowlink[v].min(self.indices[w].unwrap_or(usize::MAX));
+                }
+            }
+
+            if self.lowlink[v] == self.indices[v].unwrap_or(usize::MAX) {
+                let mut scc = Vec::new();
+                while let Some(w) = self.stack.pop() {
+                    self.on_stack[w] = false;
+                    scc.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                scc.sort_unstable();
+                self.sccs.push(scc);
+            }
+        }
+    }
+
+    let n = adjacency.len();
+    let mut tarjan = Tarjan {
+        adjacency,
+        index: 0,
+        stack: Vec::new(),
+        on_stack: vec![false; n],
+        indices: vec![None; n],
+        lowlink: vec![0; n],
+        sccs: Vec::new(),
+    };
+
+    for v in 0..n {
+        if tarjan.indices[v].is_none() {
+            tarjan.strongconnect(v);
+        }
+    }
+    tarjan.sccs
 }
 
 /// Explanation for why a region is still open.
@@ -1114,6 +1409,44 @@ mod tests {
         };
         let leak2 = leak;
         assert!(format!("{leak2:?}").contains("ObligationLeak"));
+    }
+
+    #[test]
+    fn directional_deadlock_cycle_detection_reports_critical() {
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let t1 = insert_task(&mut state, root, TaskState::Running);
+        let t2 = insert_task(&mut state, root, TaskState::Running);
+        state.task_mut(t1).expect("t1").waiters.push(t2); // t2 -> t1
+        state.task_mut(t2).expect("t2").waiters.push(t1); // t1 -> t2
+
+        let diagnostics = Diagnostics::new(Arc::new(state));
+        let report = diagnostics.analyze_directional_deadlock();
+        assert_eq!(report.severity, DeadlockSeverity::Critical);
+        assert!(!report.cycles.is_empty());
+        assert!(report.cycles[0].trapped);
+        assert!(report.cycles[0].tasks.contains(&t1));
+        assert!(report.cycles[0].tasks.contains(&t2));
+    }
+
+    #[test]
+    fn explain_region_open_includes_directional_deadlock_recommendation() {
+        let mut state = RuntimeState::new();
+        let root = state.create_root_region(Budget::INFINITE);
+        let t1 = insert_task(&mut state, root, TaskState::Running);
+        let t2 = insert_task(&mut state, root, TaskState::Running);
+        state.task_mut(t1).expect("t1").waiters.push(t2);
+        state.task_mut(t2).expect("t2").waiters.push(t1);
+
+        let diagnostics = Diagnostics::new(Arc::new(state));
+        let explanation = diagnostics.explain_region_open(root);
+        assert!(
+            explanation
+                .recommendations
+                .iter()
+                .any(|r| r.contains("Directional deadlock risk")),
+            "expected directional deadlock recommendation"
+        );
     }
 
     #[test]
