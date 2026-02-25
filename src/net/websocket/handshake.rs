@@ -63,6 +63,19 @@ fn generate_client_key(entropy: &dyn EntropySource) -> String {
     base64::engine::general_purpose::STANDARD.encode(key)
 }
 
+fn parse_extension_offers(header_value: &str) -> Vec<String> {
+    header_value
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn extension_token(offer: &str) -> &str {
+    offer.split(';').next().unwrap_or("").trim()
+}
+
 /// Parsed WebSocket URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WsUrl {
@@ -180,6 +193,13 @@ pub enum HandshakeError {
         /// Offered protocol (if any).
         offered: Option<String>,
     },
+    /// Extension negotiation failed.
+    ExtensionMismatch {
+        /// Requested extensions.
+        requested: Vec<String>,
+        /// Offered extensions.
+        offered: Vec<String>,
+    },
     /// Server rejected upgrade with HTTP status.
     Rejected {
         /// HTTP status code.
@@ -211,6 +231,12 @@ impl fmt::Display for HandshakeError {
                 write!(
                     f,
                     "protocol mismatch: requested {requested:?}, offered {offered:?}"
+                )
+            }
+            Self::ExtensionMismatch { requested, offered } => {
+                write!(
+                    f,
+                    "extension mismatch: requested {requested:?}, offered {offered:?}"
                 )
             }
             Self::Rejected { status, reason } => {
@@ -327,7 +353,7 @@ impl ClientHandshake {
 
         if !self.extensions.is_empty() {
             request.push_str("Sec-WebSocket-Extensions: ");
-            request.push_str(&self.extensions.join("; "));
+            request.push_str(&self.extensions.join(", "));
             request.push_str("\r\n");
         }
 
@@ -397,6 +423,30 @@ impl ClientHandshake {
                 return Err(HandshakeError::ProtocolMismatch {
                     requested: self.protocols.clone(),
                     offered: Some(offered),
+                });
+            }
+        }
+
+        if let Some(offered_extensions) = response.header("sec-websocket-extensions") {
+            let offered = parse_extension_offers(offered_extensions);
+            let mut invalid = Vec::new();
+
+            for extension in &offered {
+                let token = extension_token(extension);
+                if token.is_empty()
+                    || !self
+                        .extensions
+                        .iter()
+                        .any(|requested| requested.eq_ignore_ascii_case(token))
+                {
+                    invalid.push(extension.clone());
+                }
+            }
+
+            if !invalid.is_empty() {
+                return Err(HandshakeError::ExtensionMismatch {
+                    requested: self.extensions.clone(),
+                    offered: invalid,
                 });
             }
         }
@@ -505,10 +555,35 @@ impl ServerHandshake {
                     .cloned()
             });
 
+        let negotiated_extensions =
+            request
+                .header("sec-websocket-extensions")
+                .map_or_else(Vec::new, |requested| {
+                    let mut accepted = Vec::new();
+                    let mut accepted_tokens = std::collections::BTreeSet::new();
+                    for offer in parse_extension_offers(requested) {
+                        let token = extension_token(&offer);
+                        if token.is_empty() {
+                            continue;
+                        }
+                        if self
+                            .supported_extensions
+                            .iter()
+                            .any(|supported| supported.eq_ignore_ascii_case(token))
+                        {
+                            let normalized = token.to_ascii_lowercase();
+                            if accepted_tokens.insert(normalized) {
+                                accepted.push(offer);
+                            }
+                        }
+                    }
+                    accepted
+                });
+
         Ok(AcceptResponse {
             accept_key,
             protocol: selected_protocol,
-            extensions: Vec::new(), // TODO: Extension negotiation
+            extensions: negotiated_extensions,
         })
     }
 
@@ -557,7 +632,7 @@ impl AcceptResponse {
 
         if !self.extensions.is_empty() {
             response.push_str("Sec-WebSocket-Extensions: ");
-            response.push_str(&self.extensions.join("; "));
+            response.push_str(&self.extensions.join(", "));
             response.push_str("\r\n");
         }
 
@@ -916,6 +991,31 @@ mod tests {
     }
 
     #[test]
+    fn test_server_accept_negotiates_extensions() {
+        let server = ServerHandshake::new()
+            .extension("permessage-deflate")
+            .extension("x-webkit-deflate-frame");
+
+        let request = HttpRequest::parse(
+            b"GET /chat HTTP/1.1\r\n\
+              Host: example.com\r\n\
+              Upgrade: websocket\r\n\
+              Connection: Upgrade\r\n\
+              Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+              Sec-WebSocket-Version: 13\r\n\
+              Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits, x-ignored\r\n\
+              \r\n",
+        )
+        .unwrap();
+
+        let accept = server.accept(&request).unwrap();
+        assert_eq!(
+            accept.extensions,
+            vec!["permessage-deflate; client_max_window_bits".to_string()]
+        );
+    }
+
+    #[test]
     fn test_server_reject_bad_version() {
         let server = ServerHandshake::new();
 
@@ -951,6 +1051,55 @@ mod tests {
         assert!(text.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
         assert!(text.contains("Sec-WebSocket-Protocol: chat\r\n"));
         assert!(text.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn test_client_validate_response_rejects_unsolicited_extensions() {
+        let handshake = ClientHandshake {
+            url: WsUrl::parse("ws://example.com/chat").expect("valid url"),
+            key: "dGhlIHNhbXBsZSBub25jZQ==".to_string(),
+            protocols: vec![],
+            extensions: vec!["permessage-deflate".to_string()],
+            headers: BTreeMap::new(),
+        };
+
+        let response = HttpResponse::parse(
+            b"HTTP/1.1 101 Switching Protocols\r\n\
+              Upgrade: websocket\r\n\
+              Connection: Upgrade\r\n\
+              Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\
+              Sec-WebSocket-Extensions: x-unrequested\r\n\
+              \r\n",
+        )
+        .expect("response must parse");
+
+        let err = handshake
+            .validate_response(&response)
+            .expect_err("unrequested extension must be rejected");
+        assert!(matches!(err, HandshakeError::ExtensionMismatch { .. }));
+    }
+
+    #[test]
+    fn test_client_validate_response_accepts_requested_extensions() {
+        let handshake = ClientHandshake {
+            url: WsUrl::parse("ws://example.com/chat").expect("valid url"),
+            key: "dGhlIHNhbXBsZSBub25jZQ==".to_string(),
+            protocols: vec![],
+            extensions: vec!["permessage-deflate".to_string()],
+            headers: BTreeMap::new(),
+        };
+
+        let response = HttpResponse::parse(
+            b"HTTP/1.1 101 Switching Protocols\r\n\
+              Upgrade: websocket\r\n\
+              Connection: Upgrade\r\n\
+              Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\
+              Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n\
+              \r\n",
+        )
+        .expect("response must parse");
+
+        assert!(handshake.validate_response(&response).is_ok());
     }
 
     #[test]

@@ -759,7 +759,7 @@ impl<T> Drop for Recv<'_, T> {
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
-        let wakers: SmallVec<[Waker; 4]> = {
+        let (wakers, _items) = {
             let mut inner = self.shared.inner.lock();
             self.shared.receiver_dropped.store(true, Ordering::Release);
             // Clear any pending recv waker so a dropped receiver does not
@@ -767,12 +767,16 @@ impl<T> Drop for Receiver<T> {
             inner.recv_waker = None;
             // Drain queued items to prevent memory leaks when senders are
             // long-lived (they hold Arc refs that keep the queue alive).
-            inner.queue.clear();
-            inner
+            // We extract them using std::mem::take to drop them outside the lock,
+            // preventing deadlocks if T::drop requires the same channel lock.
+            let items = std::mem::take(&mut inner.queue);
+            let wakers: SmallVec<[Waker; 4]> = inner
                 .send_wakers
                 .drain(..)
                 .map(|waiter| waiter.waker)
-                .collect()
+                .collect();
+            drop(inner);
+            (wakers, items)
         };
         // Wake senders outside the lock to avoid wake-under-lock deadlocks.
         for waker in wakers {

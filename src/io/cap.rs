@@ -23,6 +23,40 @@
 
 use std::fmt::Debug;
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Capability surface advertised by an [`IoCap`] implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct IoCapabilities {
+    /// Supports real file descriptor backed operations.
+    pub file_ops: bool,
+    /// Supports real socket operations.
+    pub network_ops: bool,
+    /// Supports timer-backed I/O wakeups.
+    pub timer_integration: bool,
+    /// Provides deterministic virtual I/O semantics.
+    pub deterministic: bool,
+}
+
+impl IoCapabilities {
+    /// Capability descriptor for virtual deterministic I/O.
+    pub const LAB: Self = Self {
+        file_ops: false,
+        network_ops: false,
+        timer_integration: true,
+        deterministic: true,
+    };
+}
+
+/// Snapshot of I/O operation counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IoStats {
+    /// Number of operations submitted through the capability.
+    pub submitted: u64,
+    /// Number of operations completed through the capability.
+    pub completed: u64,
+}
 
 /// The I/O capability trait.
 ///
@@ -60,10 +94,13 @@ pub trait IoCap: Send + Sync + Debug {
     /// Useful for debugging and diagnostics.
     fn name(&self) -> &'static str;
 
-    // TODO: Add actual I/O methods as Phase 2 progresses:
-    // - File operations (open, read, write, close)
-    // - Network operations (connect, accept, send, recv)
-    // - Timer integration
+    /// Returns the supported I/O features for this capability.
+    fn capabilities(&self) -> IoCapabilities;
+
+    /// Returns capability-local operation counters.
+    fn stats(&self) -> IoStats {
+        IoStats::default()
+    }
 }
 
 /// Error returned when I/O is not available.
@@ -92,7 +129,8 @@ impl From<IoNotAvailable> for io::Error {
 /// - Replay support
 #[derive(Debug, Default)]
 pub struct LabIoCap {
-    // TODO: Add virtual I/O state as needed
+    submitted: AtomicU64,
+    completed: AtomicU64,
 }
 
 impl LabIoCap {
@@ -100,6 +138,16 @@ impl LabIoCap {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Records a submitted virtual I/O operation.
+    pub fn record_submit(&self) {
+        self.submitted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a completed virtual I/O operation.
+    pub fn record_complete(&self) {
+        self.completed.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -110,6 +158,17 @@ impl IoCap for LabIoCap {
 
     fn name(&self) -> &'static str {
         "lab"
+    }
+
+    fn capabilities(&self) -> IoCapabilities {
+        IoCapabilities::LAB
+    }
+
+    fn stats(&self) -> IoStats {
+        IoStats {
+            submitted: self.submitted.load(Ordering::Relaxed),
+            completed: self.completed.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -122,6 +181,7 @@ mod tests {
         let cap = LabIoCap::new();
         assert!(!cap.is_real_io());
         assert_eq!(cap.name(), "lab");
+        assert_eq!(cap.capabilities(), IoCapabilities::LAB);
     }
 
     #[test]
@@ -145,5 +205,21 @@ mod tests {
         let c = LabIoCap::default();
         let dbg = format!("{c:?}");
         assert!(dbg.contains("LabIoCap"), "{dbg}");
+    }
+
+    #[test]
+    fn lab_io_cap_stats_track_activity() {
+        let cap = LabIoCap::new();
+        assert_eq!(cap.stats(), IoStats::default());
+        cap.record_submit();
+        cap.record_submit();
+        cap.record_complete();
+        assert_eq!(
+            cap.stats(),
+            IoStats {
+                submitted: 2,
+                completed: 1
+            }
+        );
     }
 }
