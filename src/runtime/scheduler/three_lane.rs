@@ -1899,7 +1899,25 @@ impl ThreeLaneWorker {
             }
         }
 
-        // ── PHASE 2: Fast ready paths (no PriorityScheduler lock) ────
+        // ── PHASE 2: Local PriorityScheduler (Cancel / Timed) ────────
+        // We MUST check cancel and timed lanes before ready paths to avoid
+        // priority inversion where a ready task preempts a pending cancel/timed task.
+        if let Some((lane, task)) = self.try_local_priority_lanes(suggestion, check_cancel, now) {
+            match lane {
+                0 => {
+                    self.cancel_streak = self.cancel_streak.saturating_add(1);
+                    self.record_cancel_dispatch(base_limit, effective_limit);
+                }
+                1 => {
+                    self.cancel_streak = 0;
+                    self.preemption_metrics.timed_dispatches += 1;
+                }
+                _ => unreachable!(),
+            }
+            return Some(self.finish_dispatch(task));
+        }
+
+        // ── PHASE 3: Fast ready paths (no PriorityScheduler lock) ────
         // Check lock-free fast_queue first (O(1) atomic pop), then
         // local_ready which requires a try_lock.
         if let Some(task) = self.fast_queue.pop() {
@@ -1922,25 +1940,16 @@ impl ThreeLaneWorker {
             return Some(self.finish_dispatch(pt.task));
         }
 
-        // ── PHASE 3: Single local PriorityScheduler lock ─────────────
-        // All global/fast paths returned nothing.  Check local cancel,
-        // timed, and ready lanes under one lock acquisition (replaces 3
-        // separate lock round-trips).
-        if let Some((lane, task)) = self.try_local_all_lanes(suggestion, check_cancel, now) {
-            match lane {
-                0 => {
-                    self.cancel_streak = self.cancel_streak.saturating_add(1);
-                    self.record_cancel_dispatch(base_limit, effective_limit);
-                }
-                1 => {
-                    self.cancel_streak = 0;
-                    self.preemption_metrics.timed_dispatches += 1;
-                }
-                _ => {
-                    self.cancel_streak = 0;
-                    self.preemption_metrics.ready_dispatches += 1;
-                }
-            }
+        // ── PHASE 3b: Local Ready Lane ───────────────────────────────
+        // All global/fast ready paths returned nothing. Check local ready.
+        let rng_hint = self.rng.next_u64();
+        let local_task = {
+            let mut local = self.local.lock();
+            local.pop_ready_only_with_hint(rng_hint)
+        };
+        if let Some(task) = local_task {
+            self.cancel_streak = 0;
+            self.preemption_metrics.ready_dispatches += 1;
             return Some(self.finish_dispatch(task));
         }
 
@@ -2279,9 +2288,9 @@ impl ThreeLaneWorker {
     /// Acquires the local `PriorityScheduler` lock once and checks
     /// cancel, timed, and ready lanes in the order dictated by the
     /// governor suggestion.  Returns `(lane_tag, task_id)` where
-    /// lane_tag is 0=cancel, 1=timed, 2=ready.
+    /// lane_tag is 0=cancel, 1=timed.
     #[inline]
-    fn try_local_all_lanes(
+    fn try_local_priority_lanes(
         &mut self,
         suggestion: SchedulingSuggestion,
         check_cancel: bool,
@@ -2291,7 +2300,7 @@ impl ThreeLaneWorker {
         let rng_hint = self.rng.next_u64();
 
         // Check cancel + timed in suggestion-specific order.
-        let result = if suggestion == SchedulingSuggestion::MeetDeadlines {
+        if suggestion == SchedulingSuggestion::MeetDeadlines {
             // timed > cancel (deadline pressure).
             local
                 .pop_timed_only_with_hint(rng_hint, now)
@@ -2317,10 +2326,7 @@ impl ThreeLaneWorker {
                     .pop_timed_only_with_hint(rng_hint, now)
                     .map(|t| (1u8, t))
             }
-        };
-
-        // Ready lane is always last.
-        result.or_else(|| local.pop_ready_only_with_hint(rng_hint).map(|t| (2u8, t)))
+        }
     }
 
     /// Tries to steal work from other workers.
