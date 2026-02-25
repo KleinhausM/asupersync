@@ -1123,12 +1123,13 @@ impl SpectralHistory {
                 strong_indicators += 1;
             }
         }
-        if distance_corr_val.is_some_and(|dc| dc > 0.5) {
-            active_indicators += 1;
-            if distance_corr_val.is_some_and(|dc| dc > 0.8) {
-                strong_indicators += 1;
-            }
-        }
+        // Note: distance_corr is intentionally excluded from severity
+        // counting.  It is highly correlated with Hoeffding/Kendall/Spearman
+        // (all measure time-value dependence), so counting it as a separate
+        // active indicator would inflate severity for simple linear trends
+        // (pushing Warning → Critical with no genuinely new evidence).
+        // Its value is in the *confidence* score, where it contributes
+        // unique information via raw metric distances rather than ranks.
         if deterioration_e_value > 20.0 {
             active_indicators += 1;
             if deterioration_e_value > 100.0 {
