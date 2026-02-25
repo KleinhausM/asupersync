@@ -802,15 +802,22 @@ fn execute_plan_in_lab_core(
 
     // Schedule all tasks.
     {
-        let mut sched = runtime.scheduler.lock();
-        for tid in &task_ids {
-            sched.schedule(*tid, 0);
-        }
-        println!("Scheduled tasks! is_empty={}", sched.is_empty());
+        let is_empty = {
+            let mut sched = runtime.scheduler.lock();
+            for tid in &task_ids {
+                sched.schedule(*tid, 255);
+            }
+            sched.is_empty()
+        };
+        println!("Scheduled tasks! is_empty={is_empty}");
     }
 
     let steps = runtime.run_until_quiescent();
-    println!("First run finished in {} steps. Quiescent: {}", steps, runtime.is_quiescent());
+    println!(
+        "First run finished in {} steps. Quiescent: {}",
+        steps,
+        runtime.is_quiescent()
+    );
 
     // Reschedule retry for robustness (golden_outputs pattern).
     let mut attempts = 0;
@@ -819,7 +826,7 @@ fn execute_plan_in_lab_core(
             let mut sched = runtime.scheduler.lock();
             for (_, record) in runtime.state.tasks_iter() {
                 if record.is_runnable() {
-                    sched.schedule(record.id, 0);
+                    sched.schedule(record.id, record.sched_priority);
                 }
             }
         }
