@@ -367,12 +367,13 @@ impl Outputtable for ConformanceMatrixReport {
         if !self.warnings.is_empty() {
             output.push_str("\n## Warnings\n\n");
             for warning in &self.warnings {
-                output.push_str(&format!(
-                    "- {}:{}: {}\n",
+                use std::fmt::Write;
+                let _ = writeln!(output,
+                    "- {}:{}: {}",
                     warning.file.display(),
                     warning.line,
                     warning.message
-                ));
+                );
             }
         }
 
@@ -532,10 +533,10 @@ fn run_conformance(args: ConformanceArgs, output: &mut Output) -> Result<(), Cli
 
 fn run_lab(args: LabArgs, output: &mut Output) -> Result<(), CliError> {
     match args.command {
-        LabCommand::Run(run_args) => lab_run(run_args, output),
-        LabCommand::Validate(validate_args) => lab_validate(validate_args, output),
-        LabCommand::Replay(replay_args) => lab_replay(replay_args, output),
-        LabCommand::Explore(explore_args) => lab_explore(explore_args, output),
+        LabCommand::Run(run_args) => lab_run(&run_args, output),
+        LabCommand::Validate(validate_args) => lab_validate(&validate_args, output),
+        LabCommand::Replay(replay_args) => lab_replay(&replay_args, output),
+        LabCommand::Explore(explore_args) => lab_explore(&explore_args, output),
     }
 }
 
@@ -585,7 +586,7 @@ fn scenario_runner_error(err: asupersync::lab::scenario_runner::ScenarioRunnerEr
     }
 }
 
-fn lab_run(args: LabRunArgs, output: &mut Output) -> Result<(), CliError> {
+fn lab_run(args: &LabRunArgs, output: &mut Output) -> Result<(), CliError> {
     let scenario = load_scenario(&args.scenario)?;
     let result =
         asupersync::lab::scenario_runner::ScenarioRunner::run_with_seed(&scenario, args.seed)
@@ -614,7 +615,7 @@ fn lab_run(args: LabRunArgs, output: &mut Output) -> Result<(), CliError> {
     Ok(())
 }
 
-fn lab_validate(args: LabValidateArgs, output: &mut Output) -> Result<(), CliError> {
+fn lab_validate(args: &LabValidateArgs, output: &mut Output) -> Result<(), CliError> {
     let scenario = load_scenario(&args.scenario)?;
     let errors = scenario.validate();
 
@@ -645,7 +646,7 @@ fn lab_validate(args: LabValidateArgs, output: &mut Output) -> Result<(), CliErr
     Ok(())
 }
 
-fn lab_replay(args: LabReplayArgs, output: &mut Output) -> Result<(), CliError> {
+fn lab_replay(args: &LabReplayArgs, output: &mut Output) -> Result<(), CliError> {
     let scenario = load_scenario(&args.scenario)?;
     let result = asupersync::lab::scenario_runner::ScenarioRunner::validate_replay(&scenario)
         .map_err(scenario_runner_error)?;
@@ -673,7 +674,7 @@ fn lab_replay(args: LabReplayArgs, output: &mut Output) -> Result<(), CliError> 
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn lab_explore(args: LabExploreArgs, output: &mut Output) -> Result<(), CliError> {
+fn lab_explore(args: &LabExploreArgs, output: &mut Output) -> Result<(), CliError> {
     let scenario = load_scenario(&args.scenario)?;
     let result = asupersync::lab::scenario_runner::ScenarioRunner::explore_seeds(
         &scenario,
@@ -1357,6 +1358,7 @@ fn io_error(path: &Path, err: &io::Error) -> CliError {
     error
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn conformance_scan_error(err: TraceabilityScanError) -> CliError {
     CliError::new("scan_error", "Failed to scan for conformance attributes")
         .detail(err.to_string())

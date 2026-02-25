@@ -14,8 +14,9 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use asupersync::raptorq::decoder::{DecodeStats, InactivationDecoder, ReceivedSymbol};
 use asupersync::raptorq::gf256::{
     Gf256, Gf256ProfileFallbackReason, Gf256ProfilePackId, Gf256ProfilePackManifestSnapshot,
-    dual_addmul_kernel_decision, dual_mul_kernel_decision, gf256_add_slice, gf256_addmul_slice,
-    gf256_addmul_slices2, gf256_mul_slice, gf256_mul_slices2, gf256_profile_pack_manifest_snapshot,
+    dual_addmul_kernel_decision_detail, dual_mul_kernel_decision_detail, gf256_add_slice,
+    gf256_addmul_slice, gf256_addmul_slices2, gf256_mul_slice, gf256_mul_slices2,
+    gf256_profile_pack_manifest_snapshot,
 };
 use asupersync::raptorq::linalg::{DenseRow, GaussianSolver, row_scale_add, row_xor};
 use asupersync::raptorq::systematic::SystematicEncoder;
@@ -82,10 +83,10 @@ fn emit_track_e_policy_log(scenario: &Gf256BenchScenario) {
     let env = manifest.environment_metadata;
     let (tile_bytes, unroll, prefetch_distance, fusion_shape) =
         selected_candidate_fields(&manifest);
-    let mul_decision = dual_mul_kernel_decision(scenario.len, scenario.len);
-    let addmul_decision = dual_addmul_kernel_decision(scenario.len, scenario.len);
+    let mul_detail = dual_mul_kernel_decision_detail(scenario.len, scenario.len);
+    let addmul_detail = dual_addmul_kernel_decision_detail(scenario.len, scenario.len);
     eprintln!(
-        "{{\"schema_version\":\"{}\",\"manifest_schema_version\":\"{}\",\"profile_schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"architecture_class\":\"{}\",\"profile_pack\":\"{}\",\"profile_fallback_reason\":\"{}\",\"rejected_profile_packs\":\"{}\",\"profile_catalog_count\":{},\"tuning_candidate_catalog_count\":{},\"active_profile_architecture_class\":\"{}\",\"target_arch\":\"{}\",\"target_os\":\"{}\",\"target_env\":\"{}\",\"target_endian\":\"{}\",\"target_pointer_width_bits\":{},\"tuning_corpus_id\":\"{}\",\"selected_tuning_candidate_id\":\"{}\",\"selected_tuning_tile_bytes\":{},\"selected_tuning_unroll\":{},\"selected_tuning_prefetch_distance\":{},\"selected_tuning_fusion_shape\":\"{}\",\"rejected_tuning_candidate_ids\":\"{}\",\"replay_pointer\":\"{}\",\"command_bundle\":\"{}\",\"mode\":\"{:?}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"addmul_min_lane\":{},\"max_lane_ratio\":{},\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"mul_decision\":\"{:?}\",\"addmul_decision\":\"{:?}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
+        "{{\"schema_version\":\"{}\",\"manifest_schema_version\":\"{}\",\"profile_schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"architecture_class\":\"{}\",\"profile_pack\":\"{}\",\"profile_fallback_reason\":\"{}\",\"rejected_profile_packs\":\"{}\",\"profile_catalog_count\":{},\"tuning_candidate_catalog_count\":{},\"active_profile_architecture_class\":\"{}\",\"target_arch\":\"{}\",\"target_os\":\"{}\",\"target_env\":\"{}\",\"target_endian\":\"{}\",\"target_pointer_width_bits\":{},\"tuning_corpus_id\":\"{}\",\"selected_tuning_candidate_id\":\"{}\",\"selected_tuning_tile_bytes\":{},\"selected_tuning_unroll\":{},\"selected_tuning_prefetch_distance\":{},\"selected_tuning_fusion_shape\":\"{}\",\"rejected_tuning_candidate_ids\":\"{}\",\"replay_pointer\":\"{}\",\"command_bundle\":\"{}\",\"mode\":\"{:?}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"addmul_min_lane\":{},\"max_lane_ratio\":{},\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"mul_decision\":\"{:?}\",\"mul_decision_reason\":\"{}\",\"addmul_decision\":\"{:?}\",\"addmul_decision_reason\":\"{}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
         TRACK_E_POLICY_SCHEMA_VERSION,
         manifest.schema_version,
         policy.profile_schema_version,
@@ -125,8 +126,10 @@ fn emit_track_e_policy_log(scenario: &Gf256BenchScenario) {
         scenario.len,
         scenario.len,
         scenario.len.saturating_mul(2),
-        mul_decision,
-        addmul_decision,
+        mul_detail.decision,
+        mul_detail.reason.as_str(),
+        addmul_detail.decision,
+        addmul_detail.reason.as_str(),
         TRACK_E_ARTIFACT_PATH,
         TRACK_E_REPRO_CMD,
     );
@@ -145,8 +148,8 @@ fn lane_ratio_string(len_a: usize, len_b: usize) -> String {
 
 fn emit_track_e_policy_probe_log(
     scenario: &Gf256DualPolicyScenario,
-    mul_decision: &str,
-    addmul_decision: &str,
+    mul_decision: asupersync::raptorq::gf256::DualKernelDecisionDetail,
+    addmul_decision: asupersync::raptorq::gf256::DualKernelDecisionDetail,
 ) {
     let manifest = gf256_profile_pack_manifest_snapshot();
     let policy = manifest.active_policy;
@@ -156,7 +159,7 @@ fn emit_track_e_policy_probe_log(
     let total = scenario.lane_a_len.saturating_add(scenario.lane_b_len);
     let lane_ratio = lane_ratio_string(scenario.lane_a_len, scenario.lane_b_len);
     eprintln!(
-        "{{\"schema_version\":\"{}\",\"manifest_schema_version\":\"{}\",\"profile_schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"architecture_class\":\"{}\",\"profile_pack\":\"{}\",\"profile_fallback_reason\":\"{}\",\"rejected_profile_packs\":\"{}\",\"profile_catalog_count\":{},\"tuning_candidate_catalog_count\":{},\"active_profile_architecture_class\":\"{}\",\"target_arch\":\"{}\",\"target_os\":\"{}\",\"target_env\":\"{}\",\"target_endian\":\"{}\",\"target_pointer_width_bits\":{},\"tuning_corpus_id\":\"{}\",\"selected_tuning_candidate_id\":\"{}\",\"selected_tuning_tile_bytes\":{},\"selected_tuning_unroll\":{},\"selected_tuning_prefetch_distance\":{},\"selected_tuning_fusion_shape\":\"{}\",\"rejected_tuning_candidate_ids\":\"{}\",\"replay_pointer\":\"{}\",\"command_bundle\":\"{}\",\"mode\":\"{:?}\",\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"lane_ratio\":\"{}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"addmul_min_lane\":{},\"max_lane_ratio\":{},\"mul_decision\":\"{}\",\"addmul_decision\":\"{}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
+        "{{\"schema_version\":\"{}\",\"manifest_schema_version\":\"{}\",\"profile_schema_version\":\"{}\",\"scenario_id\":\"{}\",\"seed\":{},\"kernel\":\"{:?}\",\"architecture_class\":\"{}\",\"profile_pack\":\"{}\",\"profile_fallback_reason\":\"{}\",\"rejected_profile_packs\":\"{}\",\"profile_catalog_count\":{},\"tuning_candidate_catalog_count\":{},\"active_profile_architecture_class\":\"{}\",\"target_arch\":\"{}\",\"target_os\":\"{}\",\"target_env\":\"{}\",\"target_endian\":\"{}\",\"target_pointer_width_bits\":{},\"tuning_corpus_id\":\"{}\",\"selected_tuning_candidate_id\":\"{}\",\"selected_tuning_tile_bytes\":{},\"selected_tuning_unroll\":{},\"selected_tuning_prefetch_distance\":{},\"selected_tuning_fusion_shape\":\"{}\",\"rejected_tuning_candidate_ids\":\"{}\",\"replay_pointer\":\"{}\",\"command_bundle\":\"{}\",\"mode\":\"{:?}\",\"lane_len_a\":{},\"lane_len_b\":{},\"total_len\":{},\"lane_ratio\":\"{}\",\"mul_window_min\":{},\"mul_window_max\":{},\"addmul_window_min\":{},\"addmul_window_max\":{},\"addmul_min_lane\":{},\"max_lane_ratio\":{},\"mul_decision\":\"{:?}\",\"mul_decision_reason\":\"{}\",\"addmul_decision\":\"{:?}\",\"addmul_decision_reason\":\"{}\",\"artifact_path\":\"{}\",\"repro_command\":\"{}\"}}",
         TRACK_E_POLICY_PROBE_SCHEMA_VERSION,
         manifest.schema_version,
         policy.profile_schema_version,
@@ -197,8 +200,10 @@ fn emit_track_e_policy_probe_log(
         policy.addmul_max_total,
         policy.addmul_min_lane,
         policy.max_lane_ratio,
-        mul_decision,
-        addmul_decision,
+        mul_decision.decision,
+        mul_decision.reason.as_str(),
+        addmul_decision.decision,
+        addmul_decision.reason.as_str(),
         TRACK_E_ARTIFACT_PATH,
         TRACK_E_POLICY_PROBE_REPRO_CMD,
     );
@@ -622,17 +627,9 @@ fn bench_gf256_dual_policy(c: &mut Criterion) {
         let c_val = Gf256::new(scenario.mul_const);
         validate_dual_policy_bit_exactness(&scenario, c_val);
         let mul_decision =
-            if dual_mul_kernel_decision(scenario.lane_a_len, scenario.lane_b_len).is_fused() {
-                "fused"
-            } else {
-                "sequential"
-            };
+            dual_mul_kernel_decision_detail(scenario.lane_a_len, scenario.lane_b_len);
         let addmul_decision =
-            if dual_addmul_kernel_decision(scenario.lane_a_len, scenario.lane_b_len).is_fused() {
-                "fused"
-            } else {
-                "sequential"
-            };
+            dual_addmul_kernel_decision_detail(scenario.lane_a_len, scenario.lane_b_len);
         emit_track_e_policy_probe_log(&scenario, mul_decision, addmul_decision);
 
         let label = format!(

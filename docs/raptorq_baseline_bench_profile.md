@@ -148,14 +148,16 @@ rch exec -- cargo bench --bench raptorq_benchmark -- gf256_dual_policy
 
 Probe log schema:
 
-- `schema_version = raptorq-track-e-dual-policy-probe-v1`
+- `schema_version = raptorq-track-e-dual-policy-probe-v2`
+- `manifest_schema_version`, `profile_schema_version`
 - `scenario_id`, `seed`
-- `kernel`, `mode`
+- `kernel`, `mode`, `profile_pack`, `profile_fallback_reason`
 - `lane_len_a`, `lane_len_b`, `total_len`, `lane_ratio`
 - `mul_window_min`, `mul_window_max`
-- `addmul_window_min`, `addmul_window_max`
+- `addmul_window_min`, `addmul_window_max`, `addmul_min_lane`
 - `max_lane_ratio`
-- `mul_decision`, `addmul_decision`
+- `mul_decision`, `mul_decision_reason`
+- `addmul_decision`, `addmul_decision_reason`
 - `artifact_path`, `repro_command`
 
 Coverage intent:
@@ -197,7 +199,7 @@ Observed host/profile snapshot in all three runs:
 - `kernel = Scalar`
 - `architecture_class = generic-scalar`
 - `profile_pack = scalar-conservative-v1`
-- `replay_pointer = replay:rq-e-gf256-profile-pack-v1`
+- `replay_pointer = replay:rq-e-gf256-profile-pack-v2`
 
 Track-E/E5 interpretation: this packet validates deterministic profile-pack policy wiring and mode forcing, but does not yet prove SIMD-profile-pack material uplift because the active kernel path was scalar on these runs.
 
