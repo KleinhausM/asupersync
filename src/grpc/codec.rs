@@ -605,9 +605,8 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unnecessary_wraps)]
     fn test_framed_codec_custom_decompressor_enforces_size() {
-        init_test("test_framed_codec_custom_decompressor_enforces_size");
-
         fn passthrough_compress(input: &[u8]) -> Result<Bytes, GrpcError> {
             Ok(Bytes::copy_from_slice(input))
         }
@@ -619,6 +618,8 @@ mod tests {
             }
             Ok(Bytes::from(expanded))
         }
+
+        init_test("test_framed_codec_custom_decompressor_enforces_size");
 
         let mut codec = FramedCodec::with_max_size(IdentityCodec, 8)
             .with_frame_codec(passthrough_compress, expanding_decompress);
