@@ -954,6 +954,15 @@ struct PgConnectionInner {
     closed: bool,
 }
 
+impl Drop for PgConnectionInner {
+    fn drop(&mut self) {
+        if !self.closed {
+            let _ = self.stream.shutdown(std::net::Shutdown::Both);
+            self.closed = true;
+        }
+    }
+}
+
 /// An async PostgreSQL connection.
 ///
 /// All operations integrate with [`Cx`] for cancellation and checkpointing.
@@ -1566,6 +1575,8 @@ impl PgConnection {
         // Send Terminate message
         let msg = [b'X', 0, 0, 0, 4]; // Type + length (4)
         let _ = self.write_all(&msg).await;
+
+        let _ = self.inner.stream.shutdown(std::net::Shutdown::Both);
 
         self.inner.closed = true;
         Ok(())
