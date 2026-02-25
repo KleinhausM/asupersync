@@ -1491,10 +1491,8 @@ impl LabRuntime {
             .and_then(|record| record.cx.clone());
         let _cx_guard = crate::cx::Cx::set_current(current_cx);
 
-                        // 4. Poll the task
-                        if self.steps < 100 {
-                            println!("Executing {:?} at step {} (rng_value={}, worker_hint={}, priority={})", task_id, self.steps, rng_value, worker_hint, priority);
-                        }        let result = if let Some(stored) = self.state.get_stored_future(task_id) {
+        // 4. Poll the task
+        let result = if let Some(stored) = self.state.get_stored_future(task_id) {
             stored.poll(&mut cx)
         } else {
             // Task lost (should not happen if consistent)
