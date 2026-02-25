@@ -17,6 +17,10 @@
 //! | `poll_budget` | 128 |
 //! | `root_region_limits` | `None` |
 //! | `observability` | `None` |
+//! | `enable_governor` | `false` |
+//! | `governor_interval` | `32` |
+//! | `enable_adaptive_cancel_streak` | `true` |
+//! | `adaptive_cancel_streak_epoch_steps` | `128` |
 
 use crate::observability::ObservabilityConfig;
 use crate::observability::metrics::{MetricsProvider, NoOpMetrics};
@@ -152,6 +156,16 @@ pub struct RuntimeConfig {
     /// Lower values increase responsiveness but add snapshot overhead.
     /// Only relevant when `enable_governor` is true.
     pub governor_interval: u32,
+    /// Enable adaptive cancel-lane streak selection.
+    ///
+    /// When enabled, workers use a deterministic Hedge-style online policy
+    /// to adapt the base cancel streak limit across epochs.
+    pub enable_adaptive_cancel_streak: bool,
+    /// Number of dispatches per adaptive cancel-streak epoch.
+    ///
+    /// Lower values react faster but add policy-update overhead.
+    /// Only relevant when `enable_adaptive_cancel_streak` is true.
+    pub adaptive_cancel_streak_epoch_steps: u32,
 }
 
 impl RuntimeConfig {
@@ -174,6 +188,9 @@ impl RuntimeConfig {
         }
         if self.governor_interval == 0 {
             self.governor_interval = 1;
+        }
+        if self.adaptive_cancel_streak_epoch_steps == 0 {
+            self.adaptive_cancel_streak_epoch_steps = 1;
         }
         if let Some(escalation) = self.leak_escalation.as_mut() {
             if escalation.threshold == 0 {
@@ -218,6 +235,8 @@ impl Default for RuntimeConfig {
             leak_escalation: None,
             enable_governor: false,
             governor_interval: 32,
+            enable_adaptive_cancel_streak: true,
+            adaptive_cancel_streak_epoch_steps: 128,
         }
     }
 }
@@ -264,6 +283,18 @@ mod tests {
             "cancel_lane_max_streak",
             16,
             config.cancel_lane_max_streak
+        );
+        crate::assert_with_log!(
+            config.enable_adaptive_cancel_streak,
+            "enable_adaptive_cancel_streak",
+            true,
+            config.enable_adaptive_cancel_streak
+        );
+        crate::assert_with_log!(
+            config.adaptive_cancel_streak_epoch_steps == 128,
+            "adaptive_cancel_streak_epoch_steps",
+            128,
+            config.adaptive_cancel_streak_epoch_steps
         );
         crate::assert_with_log!(
             config.logical_clock_mode.is_none(),
@@ -315,6 +346,8 @@ mod tests {
             logical_clock_mode: None,
             enable_governor: false,
             governor_interval: 0,
+            enable_adaptive_cancel_streak: false,
+            adaptive_cancel_streak_epoch_steps: 0,
         };
 
         config.normalize();
@@ -353,6 +386,18 @@ mod tests {
             "governor_interval",
             1,
             config.governor_interval
+        );
+        crate::assert_with_log!(
+            !config.enable_adaptive_cancel_streak,
+            "enable_adaptive_cancel_streak",
+            false,
+            config.enable_adaptive_cancel_streak
+        );
+        crate::assert_with_log!(
+            config.adaptive_cancel_streak_epoch_steps == 1,
+            "adaptive_cancel_streak_epoch_steps",
+            1,
+            config.adaptive_cancel_streak_epoch_steps
         );
         crate::assert_with_log!(
             config.thread_name_prefix == "asupersync-worker",
@@ -473,6 +518,8 @@ mod tests {
             logical_clock_mode: None,
             enable_governor: false,
             governor_interval: 7,
+            enable_adaptive_cancel_streak: true,
+            adaptive_cancel_streak_epoch_steps: 64,
         };
 
         config.normalize();
@@ -517,6 +564,18 @@ mod tests {
             "governor_interval",
             7,
             config.governor_interval
+        );
+        crate::assert_with_log!(
+            config.enable_adaptive_cancel_streak,
+            "enable_adaptive_cancel_streak",
+            true,
+            config.enable_adaptive_cancel_streak
+        );
+        crate::assert_with_log!(
+            config.adaptive_cancel_streak_epoch_steps == 64,
+            "adaptive_cancel_streak_epoch_steps",
+            64,
+            config.adaptive_cancel_streak_epoch_steps
         );
         crate::assert_with_log!(
             config.blocking.max_threads == 4,
@@ -654,6 +713,18 @@ mod tests {
             "default governor interval",
             32,
             config.governor_interval
+        );
+        crate::assert_with_log!(
+            config.enable_adaptive_cancel_streak,
+            "adaptive cancel streak enabled by default",
+            true,
+            config.enable_adaptive_cancel_streak
+        );
+        crate::assert_with_log!(
+            config.adaptive_cancel_streak_epoch_steps == 128,
+            "adaptive cancel streak default epoch",
+            128,
+            config.adaptive_cancel_streak_epoch_steps
         );
         crate::test_complete!("test_default_governor_settings");
     }

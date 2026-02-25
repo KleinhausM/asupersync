@@ -107,6 +107,8 @@
 //! | [`enable_parking`](RuntimeBuilder::enable_parking) | true | Park idle workers |
 //! | [`poll_budget`](RuntimeBuilder::poll_budget) | 128 | Polls before cooperative yield |
 //! | [`cancel_lane_max_streak`](RuntimeBuilder::cancel_lane_max_streak) | 16 | Max consecutive cancel dispatches |
+//! | [`enable_adaptive_cancel_streak`](RuntimeBuilder::enable_adaptive_cancel_streak) | true | Enable regret-bounded adaptive cancel streak |
+//! | [`adaptive_cancel_streak_epoch_steps`](RuntimeBuilder::adaptive_cancel_streak_epoch_steps) | 128 | Dispatches per adaptive epoch |
 //! | [`root_region_limits`](RuntimeBuilder::root_region_limits) | None | Admission limits for the root region |
 //! | [`observability`](RuntimeBuilder::observability) | None | Attach structured logging collectors |
 //!
@@ -297,6 +299,25 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn governor_interval(mut self, interval: u32) -> Self {
         self.config.governor_interval = interval;
+        self
+    }
+
+    /// Enable or disable adaptive cancel-streak scheduling.
+    ///
+    /// When enabled, workers run a deterministic no-regret online policy that
+    /// updates the base cancel streak limit across fixed-length epochs.
+    #[must_use]
+    pub fn enable_adaptive_cancel_streak(mut self, enable: bool) -> Self {
+        self.config.enable_adaptive_cancel_streak = enable;
+        self
+    }
+
+    /// Set the number of dispatches per adaptive cancel-streak epoch.
+    ///
+    /// Lower values react faster but add policy-update overhead.
+    #[must_use]
+    pub fn adaptive_cancel_streak_epoch_steps(mut self, steps: u32) -> Self {
+        self.config.adaptive_cancel_streak_epoch_steps = steps;
         self
     }
 
@@ -1003,6 +1024,10 @@ impl RuntimeInner {
         scheduler.set_steal_batch_size(config.steal_batch_size);
         scheduler.set_enable_parking(config.enable_parking);
         scheduler.set_global_queue_limit(config.global_queue_limit);
+        scheduler.set_adaptive_cancel_streak(
+            config.enable_adaptive_cancel_streak,
+            config.adaptive_cancel_streak_epoch_steps,
+        );
 
         let mut worker_threads: Vec<std::thread::JoinHandle<()>> = Vec::new();
         if config.worker_threads > 0 {

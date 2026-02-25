@@ -25,6 +25,8 @@
 //! | `ASUPERSYNC_CANCEL_LANE_MAX_STREAK` | `usize` | `cancel_lane_max_streak` |
 //! | `ASUPERSYNC_ENABLE_GOVERNOR` | `bool` | `enable_governor` |
 //! | `ASUPERSYNC_GOVERNOR_INTERVAL` | `u32` | `governor_interval` |
+//! | `ASUPERSYNC_ENABLE_ADAPTIVE_CANCEL_STREAK` | `bool` | `enable_adaptive_cancel_streak` |
+//! | `ASUPERSYNC_ADAPTIVE_CANCEL_EPOCH_STEPS` | `u32` | `adaptive_cancel_streak_epoch_steps` |
 
 use crate::runtime::config::RuntimeConfig;
 use crate::types::builder::BuildError;
@@ -53,6 +55,10 @@ pub const ENV_CANCEL_LANE_MAX_STREAK: &str = "ASUPERSYNC_CANCEL_LANE_MAX_STREAK"
 pub const ENV_ENABLE_GOVERNOR: &str = "ASUPERSYNC_ENABLE_GOVERNOR";
 /// Environment variable name for governor snapshot interval (scheduling steps).
 pub const ENV_GOVERNOR_INTERVAL: &str = "ASUPERSYNC_GOVERNOR_INTERVAL";
+/// Environment variable name for adaptive cancel-streak scheduling.
+pub const ENV_ENABLE_ADAPTIVE_CANCEL_STREAK: &str = "ASUPERSYNC_ENABLE_ADAPTIVE_CANCEL_STREAK";
+/// Environment variable name for adaptive cancel-streak epoch length.
+pub const ENV_ADAPTIVE_CANCEL_EPOCH_STEPS: &str = "ASUPERSYNC_ADAPTIVE_CANCEL_EPOCH_STEPS";
 
 /// Apply environment variable overrides to a [`RuntimeConfig`].
 ///
@@ -94,6 +100,13 @@ pub fn apply_env_overrides(config: &mut RuntimeConfig) -> Result<(), BuildError>
     }
     if let Some(val) = read_env(ENV_GOVERNOR_INTERVAL) {
         config.governor_interval = parse_u32(ENV_GOVERNOR_INTERVAL, &val)?;
+    }
+    if let Some(val) = read_env(ENV_ENABLE_ADAPTIVE_CANCEL_STREAK) {
+        config.enable_adaptive_cancel_streak = parse_bool(ENV_ENABLE_ADAPTIVE_CANCEL_STREAK, &val)?;
+    }
+    if let Some(val) = read_env(ENV_ADAPTIVE_CANCEL_EPOCH_STEPS) {
+        config.adaptive_cancel_streak_epoch_steps =
+            parse_u32(ENV_ADAPTIVE_CANCEL_EPOCH_STEPS, &val)?;
     }
     Ok(())
 }
@@ -145,6 +158,8 @@ fn parse_bool(var_name: &str, val: &str) -> Result<bool, BuildError> {
 /// steal_batch_size = 16
 /// poll_budget = 128
 /// cancel_lane_max_streak = 16
+/// enable_adaptive_cancel_streak = true
+/// adaptive_cancel_streak_epoch_steps = 128
 /// enable_parking = true
 /// thread_stack_size = 2097152
 /// thread_name_prefix = "myapp-worker"
@@ -178,6 +193,10 @@ pub struct SchedulerToml {
     pub poll_budget: Option<u32>,
     /// Maximum consecutive cancel-lane dispatches before yielding.
     pub cancel_lane_max_streak: Option<usize>,
+    /// Enable adaptive cancel-streak selection.
+    pub enable_adaptive_cancel_streak: Option<bool>,
+    /// Dispatches per adaptive cancel-streak epoch.
+    pub adaptive_cancel_streak_epoch_steps: Option<u32>,
     /// Enable parking for idle workers.
     pub enable_parking: Option<bool>,
     /// Stack size per worker thread in bytes.
@@ -215,6 +234,12 @@ pub fn apply_toml_config(config: &mut RuntimeConfig, toml: &RuntimeTomlConfig) {
     }
     if let Some(v) = toml.scheduler.cancel_lane_max_streak {
         config.cancel_lane_max_streak = v;
+    }
+    if let Some(v) = toml.scheduler.enable_adaptive_cancel_streak {
+        config.enable_adaptive_cancel_streak = v;
+    }
+    if let Some(v) = toml.scheduler.adaptive_cancel_streak_epoch_steps {
+        config.adaptive_cancel_streak_epoch_steps = v;
     }
     if let Some(v) = toml.scheduler.enable_parking {
         config.enable_parking = v;
@@ -323,6 +348,8 @@ mod tests {
             ENV_CANCEL_LANE_MAX_STREAK,
             ENV_ENABLE_GOVERNOR,
             ENV_GOVERNOR_INTERVAL,
+            ENV_ENABLE_ADAPTIVE_CANCEL_STREAK,
+            ENV_ADAPTIVE_CANCEL_EPOCH_STEPS,
         ] {
             // SAFETY: test helpers guard environment mutation with env_lock.
             unsafe { std::env::remove_var(var) };
@@ -487,6 +514,22 @@ mod tests {
     }
 
     #[test]
+    fn env_overrides_adaptive_cancel_settings() {
+        with_envs(
+            &[
+                (ENV_ENABLE_ADAPTIVE_CANCEL_STREAK, "true"),
+                (ENV_ADAPTIVE_CANCEL_EPOCH_STEPS, "77"),
+            ],
+            || {
+                let mut config = RuntimeConfig::default();
+                apply_env_overrides(&mut config).unwrap();
+                assert!(config.enable_adaptive_cancel_streak);
+                assert_eq!(config.adaptive_cancel_streak_epoch_steps, 77);
+            },
+        );
+    }
+
+    #[test]
     fn env_overrides_multiple() {
         with_envs(
             &[
@@ -543,6 +586,8 @@ mod tests {
             std::env::set_var(ENV_CANCEL_LANE_MAX_STREAK, "99");
             std::env::set_var(ENV_ENABLE_GOVERNOR, "true");
             std::env::set_var(ENV_GOVERNOR_INTERVAL, "123");
+            std::env::set_var(ENV_ENABLE_ADAPTIVE_CANCEL_STREAK, "true");
+            std::env::set_var(ENV_ADAPTIVE_CANCEL_EPOCH_STEPS, "77");
         }
 
         clean_env_locked();
@@ -550,6 +595,8 @@ mod tests {
         assert!(std::env::var(ENV_CANCEL_LANE_MAX_STREAK).is_err());
         assert!(std::env::var(ENV_ENABLE_GOVERNOR).is_err());
         assert!(std::env::var(ENV_GOVERNOR_INTERVAL).is_err());
+        assert!(std::env::var(ENV_ENABLE_ADAPTIVE_CANCEL_STREAK).is_err());
+        assert!(std::env::var(ENV_ADAPTIVE_CANCEL_EPOCH_STEPS).is_err());
     }
 
     #[test]
@@ -577,6 +624,8 @@ worker_threads = 8
 task_queue_depth = 4096
 steal_batch_size = 32
 poll_budget = 256
+enable_adaptive_cancel_streak = true
+adaptive_cancel_streak_epoch_steps = 96
 enable_parking = false
 thread_stack_size = 4194304
 thread_name_prefix = "myapp"
@@ -590,6 +639,11 @@ max_threads = 64
         assert_eq!(parsed.scheduler.task_queue_depth, Some(4096));
         assert_eq!(parsed.scheduler.steal_batch_size, Some(32));
         assert_eq!(parsed.scheduler.poll_budget, Some(256));
+        assert_eq!(parsed.scheduler.enable_adaptive_cancel_streak, Some(true));
+        assert_eq!(
+            parsed.scheduler.adaptive_cancel_streak_epoch_steps,
+            Some(96)
+        );
         assert_eq!(parsed.scheduler.enable_parking, Some(false));
         assert_eq!(parsed.scheduler.thread_stack_size, Some(4_194_304));
         assert_eq!(
@@ -644,6 +698,8 @@ worker_threads = "not_a_number"
 [scheduler]
 worker_threads = 16
 poll_budget = 512
+enable_adaptive_cancel_streak = true
+adaptive_cancel_streak_epoch_steps = 64
 
 [blocking]
 max_threads = 128
@@ -654,6 +710,8 @@ max_threads = 128
 
         assert_eq!(config.worker_threads, 16);
         assert_eq!(config.poll_budget, 512);
+        assert!(config.enable_adaptive_cancel_streak);
+        assert_eq!(config.adaptive_cancel_streak_epoch_steps, 64);
         assert_eq!(config.blocking.max_threads, 128);
         // Unset fields remain at defaults.
         assert_eq!(

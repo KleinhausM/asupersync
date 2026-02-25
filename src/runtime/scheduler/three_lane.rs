@@ -48,7 +48,10 @@
 //! the ready lane, so a worker whose ready lane is starved by cancel work
 //! will not have its ready tasks stolen.
 
-use crate::obligation::lyapunov::{LyapunovGovernor, SchedulingSuggestion, StateSnapshot};
+use crate::obligation::lyapunov::{
+    LyapunovGovernor, PotentialWeights, SchedulingSuggestion, StateSnapshot,
+};
+use crate::observability::spectral_health::{SpectralHealthMonitor, SpectralThresholds};
 use crate::runtime::io_driver::IoDriverHandle;
 use crate::runtime::scheduler::global_injector::GlobalInjector;
 use crate::runtime::scheduler::local_queue::{self, LocalQueue};
@@ -64,6 +67,7 @@ use crate::util::{CachePadded, DetHasher, DetRng};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Wake, Waker};
@@ -78,12 +82,206 @@ const DEFAULT_ENABLE_PARKING: bool = true;
 const LOCAL_SCHEDULER_BURST_BUDGET: usize = 2048;
 const LOCAL_SCHEDULER_MIN_CAPACITY: usize = 128;
 const LOCAL_SCHEDULER_MAX_CAPACITY: usize = 1024;
+const ADAPTIVE_STREAK_ARMS: [usize; 5] = [4, 8, 16, 32, 64];
+const ADAPTIVE_EXP3_GAMMA: f64 = 0.07;
+const ADAPTIVE_EPROCESS_LAMBDA: f64 = 0.5;
 // Keep a short spin/yield window for wakeup handoff while still reducing
 // runaway idle burn on noisy wake paths.
 const SPIN_LIMIT: u32 = 8;
 const YIELD_LIMIT: u32 = 2;
 
 type LocalReadyQueue = Mutex<Vec<TaskId>>;
+
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+fn usize_to_f64(value: usize) -> f64 {
+    value as f64
+}
+
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+fn u64_to_f64(value: u64) -> f64 {
+    value as f64
+}
+
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+fn normalized_entropy(probs: &[f64]) -> f64 {
+    if probs.len() <= 1 {
+        return 0.0;
+    }
+    let mut entropy = 0.0_f64;
+    for &p in probs {
+        if p > f64::EPSILON {
+            entropy -= p * p.ln();
+        }
+    }
+    let max_entropy = (probs.len() as f64).ln();
+    if max_entropy <= f64::EPSILON {
+        0.0
+    } else {
+        (entropy / max_entropy).clamp(0.0, 1.0)
+    }
+}
+
+/// Snapshot of scheduler-relevant state at an adaptive epoch boundary.
+#[derive(Debug, Clone, Copy)]
+struct AdaptiveEpochSnapshot {
+    potential: f64,
+    deadline_pressure: f64,
+    base_limit_exceedances: u64,
+    effective_limit_exceedances: u64,
+    fallback_cancel_dispatches: u64,
+}
+
+impl AdaptiveEpochSnapshot {
+    fn reward_against(self, end: Self, epoch_steps: u32) -> f64 {
+        // Reward lives in [0, 1]. It mixes Lyapunov decrease with fairness and
+        // deadline penalties so the online policy has a stable objective.
+        let denom = self.potential.abs() + 1.0;
+        let normalized_drop = ((self.potential - end.potential) / denom).clamp(-1.0, 1.0);
+        let deadline_penalty = ((end.deadline_pressure - self.deadline_pressure).max(0.0)
+            / (self.deadline_pressure.abs() + 1.0))
+            .clamp(0.0, 1.0);
+        let eps = f64::from(epoch_steps.max(1));
+        let base_exceedances = u64_to_f64(
+            end.base_limit_exceedances
+                .saturating_sub(self.base_limit_exceedances),
+        );
+        let effective_exceedances = u64_to_f64(
+            end.effective_limit_exceedances
+                .saturating_sub(self.effective_limit_exceedances),
+        );
+        let fairness_penalty = 2.0f64.mul_add(effective_exceedances, base_exceedances) / eps;
+        let fallback_penalty = u64_to_f64(
+            end.fallback_cancel_dispatches
+                .saturating_sub(self.fallback_cancel_dispatches),
+        ) / eps;
+
+        let reward = 0.5f64.mul_add(normalized_drop, 0.5);
+        let reward = (-0.2f64).mul_add(deadline_penalty, reward);
+        let reward = (-0.2f64).mul_add(fairness_penalty.clamp(0.0, 1.0), reward);
+        let reward = (-0.1f64).mul_add(fallback_penalty.clamp(0.0, 1.0), reward);
+
+        reward.clamp(0.0, 1.0)
+    }
+}
+
+/// Deterministic EXP3 policy for adaptive cancel-streak limits.
+#[derive(Debug, Clone)]
+struct AdaptiveCancelStreakPolicy {
+    arms: [usize; ADAPTIVE_STREAK_ARMS.len()],
+    weights: [f64; ADAPTIVE_STREAK_ARMS.len()],
+    probs: [f64; ADAPTIVE_STREAK_ARMS.len()],
+    pulls: [u64; ADAPTIVE_STREAK_ARMS.len()],
+    selected_arm: usize,
+    epoch_steps: u32,
+    steps_in_epoch: u32,
+    epoch_count: u64,
+    reward_ema: f64,
+    e_process_log: f64,
+    epoch_start: Option<AdaptiveEpochSnapshot>,
+}
+
+impl AdaptiveCancelStreakPolicy {
+    fn new(epoch_steps: u32) -> Self {
+        let arms = ADAPTIVE_STREAK_ARMS;
+        let mut policy = Self {
+            arms,
+            weights: [1.0; ADAPTIVE_STREAK_ARMS.len()],
+            probs: [0.0; ADAPTIVE_STREAK_ARMS.len()],
+            pulls: [0; ADAPTIVE_STREAK_ARMS.len()],
+            selected_arm: 2, // default arm == 16
+            epoch_steps: epoch_steps.max(1),
+            steps_in_epoch: 0,
+            epoch_count: 0,
+            reward_ema: 0.5,
+            e_process_log: 0.0,
+            epoch_start: None,
+        };
+        policy.refresh_probs();
+        policy
+    }
+
+    fn set_epoch_steps(&mut self, epoch_steps: u32) {
+        self.epoch_steps = epoch_steps.max(1);
+    }
+
+    fn current_limit(&self) -> usize {
+        self.arms[self.selected_arm]
+    }
+
+    fn refresh_probs(&mut self) {
+        let sum_w: f64 = self.weights.iter().sum();
+        let k = usize_to_f64(self.weights.len());
+        let uniform = 1.0 / k;
+        if sum_w <= f64::EPSILON {
+            self.probs.fill(uniform);
+            return;
+        }
+        for i in 0..self.weights.len() {
+            let exploit = self.weights[i] / sum_w;
+            self.probs[i] =
+                (1.0 - ADAPTIVE_EXP3_GAMMA).mul_add(exploit, ADAPTIVE_EXP3_GAMMA * uniform);
+        }
+        // Numeric cleanup: preserve exact simplex sum.
+        let sum_p: f64 = self.probs.iter().sum();
+        if sum_p > f64::EPSILON {
+            for p in &mut self.probs {
+                *p /= sum_p;
+            }
+        }
+    }
+
+    fn begin_epoch(&mut self, snapshot: AdaptiveEpochSnapshot) {
+        self.epoch_start = Some(snapshot);
+    }
+
+    fn on_dispatch(&mut self) -> bool {
+        self.steps_in_epoch = self.steps_in_epoch.saturating_add(1);
+        self.steps_in_epoch >= self.epoch_steps
+    }
+
+    fn sample_arm_from_u64(&self, sample: u64) -> usize {
+        #[allow(clippy::cast_precision_loss)]
+        let u = (sample as f64) / ((u64::MAX as f64) + 1.0);
+        let mut cdf = 0.0_f64;
+        for (idx, p) in self.probs.iter().enumerate() {
+            cdf += *p;
+            if u <= cdf || idx == self.probs.len() - 1 {
+                return idx;
+            }
+        }
+        self.probs.len() - 1
+    }
+
+    fn complete_epoch(&mut self, end: AdaptiveEpochSnapshot, sample: u64) -> Option<f64> {
+        let start = self.epoch_start?;
+        let reward = start.reward_against(end, self.epoch_steps);
+
+        let chosen = self.selected_arm;
+        let p = self.probs[chosen].clamp(1e-9, 1.0);
+        let k = usize_to_f64(self.weights.len());
+        let reward_hat = reward / p;
+        let exponent = (ADAPTIVE_EXP3_GAMMA * reward_hat / k).clamp(-20.0, 20.0);
+        self.weights[chosen] *= exponent.exp();
+
+        self.e_process_log += ADAPTIVE_EPROCESS_LAMBDA
+            .mul_add(reward - 0.5, -(ADAPTIVE_EPROCESS_LAMBDA.powi(2) / 8.0));
+        self.reward_ema = 0.9f64.mul_add(self.reward_ema, 0.1 * reward);
+        self.pulls[chosen] = self.pulls[chosen].saturating_add(1);
+        self.epoch_count = self.epoch_count.saturating_add(1);
+        self.steps_in_epoch = 0;
+        self.refresh_probs();
+        self.selected_arm = self.sample_arm_from_u64(sample);
+        self.epoch_start = Some(end);
+        Some(reward)
+    }
+
+    fn e_value(&self) -> f64 {
+        self.e_process_log.clamp(-60.0, 60.0).exp()
+    }
+}
 
 /// Coordination for waking workers.
 #[derive(Debug)]
@@ -93,10 +291,12 @@ pub(crate) struct WorkerCoordinator {
     /// Bitmask for power-of-two worker counts (replaces IDIV with AND).
     /// `None` when the count is zero or non-power-of-two.
     mask: Option<usize>,
+    /// I/O driver handle for waking the reactor.
+    io_driver: Option<IoDriverHandle>,
 }
 
 impl WorkerCoordinator {
-    pub(crate) fn new(parkers: Vec<Parker>) -> Self {
+    pub(crate) fn new(parkers: Vec<Parker>, io_driver: Option<IoDriverHandle>) -> Self {
         let count = parkers.len();
         let mask = if count > 0 && count.is_power_of_two() {
             Some(count - 1)
@@ -107,6 +307,7 @@ impl WorkerCoordinator {
             parkers,
             next_wake: CachePadded::new(AtomicUsize::new(0)),
             mask,
+            io_driver,
         }
     }
 
@@ -120,6 +321,9 @@ impl WorkerCoordinator {
         // Use bitmask (AND) when worker count is power-of-two to avoid IDIV.
         let slot = self.mask.map_or_else(|| idx % count, |mask| idx & mask);
         self.parkers[slot].unpark();
+        if let Some(io) = &self.io_driver {
+            let _ = io.wake();
+        }
     }
 
     #[inline]
@@ -127,12 +331,18 @@ impl WorkerCoordinator {
         if let Some(parker) = self.parkers.get(worker_id) {
             parker.unpark();
         }
+        if let Some(io) = &self.io_driver {
+            let _ = io.wake();
+        }
     }
 
     #[inline]
     pub(crate) fn wake_all(&self) {
         for parker in &self.parkers {
             parker.unpark();
+        }
+        if let Some(io) = &self.io_driver {
+            let _ = io.wake();
         }
     }
 }
@@ -255,6 +465,137 @@ pub(crate) fn remove_from_current_local_ready(task: TaskId) -> bool {
 #[inline]
 pub(crate) fn current_worker_id() -> Option<WorkerId> {
     CURRENT_WORKER_ID.with(|cell| *cell.borrow())
+}
+
+fn has_trapped_scc(adjacency: &[Vec<usize>]) -> bool {
+    struct Tarjan<'a> {
+        adjacency: &'a [Vec<usize>],
+        index: usize,
+        stack: Vec<usize>,
+        on_stack: Vec<bool>,
+        indices: Vec<Option<usize>>,
+        lowlink: Vec<usize>,
+        trapped: bool,
+    }
+
+    impl Tarjan<'_> {
+        fn strongconnect(&mut self, v: usize) {
+            self.indices[v] = Some(self.index);
+            self.lowlink[v] = self.index;
+            self.index += 1;
+            self.stack.push(v);
+            self.on_stack[v] = true;
+
+            for &w in &self.adjacency[v] {
+                if self.indices[w].is_none() {
+                    self.strongconnect(w);
+                    self.lowlink[v] = self.lowlink[v].min(self.lowlink[w]);
+                } else if self.on_stack[w] {
+                    self.lowlink[v] = self.lowlink[v].min(self.indices[w].unwrap_or(usize::MAX));
+                }
+            }
+
+            if self.lowlink[v] == self.indices[v].unwrap_or(usize::MAX) {
+                let mut component = Vec::new();
+                while let Some(w) = self.stack.pop() {
+                    self.on_stack[w] = false;
+                    component.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+
+                let cyclic = component.len() > 1
+                    || component
+                        .first()
+                        .is_some_and(|n| self.adjacency[*n].contains(n));
+                if cyclic {
+                    let component_set: BTreeSet<usize> = component.iter().copied().collect();
+                    let mut has_egress = false;
+                    for &u in &component {
+                        if self.adjacency[u].iter().any(|v| !component_set.contains(v)) {
+                            has_egress = true;
+                            break;
+                        }
+                    }
+                    if !has_egress {
+                        self.trapped = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let n = adjacency.len();
+    let mut tarjan = Tarjan {
+        adjacency,
+        index: 0,
+        stack: Vec::new(),
+        on_stack: vec![false; n],
+        indices: vec![None; n],
+        lowlink: vec![0; n],
+        trapped: false,
+    };
+
+    for v in 0..n {
+        if tarjan.indices[v].is_none() {
+            tarjan.strongconnect(v);
+            if tarjan.trapped {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn wait_graph_signals_from_state(state: &RuntimeState) -> (usize, Vec<(usize, usize)>, bool) {
+    let mut tasks: Vec<TaskId> = state
+        .tasks_iter()
+        .filter_map(|(_, task)| (!task.state.is_terminal()).then_some(task.id))
+        .collect();
+    tasks.sort();
+    let index_by_task: BTreeMap<TaskId, usize> = tasks
+        .iter()
+        .enumerate()
+        .map(|(idx, id)| (*id, idx))
+        .collect();
+    let mut undirected_edges: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut adjacency = vec![Vec::new(); tasks.len()];
+
+    for (_, task) in state.tasks_iter() {
+        if task.state.is_terminal() {
+            continue;
+        }
+        let Some(&task_idx) = index_by_task.get(&task.id) else {
+            continue;
+        };
+        for waiter in &task.waiters {
+            if let Some(&waiter_idx) = index_by_task.get(waiter) {
+                adjacency[waiter_idx].push(task_idx);
+                if waiter_idx == task_idx {
+                    continue;
+                }
+                undirected_edges.insert(if waiter_idx < task_idx {
+                    (waiter_idx, task_idx)
+                } else {
+                    (task_idx, waiter_idx)
+                });
+            }
+        }
+    }
+
+    for edges in &mut adjacency {
+        edges.sort_unstable();
+        edges.dedup();
+    }
+    let trapped_cycle = has_trapped_scc(&adjacency);
+
+    (
+        tasks.len(),
+        undirected_edges.into_iter().collect(),
+        trapped_cycle,
+    )
 }
 
 #[inline]
@@ -425,7 +766,7 @@ impl ThreeLaneScheduler {
         for _ in 0..worker_count {
             parkers.push(Parker::new());
         }
-        let coordinator = Arc::new(WorkerCoordinator::new(parkers.clone()));
+        let coordinator = Arc::new(WorkerCoordinator::new(parkers.clone(), io_driver.clone()));
 
         // Create fast queues (O(1) IntrusiveStack) for ready-lane fast path.
         // When a sharded TaskTable is available, back the queues directly
@@ -489,7 +830,11 @@ impl ThreeLaneScheduler {
                 cached_suggestion: SchedulingSuggestion::NoPreference,
                 steps_since_snapshot: 0,
                 governor_interval,
-                preemption_metrics: PreemptionMetrics::default(),
+                preemption_metrics: PreemptionMetrics {
+                    adaptive_current_limit: cancel_streak_limit,
+                    adaptive_e_value: 1.0,
+                    ..PreemptionMetrics::default()
+                },
                 evidence_sink: None,
                 decision_contract: if enable_governor {
                     Some(super::decision_contract::SchedulerDecisionContract::new())
@@ -503,6 +848,13 @@ impl ThreeLaneScheduler {
                 } else {
                     None
                 },
+                adaptive_cancel_policy: None,
+                spectral_monitor: if enable_governor {
+                    Some(SpectralHealthMonitor::new(SpectralThresholds::default()))
+                } else {
+                    None
+                },
+                decision_sequence: 0,
             });
         }
 
@@ -545,6 +897,34 @@ impl ThreeLaneScheduler {
         self.enable_parking = enable;
         for worker in &mut self.workers {
             worker.enable_parking = enable;
+        }
+    }
+
+    /// Enables/disables adaptive cancel-streak selection for all workers.
+    ///
+    /// When enabled, each worker uses a deterministic EXP3 policy over fixed
+    /// candidate streak limits and updates the arm at epoch boundaries.
+    pub fn set_adaptive_cancel_streak(&mut self, enable: bool, epoch_steps: u32) {
+        let epoch_steps = epoch_steps.max(1);
+        for worker in &mut self.workers {
+            if enable {
+                if let Some(policy) = worker.adaptive_cancel_policy.as_mut() {
+                    policy.set_epoch_steps(epoch_steps);
+                } else {
+                    worker.adaptive_cancel_policy =
+                        Some(AdaptiveCancelStreakPolicy::new(epoch_steps));
+                }
+                if let Some(policy) = worker.adaptive_cancel_policy.as_ref() {
+                    worker.preemption_metrics.adaptive_current_limit = policy.current_limit();
+                    worker.preemption_metrics.adaptive_reward_ema = policy.reward_ema;
+                    worker.preemption_metrics.adaptive_e_value = policy.e_value();
+                }
+            } else {
+                worker.adaptive_cancel_policy = None;
+                worker.preemption_metrics.adaptive_current_limit = worker.cancel_streak_limit;
+                worker.preemption_metrics.adaptive_reward_ema = 0.0;
+                worker.preemption_metrics.adaptive_e_value = 1.0;
+            }
         }
     }
 
@@ -963,6 +1343,12 @@ pub struct ThreeLaneWorker {
     decision_contract: Option<super::decision_contract::SchedulerDecisionContract>,
     /// Posterior maintained across governor invocations (bd-1e2if.6).
     decision_posterior: Option<franken_decision::Posterior>,
+    /// Optional adaptive policy for selecting the cancel streak limit.
+    adaptive_cancel_policy: Option<AdaptiveCancelStreakPolicy>,
+    /// Spectral monitor for topology-aware early warning and overrides.
+    spectral_monitor: Option<SpectralHealthMonitor>,
+    /// Monotone sequence for deterministic decision IDs and timestamps.
+    decision_sequence: u64,
 }
 
 /// Per-worker metrics tracking cancel-lane preemption and fairness.
@@ -993,6 +1379,14 @@ pub struct PreemptionMetrics {
     ///
     /// In unboosted mode this is `L`; with drain boosts this can be `2L`.
     pub max_effective_limit_observed: usize,
+    /// Number of completed adaptive policy epochs.
+    pub adaptive_epochs: u64,
+    /// Most recently selected adaptive base cancel streak limit.
+    pub adaptive_current_limit: usize,
+    /// Exponential moving average of adaptive rewards.
+    pub adaptive_reward_ema: f64,
+    /// Anytime-valid e-process value for the adaptive reward stream.
+    pub adaptive_e_value: f64,
 }
 
 /// Deterministic witness for cancel-lane fairness guarantees.
@@ -1023,6 +1417,10 @@ pub struct PreemptionFairnessCertificate {
     pub base_limit_exceedances: u64,
     /// Count of streak samples above effective limit.
     pub effective_limit_exceedances: u64,
+    /// Whether adaptive cancel-streak policy was active.
+    pub adaptive_enabled: bool,
+    /// Current adaptive base limit (if enabled), otherwise equals `base_limit`.
+    pub adaptive_current_limit: usize,
 }
 
 impl PreemptionFairnessCertificate {
@@ -1058,6 +1456,8 @@ impl PreemptionFairnessCertificate {
         self.fallback_cancel_dispatches.hash(&mut h);
         self.base_limit_exceedances.hash(&mut h);
         self.effective_limit_exceedances.hash(&mut h);
+        self.adaptive_enabled.hash(&mut h);
+        self.adaptive_current_limit.hash(&mut h);
         h.finish()
     }
 }
@@ -1103,14 +1503,18 @@ impl ThreeLaneWorker {
     /// This certificate is intended for invariant auditing and replay reports.
     #[must_use]
     pub fn preemption_fairness_certificate(&self) -> PreemptionFairnessCertificate {
+        let adaptive_current_limit = self.adaptive_cancel_policy.as_ref().map_or(
+            self.cancel_streak_limit,
+            AdaptiveCancelStreakPolicy::current_limit,
+        );
         let effective_limit = self
             .preemption_metrics
             .max_effective_limit_observed
-            .max(self.cancel_streak_limit)
+            .max(adaptive_current_limit)
             .max(1);
 
         PreemptionFairnessCertificate {
-            base_limit: self.cancel_streak_limit,
+            base_limit: adaptive_current_limit,
             effective_limit,
             observed_max_cancel_streak: self.preemption_metrics.max_cancel_streak,
             cancel_dispatches: self.preemption_metrics.cancel_dispatches,
@@ -1120,6 +1524,8 @@ impl ThreeLaneWorker {
             fallback_cancel_dispatches: self.preemption_metrics.fallback_cancel_dispatches,
             base_limit_exceedances: self.preemption_metrics.base_limit_exceedances,
             effective_limit_exceedances: self.preemption_metrics.effective_limit_exceedances,
+            adaptive_enabled: self.adaptive_cancel_policy.is_some(),
+            adaptive_current_limit,
         }
     }
 
@@ -1133,6 +1539,92 @@ impl ThreeLaneWorker {
     #[cfg(any(test, feature = "test-internals"))]
     pub fn set_cached_suggestion(&mut self, suggestion: SchedulingSuggestion) {
         self.cached_suggestion = suggestion;
+    }
+
+    #[inline]
+    fn current_base_cancel_limit(&self) -> usize {
+        self.adaptive_cancel_policy
+            .as_ref()
+            .map_or(
+                self.cancel_streak_limit,
+                AdaptiveCancelStreakPolicy::current_limit,
+            )
+            .max(1)
+    }
+
+    fn potential_from_snapshot(snapshot: &StateSnapshot) -> f64 {
+        let w = PotentialWeights::default();
+        let task_component = w.w_tasks * f64::from(snapshot.live_tasks);
+        #[allow(clippy::cast_precision_loss)]
+        let obligation_age_seconds = snapshot.obligation_age_sum_ns as f64 / 1_000_000_000.0;
+        let obligation_component = w.w_obligation_age * obligation_age_seconds;
+        let region_component = w.w_draining_regions * f64::from(snapshot.draining_regions);
+        let deadline_component = w.w_deadline_pressure * snapshot.deadline_pressure;
+        task_component + obligation_component + region_component + deadline_component
+    }
+
+    fn capture_adaptive_snapshot(&self) -> AdaptiveEpochSnapshot {
+        let snapshot = {
+            let state = self.state.lock().expect("lock poisoned");
+            StateSnapshot::from_runtime_state(&state)
+        };
+        AdaptiveEpochSnapshot {
+            potential: Self::potential_from_snapshot(&snapshot),
+            deadline_pressure: snapshot.deadline_pressure,
+            base_limit_exceedances: self.preemption_metrics.base_limit_exceedances,
+            effective_limit_exceedances: self.preemption_metrics.effective_limit_exceedances,
+            fallback_cancel_dispatches: self.preemption_metrics.fallback_cancel_dispatches,
+        }
+    }
+
+    fn ensure_adaptive_epoch_started(&mut self) {
+        if self
+            .adaptive_cancel_policy
+            .as_ref()
+            .is_none_or(|p| p.epoch_start.is_some())
+        {
+            return;
+        }
+        let snap = self.capture_adaptive_snapshot();
+        if let Some(policy) = self.adaptive_cancel_policy.as_mut() {
+            policy.begin_epoch(snap);
+        }
+    }
+
+    fn adaptive_on_dispatch(&mut self) {
+        self.ensure_adaptive_epoch_started();
+        let should_close_epoch = self
+            .adaptive_cancel_policy
+            .as_mut()
+            .is_some_and(AdaptiveCancelStreakPolicy::on_dispatch);
+        if !should_close_epoch {
+            return;
+        }
+
+        let snapshot_end = self.capture_adaptive_snapshot();
+        let sample = self.rng.next_u64();
+        let reward = self
+            .adaptive_cancel_policy
+            .as_mut()
+            .and_then(|p| p.complete_epoch(snapshot_end, sample));
+
+        if let Some(policy) = self.adaptive_cancel_policy.as_ref() {
+            self.preemption_metrics.adaptive_epochs = policy.epoch_count;
+            self.preemption_metrics.adaptive_current_limit = policy.current_limit();
+            self.preemption_metrics.adaptive_reward_ema = policy.reward_ema;
+            self.preemption_metrics.adaptive_e_value = policy.e_value();
+        }
+
+        if let Some(_reward) = reward {
+            trace!(
+                worker_id = self.id,
+                reward = _reward,
+                adaptive_limit = self.preemption_metrics.adaptive_current_limit,
+                adaptive_epochs = self.preemption_metrics.adaptive_epochs,
+                adaptive_e_value = self.preemption_metrics.adaptive_e_value,
+                "adaptive cancel-streak epoch update"
+            );
+        }
     }
 
     fn drive_io_phase(&self) -> bool {
@@ -1171,8 +1663,21 @@ impl ThreeLaneWorker {
             Some(Duration::ZERO)
         };
 
-        io.try_turn_with(io_timeout, |_, _| {})
-            .is_ok_and(|n| n > 0 || io_timeout != Some(Duration::ZERO))
+        match io.try_turn_with(io_timeout, |_, _| {}) {
+            Ok(Some(n)) => {
+                // We successfully polled the reactor (we are the leader for this turn).
+                // If n > 0, we woke some tasks.
+                // If n == 0 but we had a non-zero timeout, we spent time blocking,
+                // so we should continue the loop to check queues again.
+                // If n == 0 and timeout was ZERO, we did a quick poll and found nothing.
+                n > 0 || io_timeout != Some(Duration::ZERO)
+            }
+            Ok(None) | Err(_) => {
+                // Another thread is already polling (we are a follower).
+                // Do not busy loop. Proceed to backoff/park logic.
+                false
+            }
+        }
     }
 
     /// Runs the worker scheduling loop.
@@ -1328,21 +1833,26 @@ impl ThreeLaneWorker {
     /// Phases 1–2 cover the hot path (most dispatches come from global or fast
     /// queues).  Phase 3 replaces 3 lock acquisitions with 1 for the local
     /// PriorityScheduler fallback.
+    #[allow(clippy::too_many_lines)]
     pub fn next_task(&mut self) -> Option<TaskId> {
         // PHASE 0: Process expired timers (fires wakers, which may inject tasks).
         if let Some(timer) = &self.timer_driver {
             let _ = timer.process_timers();
         }
 
+        self.ensure_adaptive_epoch_started();
+
         // Consult the governor for scheduling suggestion (amortised).
         let suggestion = self.governor_suggest();
+        let base_limit = self.current_base_cancel_limit();
+        self.preemption_metrics.adaptive_current_limit = base_limit;
 
         // Cancel eligibility: effective limit depends on suggestion.
         let effective_limit = match suggestion {
             SchedulingSuggestion::DrainObligations | SchedulingSuggestion::DrainRegions => {
-                self.cancel_streak_limit.saturating_mul(2)
+                base_limit.saturating_mul(2)
             }
-            _ => self.cancel_streak_limit,
+            _ => base_limit,
         };
         if effective_limit > self.preemption_metrics.max_effective_limit_observed {
             self.preemption_metrics.max_effective_limit_observed = effective_limit;
@@ -1364,13 +1874,13 @@ impl ThreeLaneWorker {
             if let Some(tt) = self.global.pop_timed_if_due(now) {
                 self.cancel_streak = 0;
                 self.preemption_metrics.timed_dispatches += 1;
-                return Some(tt.task);
+                return Some(self.finish_dispatch(tt.task));
             }
             if check_cancel {
                 if let Some(pt) = self.global.pop_cancel() {
                     self.cancel_streak += 1;
-                    self.record_cancel_dispatch(effective_limit);
-                    return Some(pt.task);
+                    self.record_cancel_dispatch(base_limit, effective_limit);
+                    return Some(self.finish_dispatch(pt.task));
                 }
             }
         } else {
@@ -1378,14 +1888,14 @@ impl ThreeLaneWorker {
             if check_cancel {
                 if let Some(pt) = self.global.pop_cancel() {
                     self.cancel_streak += 1;
-                    self.record_cancel_dispatch(effective_limit);
-                    return Some(pt.task);
+                    self.record_cancel_dispatch(base_limit, effective_limit);
+                    return Some(self.finish_dispatch(pt.task));
                 }
             }
             if let Some(tt) = self.global.pop_timed_if_due(now) {
                 self.cancel_streak = 0;
                 self.preemption_metrics.timed_dispatches += 1;
-                return Some(tt.task);
+                return Some(self.finish_dispatch(tt.task));
             }
         }
 
@@ -1395,19 +1905,21 @@ impl ThreeLaneWorker {
         if let Some(task) = self.fast_queue.pop() {
             self.cancel_streak = 0;
             self.preemption_metrics.ready_dispatches += 1;
-            return Some(task);
+            return Some(self.finish_dispatch(task));
         }
-        if let Some(mut queue) = self.local_ready.try_lock() {
-            if let Some(task) = queue.pop() {
-                self.cancel_streak = 0;
-                self.preemption_metrics.ready_dispatches += 1;
-                return Some(task);
-            }
+        let local_ready_task = self
+            .local_ready
+            .try_lock()
+            .and_then(|mut queue| queue.pop());
+        if let Some(task) = local_ready_task {
+            self.cancel_streak = 0;
+            self.preemption_metrics.ready_dispatches += 1;
+            return Some(self.finish_dispatch(task));
         }
         if let Some(pt) = self.global.pop_ready() {
             self.cancel_streak = 0;
             self.preemption_metrics.ready_dispatches += 1;
-            return Some(pt.task);
+            return Some(self.finish_dispatch(pt.task));
         }
 
         // ── PHASE 3: Single local PriorityScheduler lock ─────────────
@@ -1418,7 +1930,7 @@ impl ThreeLaneWorker {
             match lane {
                 0 => {
                     self.cancel_streak = self.cancel_streak.saturating_add(1);
-                    self.record_cancel_dispatch(effective_limit);
+                    self.record_cancel_dispatch(base_limit, effective_limit);
                 }
                 1 => {
                     self.cancel_streak = 0;
@@ -1429,14 +1941,14 @@ impl ThreeLaneWorker {
                     self.preemption_metrics.ready_dispatches += 1;
                 }
             }
-            return Some(task);
+            return Some(self.finish_dispatch(task));
         }
 
         // ── PHASE 4: Steal from other workers ────────────────────────
         if let Some(task) = self.try_steal() {
             self.cancel_streak = 0;
             self.preemption_metrics.ready_dispatches += 1;
-            return Some(task);
+            return Some(self.finish_dispatch(task));
         }
 
         // ── PHASE 5: Fallback cancel ─────────────────────────────────
@@ -1448,8 +1960,8 @@ impl ThreeLaneWorker {
             if let Some(task) = self.try_cancel_work() {
                 self.preemption_metrics.fallback_cancel_dispatches += 1;
                 self.cancel_streak = 1;
-                self.record_cancel_dispatch(effective_limit);
-                return Some(task);
+                self.record_cancel_dispatch(base_limit, effective_limit);
+                return Some(self.finish_dispatch(task));
             }
             self.cancel_streak = 0;
         }
@@ -1459,12 +1971,12 @@ impl ThreeLaneWorker {
 
     /// Record a cancel dispatch and update max streak metric.
     #[inline]
-    fn record_cancel_dispatch(&mut self, effective_limit: usize) {
+    fn record_cancel_dispatch(&mut self, base_limit: usize, effective_limit: usize) {
         self.preemption_metrics.cancel_dispatches += 1;
         if self.cancel_streak > self.preemption_metrics.max_cancel_streak {
             self.preemption_metrics.max_cancel_streak = self.cancel_streak;
         }
-        if self.cancel_streak > self.cancel_streak_limit {
+        if self.cancel_streak > base_limit {
             self.preemption_metrics.base_limit_exceedances += 1;
         }
         if self.cancel_streak > effective_limit {
@@ -1472,9 +1984,16 @@ impl ThreeLaneWorker {
         }
     }
 
+    #[inline]
+    fn finish_dispatch(&mut self, task: TaskId) -> TaskId {
+        self.adaptive_on_dispatch();
+        task
+    }
+
     /// Consult the governor for a scheduling suggestion, taking a fresh
     /// snapshot every `governor_interval` steps. When the governor is
     /// disabled, always returns `NoPreference`.
+    #[allow(clippy::too_many_lines)]
     fn governor_suggest(&mut self) -> SchedulingSuggestion {
         let Some(governor) = &self.governor else {
             return SchedulingSuggestion::NoPreference;
@@ -1487,10 +2006,15 @@ impl ThreeLaneWorker {
         self.steps_since_snapshot = 0;
 
         // Take a snapshot under the state lock (bounded work, no allocs).
-        let snapshot = {
-            let state = self.state.lock().expect("lock poisoned");
-            StateSnapshot::from_runtime_state(&state)
-        };
+        let state = self.state.lock().expect("lock poisoned");
+        let snapshot = StateSnapshot::from_runtime_state(&state);
+        let (wait_graph_nodes, wait_graph_edges, trapped_wait_cycle) =
+            if self.spectral_monitor.is_some() {
+                wait_graph_signals_from_state(&state)
+            } else {
+                (0, Vec::new(), false)
+            };
+        drop(state);
 
         // Enrich with local queue depth.
         let queue_depth = self.local.lock().len();
@@ -1498,9 +2022,15 @@ impl ThreeLaneWorker {
         let snapshot = snapshot.with_ready_queue_depth(queue_depth as u32);
 
         let lyapunov_suggestion = governor.suggest(&snapshot);
+        let mut spectral_report = None;
+        if let Some(monitor) = self.spectral_monitor.as_mut() {
+            if wait_graph_nodes > 1 {
+                spectral_report = Some(monitor.analyze(wait_graph_nodes, &wait_graph_edges));
+            }
+        }
 
         // Apply decision contract modulation if available (bd-1e2if.6).
-        let suggestion = if let (Some(contract), Some(posterior)) =
+        let mut suggestion = if let (Some(contract), Some(posterior)) =
             (&self.decision_contract, &mut self.decision_posterior)
         {
             // Update posterior from snapshot observations.
@@ -1510,16 +2040,68 @@ impl ThreeLaneWorker {
                 );
             posterior.bayesian_update(&likelihoods);
 
+            let probs = posterior.probs();
+            #[allow(clippy::cast_precision_loss)]
+            let uniform = 1.0 / probs.len().max(1) as f64;
+            let max_prob = probs
+                .iter()
+                .copied()
+                .fold(0.0_f64, f64::max)
+                .clamp(0.0, 1.0);
+            let concentration = if probs.len() > 1 {
+                ((max_prob - uniform) / (1.0 - uniform)).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let entropy = normalized_entropy(probs);
+
+            // Split-conformal one-step hit score from spectral monitor, when available.
+            let conformal_hit = spectral_report
+                .as_ref()
+                .and_then(|report| {
+                    report.bifurcation.as_ref().and_then(|bw| {
+                        bw.conformal_lower_bound_next
+                            .map(|lb| u8::from(report.decomposition.fiedler_value >= lb))
+                    })
+                })
+                .map_or(1.0, f64::from);
+            let uncertainty_penalty = 0.35f64.mul_add(1.0 - concentration, 0.15 * entropy);
+            let conformal_penalty = 0.5 * (1.0 - conformal_hit);
+            let calibration_score = (1.0 - uncertainty_penalty - conformal_penalty).clamp(0.0, 1.0);
+
+            // Proxy posterior uncertainty width from concentration + entropy.
+            let ci_width = 0.5f64
+                .mul_add(1.0 - concentration, 0.25 * entropy)
+                .clamp(0.0, 1.0);
+            let adaptive_e = self.preemption_metrics.adaptive_e_value.max(1.0);
+            let spectral_e = spectral_report
+                .as_ref()
+                .and_then(|report| {
+                    report
+                        .bifurcation
+                        .as_ref()
+                        .map(|bw| bw.deterioration_e_value.max(1.0))
+                })
+                .unwrap_or(1.0);
+            let e_process = adaptive_e.max(spectral_e);
+
             // Evaluate the contract.
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as u64);
+            let seq = self.decision_sequence;
+            self.decision_sequence = self.decision_sequence.saturating_add(1);
+            let now_ms = self
+                .timer_driver
+                .as_ref()
+                .map_or(seq, |td| td.now().as_millis());
+            let random_bits = ((self.id as u128) << 64) | u128::from(seq);
             let ctx = franken_decision::EvalContext {
-                calibration_score: 1.0, // TODO(bd-1e2if.6): wire conformal coverage
-                e_process: 0.0,
-                ci_width: 0.0,
-                decision_id: franken_kernel::DecisionId::from_parts(now_ms, self.id as u128),
-                trace_id: franken_kernel::TraceId::from_parts(now_ms, self.id as u128),
+                calibration_score,
+                e_process,
+                ci_width,
+                decision_id: franken_kernel::DecisionId::from_parts(now_ms, random_bits),
+                trace_id: franken_kernel::TraceId::from_parts(
+                    now_ms,
+                    random_bits ^ 0xA5A5_A5A5_A5A5_A5A5_A5A5,
+                ),
                 ts_unix_ms: now_ms,
             };
             let outcome = franken_decision::evaluate(contract, posterior, &ctx);
@@ -1542,6 +2124,32 @@ impl ThreeLaneWorker {
         } else {
             lyapunov_suggestion
         };
+
+        // Spectral topology override: this makes structural health influence the
+        // live scheduling path when governor mode is enabled.
+        if let Some(report) = spectral_report.as_ref() {
+            let override_suggestion = match report.classification {
+                crate::observability::spectral_health::HealthClassification::Deadlocked {
+                    ..
+                }
+                | crate::observability::spectral_health::HealthClassification::Critical {
+                    approaching_disconnect: true,
+                    ..
+                } => Some(SchedulingSuggestion::DrainObligations),
+                _ => report.bifurcation.as_ref().and_then(|bw| {
+                    (bw.trend
+                        == crate::observability::spectral_health::SpectralTrend::Deteriorating
+                        && (bw.confidence >= 0.6 || bw.deterioration_e_value >= 2.0))
+                        .then_some(SchedulingSuggestion::DrainRegions)
+                }),
+            };
+            if let Some(ovr) = override_suggestion {
+                suggestion = ovr;
+            }
+        }
+        if trapped_wait_cycle {
+            suggestion = SchedulingSuggestion::DrainObligations;
+        }
 
         // Emit simple evidence when the scheduling suggestion changes.
         if suggestion != self.cached_suggestion {
@@ -3111,7 +3719,7 @@ mod tests {
         let wake_state = Arc::new(crate::record::task::TaskWakeState::new());
         let global = Arc::new(GlobalInjector::new());
         let parker = Parker::new();
-        let coordinator = Arc::new(WorkerCoordinator::new(vec![parker]));
+        let coordinator = Arc::new(WorkerCoordinator::new(vec![parker], None));
         let waker = Waker::from(Arc::new(CancelLaneWaker {
             task_id,
             default_priority: Budget::INFINITE.priority,
@@ -3484,7 +4092,7 @@ mod tests {
         let wake_state = Arc::new(crate::record::task::TaskWakeState::new());
         let global = Arc::new(GlobalInjector::new());
         let parker = Parker::new();
-        let coordinator = Arc::new(WorkerCoordinator::new(vec![parker]));
+        let coordinator = Arc::new(WorkerCoordinator::new(vec![parker], None));
 
         // Create multiple wakers (simulating cloned wakers)
         let wakers: Vec<_> = (0..10)
@@ -3887,7 +4495,7 @@ mod tests {
     fn test_coordinator_non_power_of_two_round_robin() {
         // 3 workers is non-power-of-two, so mask = None and modulo is used.
         let parkers: Vec<Parker> = (0..3).map(|_| Parker::new()).collect();
-        let coordinator = WorkerCoordinator::new(parkers);
+        let coordinator = WorkerCoordinator::new(parkers, None);
 
         // mask should be None for non-power-of-two count
         assert!(
@@ -3915,7 +4523,7 @@ mod tests {
     fn test_coordinator_power_of_two_uses_bitmask() {
         // 4 workers is power-of-two, so mask = Some(3)
         let parkers: Vec<Parker> = (0..4).map(|_| Parker::new()).collect();
-        let coordinator = WorkerCoordinator::new(parkers);
+        let coordinator = WorkerCoordinator::new(parkers, None);
 
         assert_eq!(
             coordinator.mask,
@@ -3934,7 +4542,7 @@ mod tests {
     #[test]
     fn test_coordinator_single_worker() {
         let parkers = vec![Parker::new()];
-        let coordinator = WorkerCoordinator::new(parkers);
+        let coordinator = WorkerCoordinator::new(parkers, None);
 
         // 1 is power-of-two, mask = Some(0) → always wakes slot 0
         assert_eq!(coordinator.mask, Some(0));
@@ -3947,7 +4555,7 @@ mod tests {
 
     #[test]
     fn test_coordinator_zero_workers_is_noop() {
-        let coordinator = WorkerCoordinator::new(vec![]);
+        let coordinator = WorkerCoordinator::new(vec![], None);
         assert!(coordinator.mask.is_none());
         // wake_one should be a no-op, not panic
         coordinator.wake_one();

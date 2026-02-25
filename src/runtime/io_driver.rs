@@ -535,6 +535,14 @@ impl IoDriverHandle {
         driver.stats().clone()
     }
 
+    /// Wakes the underlying reactor from a blocking poll.
+    ///
+    /// This may be called from any thread and is used by scheduler wake
+    /// coordination to nudge the I/O leader after cross-thread task injection.
+    pub fn wake(&self) -> io::Result<()> {
+        self.reactor.wake()
+    }
+
     /// Processes pending I/O events with a per-event callback.
     ///
     /// This implementation releases the driver lock during the blocking poll,
@@ -584,10 +592,14 @@ impl IoDriverHandle {
 
     /// Attempts to process pending I/O events exclusively.
     ///
-    /// Returns `Ok(0)` immediately if another thread is already polling the reactor.
+    /// Returns `Ok(None)` immediately if another thread is already polling the reactor.
     /// This prevents multiple threads from blocking in the reactor and consuming empty
     /// event buffers, maintaining the Leader/Follower pattern efficiently.
-    pub fn try_turn_with<F>(&self, timeout: Option<Duration>, on_event: F) -> io::Result<usize>
+    pub fn try_turn_with<F>(
+        &self,
+        timeout: Option<Duration>,
+        on_event: F,
+    ) -> io::Result<Option<usize>>
     where
         F: FnMut(&Event, Option<Interest>),
     {
@@ -598,10 +610,6 @@ impl IoDriverHandle {
         {
             let events = {
                 let mut driver = self.inner.lock();
-                if driver.is_empty() {
-                    self.is_polling.store(false, Ordering::Release);
-                    return Ok(0);
-                }
                 driver.take_events()
             };
 
@@ -629,9 +637,9 @@ impl IoDriverHandle {
                 waker.wake();
             }
 
-            poll_result
+            poll_result.map(Some)
         } else {
-            Ok(0)
+            Ok(None)
         }
     }
 

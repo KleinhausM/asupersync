@@ -5133,16 +5133,12 @@ mod tests {
 
         // Region should transition through Finalizing → Closed
         // (sync finalizers are run inline by advance_region_state)
-        let region_state = state
-            .regions
-            .get(root.arena_index())
-            .expect("region")
-            .state();
+        let region_state_removed = state.regions.get(root.arena_index()).is_none();
         crate::assert_with_log!(
-            region_state == crate::record::region::RegionState::Closed,
-            "region closed after all tasks complete",
-            crate::record::region::RegionState::Closed,
-            region_state
+            region_state_removed,
+            "region closed after all tasks complete (removed)",
+            true,
+            region_state_removed
         );
         let finalizer_ran = finalizer_called.load(Ordering::SeqCst);
         crate::assert_with_log!(
@@ -5202,16 +5198,12 @@ mod tests {
         let _ = state.task_completed(child_task);
 
         // Child region should close since it has no tasks and no children
-        let child_state = state
-            .regions
-            .get(child.arena_index())
-            .expect("child region")
-            .state();
+        let child_state_removed = state.regions.get(child.arena_index()).is_none();
         crate::assert_with_log!(
-            child_state == crate::record::region::RegionState::Closed,
-            "child closed after its task completes",
-            crate::record::region::RegionState::Closed,
-            child_state
+            child_state_removed,
+            "child closed after its task completes (removed)",
+            true,
+            child_state_removed
         );
 
         // Root should still be open (has root_task)
@@ -5239,16 +5231,12 @@ mod tests {
             .complete(Outcome::Cancelled(CancelReason::user("stop")));
         let _ = state.task_completed(root_task);
 
-        let root_state = state
-            .regions
-            .get(root.arena_index())
-            .expect("root region")
-            .state();
+        let root_state_removed = state.regions.get(root.arena_index()).is_none();
         crate::assert_with_log!(
-            root_state == crate::record::region::RegionState::Closed,
-            "root closed after all tasks and children done",
-            crate::record::region::RegionState::Closed,
-            root_state
+            root_state_removed,
+            "root closed after all tasks and children done (removed)",
+            true,
+            root_state_removed
         );
         crate::test_complete!("cancel_drain_finalize_nested_regions");
     }
@@ -5356,16 +5344,12 @@ mod tests {
         let _ = state.task_completed(task);
 
         // Region should close cleanly (no leaks, obligation was already committed)
-        let region_state = state
-            .regions
-            .get(region.arena_index())
-            .expect("region")
-            .state();
+        let region_state_removed = state.regions.get(region.arena_index()).is_none();
         crate::assert_with_log!(
-            region_state == crate::record::region::RegionState::Closed,
-            "region closed cleanly",
-            crate::record::region::RegionState::Closed,
-            region_state
+            region_state_removed,
+            "region closed cleanly (removed)",
+            true,
+            region_state_removed
         );
 
         // Verify trace has commit event
@@ -5510,16 +5494,12 @@ mod tests {
         );
 
         // Region should be fully closed
-        let region_state = state
-            .regions
-            .get(region.arena_index())
-            .expect("region")
-            .state();
+        let region_state_removed = state.regions.get(region.arena_index()).is_none();
         crate::assert_with_log!(
-            region_state == crate::record::region::RegionState::Closed,
-            "region closed",
-            crate::record::region::RegionState::Closed,
-            region_state
+            region_state_removed,
+            "region closed (removed)",
+            true,
+            region_state_removed
         );
         crate::test_complete!("cancel_with_obligations_full_trace_lifecycle");
     }
@@ -5586,16 +5566,12 @@ mod tests {
         );
 
         // Region should be closed
-        let region_state = state
-            .regions
-            .get(region.arena_index())
-            .expect("region")
-            .state();
+        let region_state_removed = state.regions.get(region.arena_index()).is_none();
         crate::assert_with_log!(
-            region_state == crate::record::region::RegionState::Closed,
-            "region closed",
-            crate::record::region::RegionState::Closed,
-            region_state
+            region_state_removed,
+            "region closed (removed)",
+            true,
+            region_state_removed
         );
         crate::test_complete!("mixed_obligation_resolution_during_cancel");
     }
@@ -5635,23 +5611,19 @@ mod tests {
         let _ = state.task_completed(task);
 
         // Both should now be closed (advance_region_state drives the cascade)
-        let child_state = state
-            .regions
-            .get(child.arena_index())
-            .expect("child")
-            .state();
+        let child_state_removed = state.regions.get(child.arena_index()).is_none();
         crate::assert_with_log!(
-            child_state == crate::record::region::RegionState::Closed,
-            "child closed",
-            crate::record::region::RegionState::Closed,
-            child_state
+            child_state_removed,
+            "child closed (removed)",
+            true,
+            child_state_removed
         );
-        let root_state = state.regions.get(root.arena_index()).expect("root").state();
+        let root_state_removed = state.regions.get(root.arena_index()).is_none();
         crate::assert_with_log!(
-            root_state == crate::record::region::RegionState::Closed,
-            "root closed",
-            crate::record::region::RegionState::Closed,
-            root_state
+            root_state_removed,
+            "root closed (removed)",
+            true,
+            root_state_removed
         );
         crate::test_complete!("region_quiescence_requires_no_live_children_or_tasks");
     }
@@ -5755,16 +5727,12 @@ mod tests {
             state.pending_obligation_count()
         );
 
-        let region_state = state
-            .regions
-            .get(region.arena_index())
-            .expect("region")
-            .state();
+        let region_state_removed = state.regions.get(region.arena_index()).is_none();
         crate::assert_with_log!(
-            region_state == crate::record::region::RegionState::Closed,
-            "region closed",
-            crate::record::region::RegionState::Closed,
-            region_state
+            region_state_removed,
+            "region closed (removed)",
+            true,
+            region_state_removed
         );
 
         // Verify trace events
@@ -6233,16 +6201,12 @@ mod tests {
         let _ = state.task_completed(gc_task);
 
         // Grandchild region should close (no tasks, no children, no pending obligations)
-        let gc_state = state
-            .regions
-            .get(grandchild.arena_index())
-            .expect("grandchild")
-            .state();
+        let gc_state_removed = state.regions.get(grandchild.arena_index()).is_none();
         crate::assert_with_log!(
-            gc_state == RegionState::Closed,
-            "grandchild closed",
-            RegionState::Closed,
-            gc_state
+            gc_state_removed,
+            "grandchild closed (removed)",
+            true,
+            gc_state_removed
         );
 
         // Child still open (child_task alive with child_obl)
@@ -6270,16 +6234,12 @@ mod tests {
         let _ = state.task_completed(child_task);
 
         // Child region should close (no tasks, no children, obligation committed)
-        let child_state_final = state
-            .regions
-            .get(child.arena_index())
-            .expect("child")
-            .state();
+        let child_state_final_removed = state.regions.get(child.arena_index()).is_none();
         crate::assert_with_log!(
-            child_state_final == RegionState::Closed,
-            "child closed after task + obligation resolved",
-            RegionState::Closed,
-            child_state_final
+            child_state_final_removed,
+            "child closed after task + obligation resolved (removed)",
+            true,
+            child_state_final_removed
         );
 
         // Root still open (root_task alive with root_obl)
@@ -6300,12 +6260,12 @@ mod tests {
         let _ = state.task_completed(root_task);
 
         // Root should close (all children closed, all tasks done, obligations resolved)
-        let root_state_final = state.regions.get(root.arena_index()).expect("root").state();
+        let root_state_final_removed = state.regions.get(root.arena_index()).is_none();
         crate::assert_with_log!(
-            root_state_final == RegionState::Closed,
-            "root closed after full cascade",
-            RegionState::Closed,
-            root_state_final
+            root_state_final_removed,
+            "root closed after full cascade (removed)",
+            true,
+            root_state_final_removed
         );
 
         // All obligations resolved
@@ -6381,16 +6341,12 @@ mod tests {
         let _ = state.task_completed(task);
 
         // Region should advance through Finalizing → Closed
-        let region_state = state
-            .regions
-            .get(region.arena_index())
-            .expect("region")
-            .state();
+        let region_state_removed = state.regions.get(region.arena_index()).is_none();
         crate::assert_with_log!(
-            region_state == RegionState::Closed,
-            "region closed after obligation resolve + task complete",
-            RegionState::Closed,
-            region_state
+            region_state_removed,
+            "region closed after obligation resolve + task complete (removed)",
+            true,
+            region_state_removed
         );
 
         crate::assert_with_log!(
@@ -6536,16 +6492,12 @@ mod tests {
 
         // Region should still close because mark_obligation_leaked resolves
         // the obligation from the region's perspective.
-        let region_state = state
-            .regions
-            .get(region.arena_index())
-            .expect("region")
-            .state();
+        let region_state_removed = state.regions.get(region.arena_index()).is_none();
         crate::assert_with_log!(
-            region_state == RegionState::Closed,
-            "region closed despite leaked obligations (Silent mode)",
-            RegionState::Closed,
-            region_state
+            region_state_removed,
+            "region closed despite leaked obligations (Silent mode) (removed)",
+            true,
+            region_state_removed
         );
 
         // Verify leak trace events were emitted
@@ -6670,16 +6622,12 @@ mod tests {
             .complete(Outcome::Ok(()));
         let _ = state.task_completed(gc_task);
 
-        let gc_state = state
-            .regions
-            .get(grandchild.arena_index())
-            .expect("grandchild")
-            .state();
+        let gc_state_removed = state.regions.get(grandchild.arena_index()).is_none();
         crate::assert_with_log!(
-            gc_state == RegionState::Closed,
-            "grandchild closed after task done",
-            RegionState::Closed,
-            gc_state
+            gc_state_removed,
+            "grandchild closed after task done (removed)",
+            true,
+            gc_state_removed
         );
 
         // Child should NOT be closed yet (child_task still alive)
@@ -6703,16 +6651,12 @@ mod tests {
             .complete(Outcome::Ok(()));
         let _ = state.task_completed(child_task);
 
-        let child_state_final = state
-            .regions
-            .get(child.arena_index())
-            .expect("child")
-            .state();
+        let child_state_final_removed = state.regions.get(child.arena_index()).is_none();
         crate::assert_with_log!(
-            child_state_final == RegionState::Closed,
-            "child closed after task done + grandchild closed",
-            RegionState::Closed,
-            child_state_final
+            child_state_final_removed,
+            "child closed after task done + grandchild closed (removed)",
+            true,
+            child_state_final_removed
         );
 
         // Root should NOT be closed yet (root_task still alive)
@@ -6732,12 +6676,12 @@ mod tests {
             .complete(Outcome::Ok(()));
         let _ = state.task_completed(root_task);
 
-        let root_state_final = state.regions.get(root.arena_index()).expect("root").state();
+        let root_state_final_removed = state.regions.get(root.arena_index()).is_none();
         crate::assert_with_log!(
-            root_state_final == RegionState::Closed,
-            "root closed after full cascade",
-            RegionState::Closed,
-            root_state_final
+            root_state_final_removed,
+            "root closed after full cascade (removed)",
+            true,
+            root_state_final_removed
         );
         crate::test_complete!("bottom_up_cascade_without_cancel");
     }
@@ -6785,16 +6729,12 @@ mod tests {
         let _ = state.task_completed(task);
 
         // In Recover mode, leaked obligations are aborted, so region should close
-        let region_state = state
-            .regions
-            .get(region.arena_index())
-            .expect("region")
-            .state();
+        let region_state_removed = state.regions.get(region.arena_index()).is_none();
         crate::assert_with_log!(
-            region_state == RegionState::Closed,
-            "region closed in Recover mode",
-            RegionState::Closed,
-            region_state
+            region_state_removed,
+            "region closed in Recover mode (removed)",
+            true,
+            region_state_removed
         );
 
         // Verify abort events (Recover mode aborts, doesn't just mark leaked)
@@ -6864,16 +6804,12 @@ mod tests {
         let _ = state.task_completed(child_task2);
 
         // Child should be closed
-        let child_state = state
-            .regions
-            .get(child.arena_index())
-            .expect("child")
-            .state();
+        let child_state_removed = state.regions.get(child.arena_index()).is_none();
         crate::assert_with_log!(
-            child_state == RegionState::Closed,
-            "child closed",
-            RegionState::Closed,
-            child_state
+            child_state_removed,
+            "child closed (removed)",
+            true,
+            child_state_removed
         );
 
         // Complete root task
@@ -6884,12 +6820,12 @@ mod tests {
         let _ = state.task_completed(root_task);
 
         // Root should close (all children closed, tasks done, obligations resolved)
-        let root_state = state.regions.get(root.arena_index()).expect("root").state();
+        let root_state_removed = state.regions.get(root.arena_index()).is_none();
         crate::assert_with_log!(
-            root_state == RegionState::Closed,
-            "root closed after mixed resolution",
-            RegionState::Closed,
-            root_state
+            root_state_removed,
+            "root closed after mixed resolution (removed)",
+            true,
+            root_state_removed
         );
 
         // No pending obligations

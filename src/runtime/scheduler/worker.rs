@@ -248,6 +248,7 @@ impl Worker {
                     let finalizers = state.drain_ready_async_finalizers();
                     let mut local_waiters = self.worker.scratch_local.take();
                     let mut global_waiters = self.worker.scratch_global.take();
+                    let mut foreign_wakers = Vec::new();
                     local_waiters.clear();
                     global_waiters.clear();
 
@@ -260,15 +261,19 @@ impl Worker {
                                             local_waiters.push(waiter);
                                         }
                                         Some(_worker_id) => {
-                                            error!(
-                                                ?waiter,
-                                                worker_id = _worker_id,
-                                                current_worker = self.worker.id,
-                                                "panic path: pinned local waiter has invalid worker id, wake skipped"
-                                            );
-                                            // We consumed `notify()` above; clear the wake bit so a
-                                            // future valid wake is not permanently dedup-suppressed.
                                             record.wake_state.clear();
+                                            if let Some((waker, _)) = &record.cached_waker {
+                                                foreign_wakers.push(waker.clone());
+                                            } else {
+                                                error!(
+                                                    ?waiter,
+                                                    worker_id = _worker_id,
+                                                    current_worker = self.worker.id,
+                                                    "panic path: pinned local waiter has invalid worker id, wake skipped"
+                                                );
+                                                // We consumed `notify()` above; clear the wake bit so a
+                                                // future valid wake is not permanently dedup-suppressed.
+                                            }
                                         }
                                         None => local_waiters.push(waiter),
                                     }
@@ -279,6 +284,10 @@ impl Worker {
                         }
                     }
                     drop(state);
+
+                    for waker in foreign_wakers {
+                        waker.wake();
+                    }
 
                     for waiter in &global_waiters {
                         self.worker.global.push(*waiter);
@@ -425,6 +434,7 @@ impl Worker {
                 let finalizers = state.drain_ready_async_finalizers();
                 let mut local_waiters = self.scratch_local.take();
                 let mut global_waiters = self.scratch_global.take();
+                let mut foreign_wakers = Vec::new();
                 local_waiters.clear();
                 global_waiters.clear();
 
@@ -437,15 +447,19 @@ impl Worker {
                                         local_waiters.push(waiter);
                                     }
                                     Some(_worker_id) => {
-                                        error!(
-                                            ?waiter,
-                                            worker_id = _worker_id,
-                                            current_worker = self.id,
-                                            "ready path: pinned local waiter has foreign worker id, wake skipped"
-                                        );
-                                        // We consumed `notify()` above; clear the wake bit so a
-                                        // future valid wake is not permanently dedup-suppressed.
                                         record.wake_state.clear();
+                                        if let Some((waker, _)) = &record.cached_waker {
+                                            foreign_wakers.push(waker.clone());
+                                        } else {
+                                            error!(
+                                                ?waiter,
+                                                worker_id = _worker_id,
+                                                current_worker = self.id,
+                                                "ready path: pinned local waiter has foreign worker id, wake skipped"
+                                            );
+                                            // We consumed `notify()` above; clear the wake bit so a
+                                            // future valid wake is not permanently dedup-suppressed.
+                                        }
                                     }
                                     None => local_waiters.push(waiter),
                                 }
@@ -456,6 +470,10 @@ impl Worker {
                     }
                 }
                 drop(state);
+
+                for waker in foreign_wakers {
+                    waker.wake();
+                }
 
                 for waiter in &global_waiters {
                     self.global.push(*waiter);
