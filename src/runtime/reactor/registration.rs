@@ -376,7 +376,7 @@ mod tests {
     impl ReactorHandle for PanickingReactor {
         fn deregister_by_token(&self, _token: Token) -> io::Result<()> {
             self.deregister_count.fetch_add(1, Ordering::SeqCst);
-            panic!("injected deregister panic")
+            unreachable!("injected deregister panic")
         }
 
         fn modify_interest(&self, _token: Token, _interest: Interest) -> io::Result<()> {

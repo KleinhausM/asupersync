@@ -192,7 +192,7 @@ impl TokenSlab {
                 } => (*generation, *next_free),
                 Entry::Occupied { .. } => {
                     // This should never happen if our invariants are maintained.
-                    panic!("free list pointed to occupied entry");
+                    unreachable!("free list pointed to occupied entry");
                 }
             };
 

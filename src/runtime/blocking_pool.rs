@@ -1085,7 +1085,7 @@ mod tests {
     #[test]
     fn test_task_panic_caught() {
         let pool = BlockingPool::new(2, 4);
-        let _ = pool.spawn(|| panic!("intentional panic"));
+        let _ = pool.spawn(|| unreachable!("intentional panic"));
 
         thread::sleep(Duration::from_millis(50));
 
@@ -1284,7 +1284,7 @@ mod tests {
 
         // Submit a task that panics.
         let panic_handle = pool.spawn(|| {
-            panic!("intentional test panic");
+            unreachable!("intentional test panic");
         });
 
         // Submit a follow-up task to verify the worker thread survived.
@@ -1397,7 +1397,7 @@ mod tests {
         let pool = BlockingPool::new(2, 4);
 
         // Submit a panicking task
-        let h1 = pool.spawn(|| panic!("audit panic"));
+        let h1 = pool.spawn(|| unreachable!("audit panic"));
         h1.wait();
 
         // busy_threads must return to 0 after the panic

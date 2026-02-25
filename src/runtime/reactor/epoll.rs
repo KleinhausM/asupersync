@@ -479,10 +479,10 @@ mod tests {
                 continue;
             }
 
-            panic!("failed to duplicate fd {fd} at/above {candidate_min}: {err}");
+            unreachable!("failed to duplicate fd {fd} at/above {candidate_min}: {err}");
         }
 
-        panic!(
+        unreachable!(
             "failed to duplicate fd {fd}: invalid min fd for all candidates starting at {min_fd}"
         );
     }
@@ -878,7 +878,7 @@ mod tests {
                 Ok(0) => break,
                 Ok(_) => {}
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                Err(err) => panic!("drain failed: {err}"),
+                Err(err) => unreachable!("drain failed: {err}"),
             }
         }
 

@@ -254,7 +254,7 @@ impl RegionHeap {
         // Try to reuse a free slot
         let heap_index = if let Some(free_index) = self.free_head {
             let Some(slot) = self.slots.get_mut(free_index as usize) else {
-                panic!("free list pointed outside heap slots");
+                unreachable!("free list pointed outside heap slots");
             };
             match slot {
                 HeapSlot::Vacant {
@@ -274,7 +274,7 @@ impl RegionHeap {
                         type_id,
                     }
                 }
-                HeapSlot::Occupied(_) => panic!("free list pointed to occupied slot"),
+                HeapSlot::Occupied(_) => unreachable!("free list pointed to occupied slot"),
             }
         } else {
             // Allocate new slot

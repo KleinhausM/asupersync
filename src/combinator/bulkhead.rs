@@ -257,8 +257,9 @@ impl Bulkhead {
             self.policy.max_concurrent - self.available_permits.load(Ordering::Acquire);
 
         let total_executed = self.total_executed_atomic.load(Ordering::Relaxed);
-        let avg_queue_wait_ms = if total_executed > 0 {
-            self.total_wait_time_ms.load(Ordering::Relaxed) as f64 / total_executed as f64
+        let total_queued = self.total_queued_atomic.load(Ordering::Relaxed);
+        let avg_queue_wait_ms = if total_queued > 0 {
+            self.total_wait_time_ms.load(Ordering::Relaxed) as f64 / total_queued as f64
         } else {
             0.0
         };
@@ -298,6 +299,7 @@ impl Bulkhead {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
+                    self.total_executed_atomic.fetch_add(1, Ordering::Relaxed);
                     return Some(BulkheadPermit {
                         bulkhead: self,
                         weight,
@@ -563,10 +565,7 @@ impl Bulkhead {
         drop(permit);
 
         match result {
-            Ok(inner_result) => {
-                self.total_executed_atomic.fetch_add(1, Ordering::Relaxed);
-                inner_result.map_err(BulkheadError::Inner)
-            }
+            Ok(inner_result) => inner_result.map_err(BulkheadError::Inner),
             Err(panic_payload) => std::panic::resume_unwind(panic_payload),
         }
     }

@@ -4314,7 +4314,10 @@ mod tests {
                     reason.any_truncated()
                 );
             }
-            other => panic!("expected CancelRequested, got {other:?}"),
+            other => {
+                crate::tracing_compat::error!("expected CancelRequested, got {:?}", other);
+                unreachable!("expected CancelRequested");
+            }
         }
 
         crate::test_complete!("cancel_request_respects_chain_depth_limit");
@@ -4373,7 +4376,10 @@ mod tests {
                     reason.any_truncated()
                 );
             }
-            other => panic!("expected CancelRequested, got {other:?}"),
+            other => {
+                crate::tracing_compat::error!("expected CancelRequested, got {:?}", other);
+                unreachable!("expected CancelRequested");
+            }
         }
 
         crate::test_complete!("cancel_request_truncates_large_tree");

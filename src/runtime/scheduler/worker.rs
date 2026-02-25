@@ -971,7 +971,7 @@ mod tests {
         let poison_parker = parker.clone();
         let _ = thread::spawn(move || {
             let _guard = poison_parker.inner.mutex.lock().unwrap();
-            panic!("intentionally poison parker mutex");
+            unreachable!("intentionally poison parker mutex");
         })
         .join();
 
@@ -987,7 +987,7 @@ mod tests {
         let poison_parker = parker.clone();
         let _ = thread::spawn(move || {
             let _guard = poison_parker.inner.mutex.lock().unwrap();
-            panic!("intentionally poison parker mutex");
+            unreachable!("intentionally poison parker mutex");
         })
         .join();
 
@@ -1208,7 +1208,7 @@ mod tests {
             guard.store_spawned_task(
                 panicking_task,
                 StoredTask::new_with_id(
-                    async move { panic!("worker execute panic regression") },
+                    async move { unreachable!("worker execute panic regression") },
                     panicking_task,
                 ),
             );
@@ -1360,7 +1360,7 @@ mod tests {
             guard.store_spawned_task(
                 panicking_task,
                 StoredTask::new_with_id(
-                    async move { panic!("foreign waiter panic wake regression") },
+                    async move { unreachable!("foreign waiter panic wake regression") },
                     panicking_task,
                 ),
             );

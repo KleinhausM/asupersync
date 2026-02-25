@@ -287,6 +287,12 @@ impl WheelLevel {
         self.resolution_ns.saturating_mul(SLOTS_PER_LEVEL as u64)
     }
 
+    /// Checks if a slot is occupied in the bitmap.
+    #[inline]
+    fn is_occupied(&self, slot: usize) -> bool {
+        (self.occupied[slot / 64] & (1u64 << (slot % 64))) != 0
+    }
+
     /// Marks a slot as occupied in the bitmap.
     #[inline]
     fn set_occupied(&mut self, slot: usize) {
@@ -519,35 +525,39 @@ impl TimerWheel {
             if entry.deadline <= current {
                 return Some(current);
             }
-            min_deadline =
-                Some(min_deadline.map_or(entry.deadline, |current| current.min(entry.deadline)));
+            min_deadline = Some(min_deadline.map_or(entry.deadline, |c| c.min(entry.deadline)));
         }
 
-        for level in &self.levels {
-            for word_idx in 0..BITMAP_WORDS {
-                let mut word = level.occupied[word_idx];
-                while word != 0 {
-                    let bit_idx = word.trailing_zeros();
-                    let slot_idx = word_idx * 64 + bit_idx as usize;
-                    for entry in &level.slots[slot_idx] {
+        if min_deadline.is_some() {
+            return min_deadline;
+        }
+
+        for (idx, level) in self.levels.iter().enumerate() {
+            let shift = idx * 8;
+            let level_tick = self.current_tick >> shift;
+            let current_slot = (level_tick as usize) % SLOTS_PER_LEVEL;
+
+            for i in 0..SLOTS_PER_LEVEL {
+                let slot = (current_slot + i) % SLOTS_PER_LEVEL;
+                if level.is_occupied(slot) {
+                    for entry in &level.slots[slot] {
                         if !self.is_live(entry) {
                             continue;
                         }
-                        min_deadline = Some(
-                            min_deadline
-                                .map_or(entry.deadline, |current| current.min(entry.deadline)),
-                        );
+                        min_deadline =
+                            Some(min_deadline.map_or(entry.deadline, |c| c.min(entry.deadline)));
                     }
-                    word &= !(1u64 << bit_idx);
+
+                    if min_deadline.is_some() {
+                        return min_deadline;
+                    }
                 }
             }
         }
 
         while let Some(entry) = self.overflow.peek() {
             if self.is_live(&entry.entry) {
-                min_deadline = Some(
-                    min_deadline.map_or(entry.deadline, |current| current.min(entry.deadline)),
-                );
+                min_deadline = Some(min_deadline.map_or(entry.deadline, |c| c.min(entry.deadline)));
                 break;
             }
             let _ = self.overflow.pop();
@@ -754,39 +764,47 @@ impl TimerWheel {
     }
 
     fn promote_coalescing_window_entries(&mut self, boundary: Time, ready: &mut Vec<TimerEntry>) {
-        for level in &mut self.levels {
-            for word_idx in 0..BITMAP_WORDS {
-                let mut word = level.occupied[word_idx];
-                while word != 0 {
-                    let bit_idx = word.trailing_zeros();
-                    let slot_idx = word_idx * 64 + bit_idx as usize;
+        let boundary_ns = boundary.as_nanos();
+        for (idx, level) in self.levels.iter_mut().enumerate() {
+            let shift = idx * 8;
+            let level_tick_current = self.current_tick >> shift;
+            let level_tick_boundary = boundary_ns / level.resolution_ns;
 
-                    let slot_empty = {
-                        let slot = &mut level.slots[slot_idx];
-                        let mut i = 0;
-                        while i < slot.len() {
-                            if slot[i].deadline <= boundary {
-                                ready.push(slot.swap_remove(i));
-                            } else {
-                                i += 1;
-                            }
+            if level_tick_boundary < level_tick_current {
+                continue;
+            }
+
+            let current_slot = (level_tick_current as usize) % SLOTS_PER_LEVEL;
+            let mut diff = (level_tick_boundary - level_tick_current) as usize;
+            if diff >= SLOTS_PER_LEVEL {
+                diff = SLOTS_PER_LEVEL - 1;
+            }
+
+            for i in 0..=diff {
+                let slot_idx = (current_slot + i) % SLOTS_PER_LEVEL;
+                if !level.is_occupied(slot_idx) {
+                    continue;
+                }
+
+                let slot_empty = {
+                    let slot = &mut level.slots[slot_idx];
+                    let mut j = 0;
+                    while j < slot.len() {
+                        if slot[j].deadline <= boundary {
+                            ready.push(slot.swap_remove(j));
+                        } else {
+                            j += 1;
                         }
-                        slot.is_empty()
-                    };
-                    if slot_empty {
-                        level.clear_occupied(slot_idx);
                     }
-
-                    word &= !(1u64 << bit_idx);
+                    slot.is_empty()
+                };
+                if slot_empty {
+                    level.clear_occupied(slot_idx);
                 }
             }
         }
 
-        while self
-            .overflow
-            .peek()
-            .is_some_and(|entry| entry.deadline <= boundary)
-        {
+        while self.overflow.peek().is_some_and(|e| e.deadline <= boundary) {
             let entry = self.overflow.pop().expect("peeked entry missing");
             ready.push(entry.entry);
         }
@@ -843,7 +861,7 @@ impl TimerWheel {
             }
 
             let should_fire = if coalescing_enabled {
-                let coalesced = coalesced_time.expect("coalesced time present");
+                let coalesced = coalesced_time.unwrap_or(now);
                 ready[i].deadline <= coalesced
             } else {
                 ready[i].deadline <= now

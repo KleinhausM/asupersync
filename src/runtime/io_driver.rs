@@ -167,19 +167,19 @@ impl IoDriver {
         waker: Waker,
     ) -> io::Result<Token> {
         // Allocate a slot in the waker slab
-        let slab_token = self.wakers.insert(waker);
-        let token = Token::new(slab_token.to_usize());
+        let slab_key = self.wakers.insert(waker);
+        let io_token = Token::new(slab_key.to_usize());
 
         // Register with the reactor
-        match self.reactor.register(source, token, interest) {
+        match self.reactor.register(source, io_token, interest) {
             Ok(()) => {
-                self.interests.insert(token, interest);
+                self.interests.insert(io_token, interest);
                 self.stats.registrations += 1;
-                Ok(token)
+                Ok(io_token)
             }
             Err(e) => {
                 // Remove waker on registration failure
-                let _ = self.wakers.remove(slab_token);
+                let _ = self.wakers.remove(slab_key);
                 Err(e)
             }
         }
@@ -191,9 +191,9 @@ impl IoDriver {
     /// registering with the reactor. Use [`register()`](Self::register)
     /// for the full registration flow.
     pub fn register_waker(&mut self, waker: Waker) -> Token {
-        let slab_token = self.wakers.insert(waker);
+        let slab_key = self.wakers.insert(waker);
         self.stats.registrations += 1;
-        Token::new(slab_token.to_usize())
+        Token::new(slab_key.to_usize())
     }
 
     /// Updates the waker for an existing registration.
@@ -204,8 +204,8 @@ impl IoDriver {
     ///
     /// `true` if the waker was updated, `false` if the token was not found.
     pub fn update_waker(&mut self, token: Token, waker: Waker) -> bool {
-        let slab_token = SlabToken::from_usize(token.0);
-        self.wakers.get_mut(slab_token).is_some_and(|slot| {
+        let slab_key = SlabToken::from_usize(token.0);
+        self.wakers.get_mut(slab_key).is_some_and(|slot| {
             if !slot.will_wake(&waker) {
                 *slot = waker;
             }
@@ -238,8 +238,8 @@ impl IoDriver {
         // Always clean up local state to prevent memory leaks,
         // even if the reactor fails (e.g. EBADF).
         // ABA is prevented by generation counters in SlabToken.
-        let slab_token = SlabToken::from_usize(token.0);
-        if self.wakers.remove(slab_token).is_some() {
+        let slab_key = SlabToken::from_usize(token.0);
+        if self.wakers.remove(slab_key).is_some() {
             self.stats.deregistrations += 1;
         }
         self.interests.remove(&token);
@@ -256,8 +256,8 @@ impl IoDriver {
     /// This is a lower-level method that only removes the waker without
     /// deregistering from the reactor.
     pub fn deregister_waker(&mut self, token: Token) {
-        let slab_token = SlabToken::from_usize(token.0);
-        if self.wakers.remove(slab_token).is_some() {
+        let slab_key = SlabToken::from_usize(token.0);
+        if self.wakers.remove(slab_key).is_some() {
             self.stats.deregistrations += 1;
         }
     }
@@ -307,8 +307,8 @@ impl IoDriver {
         for event in &self.events {
             let interest = self.interests.get(&event.token).copied();
             on_event(event, interest);
-            let slab_token = SlabToken::from_usize(event.token.0);
-            if let Some(waker) = self.wakers.get(slab_token) {
+            let slab_key = SlabToken::from_usize(event.token.0);
+            if let Some(waker) = self.wakers.get(slab_key) {
                 wakers.push(waker.clone());
                 self.stats.wakers_dispatched += 1;
             } else {
@@ -341,8 +341,8 @@ impl IoDriver {
         for event in &events {
             let interest = self.interests.get(&event.token).copied();
             on_event(event, interest);
-            let slab_token = SlabToken::from_usize(event.token.0);
-            if let Some(waker) = self.wakers.get(slab_token) {
+            let slab_key = SlabToken::from_usize(event.token.0);
+            if let Some(waker) = self.wakers.get(slab_key) {
                 wakers.push(waker.clone());
                 self.stats.wakers_dispatched += 1;
             } else {
@@ -750,8 +750,8 @@ impl IoRegistration {
             .as_ref()
             .is_none_or(|w| !w.will_wake(waker))
         {
-            let slab_token = SlabToken::from_usize(self.token.0);
-            if let Some(slot) = guard.wakers.get_mut(slab_token) {
+            let slab_key = SlabToken::from_usize(self.token.0);
+            if let Some(slot) = guard.wakers.get_mut(slab_key) {
                 let cloned = waker.clone();
                 slot.clone_from(&cloned);
                 self.cached_waker = Some(cloned);
@@ -1404,13 +1404,13 @@ mod tests {
         let source = TestFdSource;
 
         // Register source directly with reactor (no waker in driver)
-        let token = Token::new(999);
+        let io_token = Token::new(999);
         reactor
-            .register(&source, token, Interest::READABLE)
+            .register(&source, io_token, Interest::READABLE)
             .expect("register should succeed");
 
         // Inject event for the token
-        reactor.inject_event(token, Event::readable(token), Duration::ZERO);
+        reactor.inject_event(io_token, Event::readable(io_token), Duration::ZERO);
 
         let mut driver = IoDriver::new(reactor);
 

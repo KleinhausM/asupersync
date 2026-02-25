@@ -5,7 +5,7 @@
 
 use crate::cx::Cx;
 use crate::io::{AsyncRead, AsyncReadVectored, AsyncWrite, ReadBuf};
-use crate::net::lookup_one;
+use crate::net::lookup_all;
 use crate::net::tcp::split::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, WriteHalf};
 use crate::net::tcp::traits::TcpStreamApi;
 use crate::runtime::io_driver::IoRegistration;
@@ -91,7 +91,6 @@ where
         } = self;
 
         let stream = if let Some(timeout) = connect_timeout {
-            let addr = lookup_one(addr).await?;
             TcpStream::connect_timeout(addr, timeout).await?
         } else {
             TcpStream::connect(addr).await?
@@ -138,16 +137,40 @@ impl TcpStream {
 
     /// Connect to address.
     pub async fn connect<A: ToSocketAddrs + Send + 'static>(addr: A) -> io::Result<Self> {
-        // 1. Resolve and create socket
-        let addr = lookup_one(addr).await?;
-        let domain = if addr.is_ipv4() {
-            Domain::IPV4
-        } else {
-            Domain::IPV6
-        };
-        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        let addrs = lookup_all(addr).await?;
+        if addrs.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "no socket addresses found",
+            ));
+        }
 
-        Self::connect_from_socket(socket, addr).await
+        let mut last_err = None;
+        for addr in addrs {
+            let domain = if addr.is_ipv4() {
+                Domain::IPV4
+            } else {
+                Domain::IPV6
+            };
+            
+            let socket = match Socket::new(domain, Type::STREAM, Some(Protocol::TCP)) {
+                Ok(s) => s,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+
+            match Self::connect_from_socket(socket, addr).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| io::Error::other("failed to connect to any address")))
     }
 
     /// Connects using an existing configured socket.
@@ -168,7 +191,7 @@ impl TcpStream {
     }
 
     /// Connect with timeout.
-    pub async fn connect_timeout(addr: SocketAddr, timeout_duration: Duration) -> io::Result<Self> {
+    pub async fn connect_timeout<A: ToSocketAddrs + Send + 'static>(addr: A, timeout_duration: Duration) -> io::Result<Self> {
         let connect_future = std::pin::pin!(Self::connect(addr));
         match timeout(timeout_now(), timeout_duration, connect_future).await {
             Ok(Ok(stream)) => Ok(stream),
@@ -290,8 +313,18 @@ impl TcpStream {
 
 #[inline]
 fn fallback_rewake(cx: &Context<'_>) {
-    std::thread::sleep(FALLBACK_IO_BACKOFF);
-    cx.waker().wake_by_ref();
+    if let Some(timer) = Cx::current().and_then(|c| c.timer_driver()) {
+        let deadline = timer.now() + FALLBACK_IO_BACKOFF;
+        let _ = timer.register(deadline, cx.waker().clone());
+    } else {
+        let waker = cx.waker().clone();
+        let _ = std::thread::Builder::new()
+            .name("stream-fallback".into())
+            .spawn(move || {
+                std::thread::sleep(FALLBACK_IO_BACKOFF);
+                waker.wake();
+            });
+    }
 }
 
 fn timeout_now() -> Time {
@@ -397,8 +430,10 @@ async fn wait_for_connect_fallback(socket: &Socket) -> io::Result<()> {
             Ok(_) => return Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
                 // Sleep briefly to avoid busy loop when no reactor is available.
-                std::thread::sleep(Duration::from_millis(1));
-                crate::runtime::yield_now().await;
+                let now = Cx::current().map_or_else(crate::time::wall_now, |c| {
+                    c.timer_driver().map_or_else(crate::time::wall_now, |d| d.now())
+                });
+                crate::time::sleep(now, Duration::from_millis(1)).await;
             }
             Err(err) => return Err(err),
         }

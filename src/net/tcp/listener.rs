@@ -99,13 +99,20 @@ impl TcpListener {
                 };
                 if mode == InterestRegistrationMode::FallbackPoll {
                     // No reactor-backed readiness available for this task context.
-                    // Schedule a delayed wakeup on a background thread to avoid
-                    // blocking the runtime worker.
-                    let waker = cx.waker().clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(FALLBACK_ACCEPT_BACKOFF);
-                        waker.wake();
-                    });
+                    if let Some(timer) = Cx::current().and_then(|c| c.timer_driver()) {
+                        let deadline = timer.now() + FALLBACK_ACCEPT_BACKOFF;
+                        let _ = timer.register(deadline, cx.waker().clone());
+                    } else {
+                        // Schedule a delayed wakeup on a background thread to avoid
+                        // blocking the runtime worker.
+                        let waker = cx.waker().clone();
+                        let _ = std::thread::Builder::new()
+                            .name("accept-fallback".into())
+                            .spawn(move || {
+                                std::thread::sleep(FALLBACK_ACCEPT_BACKOFF);
+                                waker.wake();
+                            });
+                    }
                 }
                 // ReactorArmed: the reactor is re-armed and will wake us on
                 // actual readiness; no sleep needed.

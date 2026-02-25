@@ -402,7 +402,7 @@ mod tests {
                     r.kind
                 );
             }
-            _ => panic!("expected Cancelled"),
+            _ => unreachable!("expected Cancelled"),
         }
         crate::test_complete!("task_handle_cancelled");
     }
@@ -433,7 +433,7 @@ mod tests {
                     r.kind
                 );
             }
-            _ => panic!("expected Cancelled"),
+            _ => unreachable!("expected Cancelled"),
         }
         crate::test_complete!("join_closed_uses_cancel_reason");
     }
@@ -467,7 +467,7 @@ mod tests {
                     payload
                 );
             }
-            _ => panic!("expected Panicked"),
+            _ => unreachable!("expected Panicked"),
         }
         crate::test_complete!("task_handle_panicked");
     }

@@ -119,8 +119,10 @@ async fn wait_for_connect_fallback(socket: &Socket) -> io::Result<()> {
         match socket.peer_addr() {
             Ok(_) => return Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
-                std::thread::sleep(Duration::from_millis(1));
-                crate::runtime::yield_now().await;
+                let now = Cx::current().map_or_else(crate::time::wall_now, |c| {
+                    c.timer_driver().map_or_else(crate::time::wall_now, |d| d.now())
+                });
+                crate::time::sleep(now, Duration::from_millis(1)).await;
             }
             Err(err) => return Err(err),
         }

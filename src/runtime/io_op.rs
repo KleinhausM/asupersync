@@ -147,7 +147,7 @@ mod tests {
                     abort_reason.is_none()
                 );
             }
-            other => panic!("unexpected reserve data: {other:?}"),
+            other => unreachable!("unexpected reserve data: {other:?}"),
         }
 
         let commit_event = state
@@ -199,7 +199,7 @@ mod tests {
                     abort_reason.is_none()
                 );
             }
-            other => panic!("unexpected commit data: {other:?}"),
+            other => unreachable!("unexpected commit data: {other:?}"),
         }
         crate::test_complete!("io_op_submit_complete_emits_trace");
     }
@@ -268,7 +268,7 @@ mod tests {
                     *abort_reason
                 );
             }
-            other => panic!("unexpected abort data: {other:?}"),
+            other => unreachable!("unexpected abort data: {other:?}"),
         }
         crate::test_complete!("io_op_cancel_emits_trace");
     }
@@ -329,7 +329,7 @@ mod tests {
                     *abort_reason
                 );
             }
-            other => panic!("unexpected data: {other:?}"),
+            other => unreachable!("unexpected data: {other:?}"),
         }
         crate::test_complete!("io_op_abort_with_explicit_reason");
     }

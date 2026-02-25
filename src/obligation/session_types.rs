@@ -214,16 +214,23 @@ impl<R, S> Chan<R, S> {
     ///
     /// Consumes `self` in state `S`, returns a channel in state `S2`.
     /// The caller must ensure this transition is valid per the protocol.
-    fn transition<S2>(self) -> Chan<R, S2> {
-        let chan = Chan {
-            channel_id: self.channel_id,
-            obligation_kind: self.obligation_kind,
+    fn transition<S2>(mut self) -> Chan<R, S2> {
+        let channel_id = self.channel_id;
+        let obligation_kind = self.obligation_kind;
+        // Disarm drop bomb for the consumed pre-transition state.
+        self.closed = true;
+        Chan {
+            channel_id,
+            obligation_kind,
             closed: false,
             _marker: PhantomData,
-        };
-        // Disarm the old channel's drop bomb.
-        std::mem::forget(self);
-        chan
+        }
+    }
+
+    /// Disarm the drop bomb for testing without leaking memory or triggering warnings.
+    #[cfg(test)]
+    pub fn disarm_for_test(mut self) {
+        self.closed = true;
     }
 }
 
@@ -309,13 +316,12 @@ pub struct SessionProof {
 
 impl<R> Chan<R, End> {
     /// Close the channel, producing a proof of session completion.
-    pub fn close(self) -> SessionProof {
-        let proof = SessionProof {
+    pub fn close(mut self) -> SessionProof {
+        self.closed = true;
+        SessionProof {
             channel_id: self.channel_id,
             obligation_kind: self.obligation_kind,
-        };
-        std::mem::forget(self); // Disarm drop bomb.
-        proof
+        }
     }
 }
 
@@ -840,7 +846,7 @@ mod tests {
         assert_eq!(proof.obligation_kind, ObligationKind::SendPermit);
 
         // Prevent receiver drop bomb.
-        std::mem::forget(_receiver);
+        _receiver.disarm_for_test();
     }
 
     // -- Drop bomb verification --
@@ -850,8 +856,8 @@ mod tests {
     fn drop_mid_protocol_panics() {
         let (sender, receiver) = send_permit::new_session::<u32>(99);
 
-        // Forget receiver first to avoid double-panic during unwinding.
-        std::mem::forget(receiver);
+        // Disarm receiver first to avoid double-panic during unwinding.
+        receiver.disarm_for_test();
 
         // Sender starts but doesn't finish — drop should panic.
         let sender = sender.send(send_permit::ReserveMsg);
@@ -875,7 +881,7 @@ mod tests {
         let proof = sender.close();
         assert_eq!(proof.channel_id, 77);
 
-        std::mem::forget(_receiver);
+        _receiver.disarm_for_test();
     }
 
     // -- Duality invariant --
@@ -931,8 +937,8 @@ mod tests {
         // Disarm drop bombs — delegation is typestate-only encoding; the
         // actual Chan<R,S> value cannot pass through send() without triggering
         // the inner drop bomb, so we verify metadata and type-level correctness.
-        std::mem::forget(delegator_ch);
-        std::mem::forget(delegatee_ch);
+        delegator_ch.disarm_for_test();
+        delegatee_ch.disarm_for_test();
     }
 
     // -- Multi-renew lease invariant --

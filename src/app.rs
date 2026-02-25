@@ -702,6 +702,9 @@ mod tests {
             for task in r.task_ids() {
                 r.remove_task(task);
             }
+            for child in r.child_ids() {
+                r.remove_child(child);
+            }
             r.begin_close(None);
             r.begin_drain();
             r.begin_finalize();

@@ -517,6 +517,7 @@ pub mod analysis;
 pub mod certificate;
 pub mod extractor;
 pub mod fixtures;
+pub mod latency_algebra;
 pub mod rewrite;
 pub use analysis::{
     BudgetEffect, CancelSafety, DeadlineMicros, IndependenceRelation, IndependenceResult,

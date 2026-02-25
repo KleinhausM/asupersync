@@ -799,7 +799,7 @@ impl SlidingWindowRateLimiter {
         // O(1) usage from the running total (replaces O(n) summation).
         let usage = self.window_cost.load(Ordering::Relaxed);
 
-        if usage + cost <= self.policy.rate {
+        if usage.saturating_add(cost) <= self.policy.rate {
             window.push_back((now_millis, cost));
             self.window_cost.fetch_add(cost, Ordering::Relaxed);
             drop(window);
@@ -822,25 +822,35 @@ impl SlidingWindowRateLimiter {
     #[must_use]
     #[allow(clippy::cast_possible_truncation, clippy::significant_drop_tightening)]
     pub fn time_until_available(&self, cost: u32, now: Time) -> Duration {
-        self.cleanup_old(now);
+        let now_millis = now.as_millis();
+        let period_millis = duration_to_millis_saturating(self.policy.period);
 
-        let usage = self.current_usage(now);
-        if usage + cost <= self.policy.rate {
+        let mut window = self.window.write();
+
+        // Inline cleanup
+        while let Some((t, c)) = window.front() {
+            if now_millis.saturating_sub(*t) >= period_millis {
+                let evicted_cost = *c;
+                window.pop_front();
+                self.window_cost.fetch_sub(evicted_cost, Ordering::Relaxed);
+            } else {
+                break;
+            }
+        }
+
+        let usage = self.window_cost.load(Ordering::Relaxed);
+        if usage.saturating_add(cost) <= self.policy.rate {
             return Duration::ZERO;
         }
 
         // Find when enough capacity frees up
-        let needed = (usage + cost) - self.policy.rate;
-        let window = self.window.read();
-        let period_millis = duration_to_millis_saturating(self.policy.period);
-        let now_millis = now.as_millis();
-
+        let needed = usage.saturating_add(cost).saturating_sub(self.policy.rate);
         let mut freed = 0u32;
         for (t, c) in window.iter() {
             freed += c;
             if freed >= needed {
                 // This entry will expire at t + period
-                let expire_at = t + period_millis;
+                let expire_at = t.saturating_add(period_millis);
                 return Duration::from_millis(expire_at.saturating_sub(now_millis));
             }
         }

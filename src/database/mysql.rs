@@ -1636,6 +1636,7 @@ impl MySqlConnection {
         let packet = buf.build_packet();
         let _ = self.write_all(&packet).await;
 
+        let _ = self.inner.stream.shutdown(std::net::Shutdown::Both);
         self.inner.closed = true;
         Ok(())
     }

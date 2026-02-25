@@ -369,7 +369,7 @@ impl SemaphorePermit<'_> {
 
     /// Forgets the permit without releasing it back to the semaphore.
     pub fn forget(self) {
-        std::mem::forget(self);
+        let _ = std::mem::ManuallyDrop::new(self);
     }
 }
 
@@ -412,7 +412,7 @@ impl OwnedSemaphorePermit {
         let permit = semaphore.try_acquire(count)?;
         // Transfer ownership: forget the borrow-based permit so it doesn't
         // release on drop; the OwnedSemaphorePermit will release in its own Drop.
-        std::mem::forget(permit);
+        let _ = std::mem::ManuallyDrop::new(permit);
         Ok(Self { semaphore, count })
     }
 
@@ -431,7 +431,7 @@ impl OwnedSemaphorePermit {
         let permit = semaphore.try_acquire(count)?;
         // Transfer ownership: forget the borrow-based permit so it doesn't
         // release on drop; the OwnedSemaphorePermit will release in its own Drop.
-        std::mem::forget(permit);
+        let _ = std::mem::ManuallyDrop::new(permit);
         Ok(Self {
             semaphore: semaphore.clone(),
             count,
@@ -505,10 +505,10 @@ impl Future for OwnedAcquireFuture {
                     let waker = remove_waiter_and_take_next_waker(&mut state, waiter_id);
                     if state.permits > 0 { waker } else { None }
                 };
+                self.waiter_id = None;
                 if let Some(next) = next_waker {
                     next.wake();
                 }
-                self.waiter_id = None;
             }
             return Poll::Ready(Err(AcquireError::Cancelled));
         }

@@ -60,7 +60,7 @@ use crate::sync::ContendedMutex;
 use crate::time::TimerDriverHandle;
 use crate::tracing_compat::{error, trace};
 use crate::types::{CxInner, TaskId, Time};
-use crate::util::{CachePadded, DetRng};
+use crate::util::{CachePadded, DetHasher, DetRng};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use std::cell::RefCell;
@@ -980,6 +980,86 @@ pub struct PreemptionMetrics {
     pub max_cancel_streak: usize,
     /// Fallback cancel dispatches (after limit, no other work available).
     pub fallback_cancel_dispatches: u64,
+    /// Number of cancel dispatches where streak exceeded the base limit `L`.
+    ///
+    /// This can be non-zero when boosted fairness mode is active
+    /// (`DrainObligations`/`DrainRegions`), where the effective limit becomes `2L`.
+    pub base_limit_exceedances: u64,
+    /// Number of cancel dispatches where streak exceeded the effective limit.
+    ///
+    /// This should remain zero for a healthy scheduler run.
+    pub effective_limit_exceedances: u64,
+    /// Maximum effective limit observed during dispatch.
+    ///
+    /// In unboosted mode this is `L`; with drain boosts this can be `2L`.
+    pub max_effective_limit_observed: usize,
+}
+
+/// Deterministic witness for cancel-lane fairness guarantees.
+///
+/// This compiles the runtime fairness argument into an auditable artifact:
+/// if `invariant_holds()` is true, then observed dispatches respected the
+/// effective cancel-streak bound and ready/timed work received a slot within
+/// `ready_stall_bound_steps()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreemptionFairnessCertificate {
+    /// Worker-local baseline cancel streak limit `L`.
+    pub base_limit: usize,
+    /// Largest effective limit observed during the run (`L` or `2L`).
+    pub effective_limit: usize,
+    /// Observed maximum cancel streak in this run.
+    pub observed_max_cancel_streak: usize,
+    /// Total cancel dispatches.
+    pub cancel_dispatches: u64,
+    /// Total timed dispatches.
+    pub timed_dispatches: u64,
+    /// Total ready dispatches.
+    pub ready_dispatches: u64,
+    /// Times the fairness gate forced a non-cancel attempt.
+    pub fairness_yields: u64,
+    /// Fallback cancel dispatches used when no other work existed.
+    pub fallback_cancel_dispatches: u64,
+    /// Count of streak samples above baseline `L`.
+    pub base_limit_exceedances: u64,
+    /// Count of streak samples above effective limit.
+    pub effective_limit_exceedances: u64,
+}
+
+impl PreemptionFairnessCertificate {
+    /// Returns the worst-case bound on non-cancel dispatch stall (in steps).
+    ///
+    /// Under this run's observed policy envelope, ready/timed dispatch gets a
+    /// scheduling opportunity within `effective_limit + 1` steps.
+    #[must_use]
+    pub fn ready_stall_bound_steps(&self) -> usize {
+        self.effective_limit.saturating_add(1)
+    }
+
+    /// Returns `true` when fairness invariants hold for observed dispatches.
+    #[must_use]
+    pub fn invariant_holds(&self) -> bool {
+        self.effective_limit_exceedances == 0
+            && self.observed_max_cancel_streak <= self.effective_limit
+    }
+
+    /// Deterministic hash of the certificate contents for replay/audit linkage.
+    #[must_use]
+    pub fn witness_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut h = DetHasher::default();
+        self.base_limit.hash(&mut h);
+        self.effective_limit.hash(&mut h);
+        self.observed_max_cancel_streak.hash(&mut h);
+        self.cancel_dispatches.hash(&mut h);
+        self.timed_dispatches.hash(&mut h);
+        self.ready_dispatches.hash(&mut h);
+        self.fairness_yields.hash(&mut h);
+        self.fallback_cancel_dispatches.hash(&mut h);
+        self.base_limit_exceedances.hash(&mut h);
+        self.effective_limit_exceedances.hash(&mut h);
+        h.finish()
+    }
 }
 
 impl ThreeLaneWorker {
@@ -1016,6 +1096,31 @@ impl ThreeLaneWorker {
     #[must_use]
     pub fn preemption_metrics(&self) -> &PreemptionMetrics {
         &self.preemption_metrics
+    }
+
+    /// Builds a deterministic fairness certificate from current metrics.
+    ///
+    /// This certificate is intended for invariant auditing and replay reports.
+    #[must_use]
+    pub fn preemption_fairness_certificate(&self) -> PreemptionFairnessCertificate {
+        let effective_limit = self
+            .preemption_metrics
+            .max_effective_limit_observed
+            .max(self.cancel_streak_limit)
+            .max(1);
+
+        PreemptionFairnessCertificate {
+            base_limit: self.cancel_streak_limit,
+            effective_limit,
+            observed_max_cancel_streak: self.preemption_metrics.max_cancel_streak,
+            cancel_dispatches: self.preemption_metrics.cancel_dispatches,
+            timed_dispatches: self.preemption_metrics.timed_dispatches,
+            ready_dispatches: self.preemption_metrics.ready_dispatches,
+            fairness_yields: self.preemption_metrics.fairness_yields,
+            fallback_cancel_dispatches: self.preemption_metrics.fallback_cancel_dispatches,
+            base_limit_exceedances: self.preemption_metrics.base_limit_exceedances,
+            effective_limit_exceedances: self.preemption_metrics.effective_limit_exceedances,
+        }
     }
 
     /// Attaches an evidence sink for scheduler decision tracing.
@@ -1239,6 +1344,9 @@ impl ThreeLaneWorker {
             }
             _ => self.cancel_streak_limit,
         };
+        if effective_limit > self.preemption_metrics.max_effective_limit_observed {
+            self.preemption_metrics.max_effective_limit_observed = effective_limit;
+        }
         let check_cancel = self.cancel_streak < effective_limit;
         if !check_cancel {
             self.preemption_metrics.fairness_yields += 1;
@@ -1261,7 +1369,7 @@ impl ThreeLaneWorker {
             if check_cancel {
                 if let Some(pt) = self.global.pop_cancel() {
                     self.cancel_streak += 1;
-                    self.record_cancel_dispatch();
+                    self.record_cancel_dispatch(effective_limit);
                     return Some(pt.task);
                 }
             }
@@ -1270,7 +1378,7 @@ impl ThreeLaneWorker {
             if check_cancel {
                 if let Some(pt) = self.global.pop_cancel() {
                     self.cancel_streak += 1;
-                    self.record_cancel_dispatch();
+                    self.record_cancel_dispatch(effective_limit);
                     return Some(pt.task);
                 }
             }
@@ -1310,7 +1418,7 @@ impl ThreeLaneWorker {
             match lane {
                 0 => {
                     self.cancel_streak = self.cancel_streak.saturating_add(1);
-                    self.record_cancel_dispatch();
+                    self.record_cancel_dispatch(effective_limit);
                 }
                 1 => {
                     self.cancel_streak = 0;
@@ -1338,9 +1446,9 @@ impl ThreeLaneWorker {
         // cancel_streak_limit − 1 more cancel dispatches.
         if !check_cancel {
             if let Some(task) = self.try_cancel_work() {
-                self.preemption_metrics.cancel_dispatches += 1;
                 self.preemption_metrics.fallback_cancel_dispatches += 1;
                 self.cancel_streak = 1;
+                self.record_cancel_dispatch(effective_limit);
                 return Some(task);
             }
             self.cancel_streak = 0;
@@ -1351,10 +1459,16 @@ impl ThreeLaneWorker {
 
     /// Record a cancel dispatch and update max streak metric.
     #[inline]
-    fn record_cancel_dispatch(&mut self) {
+    fn record_cancel_dispatch(&mut self, effective_limit: usize) {
         self.preemption_metrics.cancel_dispatches += 1;
         if self.cancel_streak > self.preemption_metrics.max_cancel_streak {
             self.preemption_metrics.max_cancel_streak = self.cancel_streak;
+        }
+        if self.cancel_streak > self.cancel_streak_limit {
+            self.preemption_metrics.base_limit_exceedances += 1;
+        }
+        if self.cancel_streak > effective_limit {
+            self.preemption_metrics.effective_limit_exceedances += 1;
         }
     }
 
@@ -4071,6 +4185,17 @@ mod tests {
             dispatched[4], ready,
             "ready task should come after all cancel tasks"
         );
+
+        let cert = worker.preemption_fairness_certificate();
+        assert_eq!(cert.base_limit, 2);
+        assert_eq!(cert.effective_limit, 4);
+        assert_eq!(cert.observed_max_cancel_streak, 4);
+        assert!(
+            cert.base_limit_exceedances > 0,
+            "boosted mode should exceed base L while remaining within 2L"
+        );
+        assert_eq!(cert.effective_limit_exceedances, 0);
+        assert!(cert.invariant_holds());
     }
 
     #[test]
@@ -4194,6 +4319,8 @@ mod tests {
         let m = worker.preemption_metrics();
         assert_eq!(m.cancel_dispatches, 3);
         assert_eq!(m.ready_dispatches, 2);
+        assert_eq!(m.base_limit_exceedances, 0);
+        assert_eq!(m.effective_limit_exceedances, 0);
         assert_eq!(
             m.cancel_dispatches + m.ready_dispatches + m.timed_dispatches,
             5
@@ -4234,6 +4361,13 @@ mod tests {
             limit
         );
         assert!(m.fairness_yields > 0, "should yield under cancel flood");
+        assert_eq!(m.base_limit_exceedances, 0);
+        assert_eq!(m.effective_limit_exceedances, 0);
+
+        let cert = worker.preemption_fairness_certificate();
+        assert!(cert.invariant_holds());
+        assert_eq!(cert.ready_stall_bound_steps(), limit + 1);
+        assert_ne!(cert.witness_hash(), 0);
     }
 
     #[test]
@@ -4262,6 +4396,8 @@ mod tests {
                 limit,
                 m.max_cancel_streak,
             );
+            assert_eq!(m.base_limit_exceedances, 0);
+            assert_eq!(m.effective_limit_exceedances, 0);
         }
     }
 
@@ -4289,6 +4425,8 @@ mod tests {
         let m = worker.preemption_metrics();
         assert_eq!(m.cancel_dispatches, 6);
         assert!(m.fallback_cancel_dispatches > 0, "should use fallback path");
+        assert_eq!(m.effective_limit_exceedances, 0);
+        assert_eq!(m.base_limit_exceedances, 0);
     }
 
     /// Verify that the fallback cancel dispatch counts toward the cancel
@@ -4346,6 +4484,39 @@ mod tests {
             "ready task should be dispatched within {limit} steps after fallback, \
              took {dispatches_until_ready}"
         );
+    }
+
+    #[test]
+    fn test_preemption_fairness_certificate_deterministic() {
+        fn run(limit: usize) -> PreemptionFairnessCertificate {
+            let state = Arc::new(ContendedMutex::new("runtime_state", RuntimeState::new()));
+            let mut scheduler = ThreeLaneScheduler::new_with_cancel_limit(1, &state, limit);
+
+            for i in 0..12u32 {
+                scheduler.inject_cancel(TaskId::new_for_test(7, i), 100);
+            }
+            for i in 12..18u32 {
+                scheduler.inject_ready(TaskId::new_for_test(7, i), 50);
+            }
+
+            let mut workers = scheduler.take_workers().into_iter();
+            let mut worker = workers.next().expect("worker");
+            for _ in 0..18 {
+                worker.next_task();
+            }
+            worker.preemption_fairness_certificate()
+        }
+
+        let cert_a = run(4);
+        let cert_b = run(4);
+
+        assert_eq!(cert_a, cert_b, "certificate should be deterministic");
+        assert_eq!(
+            cert_a.witness_hash(),
+            cert_b.witness_hash(),
+            "witness hash should match for identical dispatch traces"
+        );
+        assert!(cert_a.invariant_holds());
     }
 
     #[test]

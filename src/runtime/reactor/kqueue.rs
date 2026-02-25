@@ -637,7 +637,7 @@ mod tests {
                 Ok(0) => break,
                 Ok(_) => continue,
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                Err(err) => panic!("drain failed: {err}"),
+                Err(err) => unreachable!("drain failed: {err}"),
             }
         }
 

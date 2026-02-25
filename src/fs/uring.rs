@@ -362,20 +362,15 @@ impl IoUringFile {
     pub fn metadata(&self) -> io::Result<std::fs::Metadata> {
         let fd = self.inner.fd.as_raw_fd();
         // SAFETY: We borrow the fd temporarily; the OwnedFd still owns it.
-        let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
-        let meta = std_file.metadata();
-        // Prevent the std File from closing our fd
-        std::mem::forget(std_file);
-        meta
+        let std_file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+        std_file.metadata()
     }
 
     /// Changes the permissions on the underlying file.
     pub fn set_permissions(&self, perm: std::fs::Permissions) -> io::Result<()> {
         let fd = self.inner.fd.as_raw_fd();
-        let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
-        let result = std_file.set_permissions(perm);
-        std::mem::forget(std_file);
-        result
+        let std_file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+        std_file.set_permissions(perm)
     }
 
     /// Returns the raw file descriptor.

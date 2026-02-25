@@ -383,10 +383,10 @@ impl<'a, T> Future for ReadFuture<'a, '_, T> {
                     existing.waker.clone_from(context.waker());
                 }
             } else {
-                // Dequeued — re-register at front
+                // Dequeued — re-register at back to maintain FIFO fairness.
                 let new_id = state.next_waiter_id;
                 state.next_waiter_id += 1;
-                state.reader_waiters.push_front(Waiter {
+                state.reader_waiters.push_back(Waiter {
                     waker: context.waker().clone(),
                     id: new_id,
                 });
@@ -716,9 +716,10 @@ impl<T> Future for OwnedReadFuture<'_, T> {
                     existing.waker.clone_from(context.waker());
                 }
             } else {
+                // Dequeued — re-register at back to maintain FIFO fairness.
                 let new_id = state.next_waiter_id;
                 state.next_waiter_id += 1;
-                state.reader_waiters.push_front(Waiter {
+                state.reader_waiters.push_back(Waiter {
                     waker: context.waker().clone(),
                     id: new_id,
                 });

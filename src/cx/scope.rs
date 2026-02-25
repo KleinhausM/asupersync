@@ -1045,14 +1045,19 @@ impl<P: Policy> Scope<'_, P> {
                     // Request cancellation on primary to avoid orphaned work.
                     h1.abort_with_reason(CancelReason::resource_unavailable());
 
-                    // Best-effort single poll to allow immediate completion in
-                    // no-scheduler contexts (e.g. unit tests). Do not await
-                    // indefinitely here: without an active scheduler, awaiting
-                    // join can deadlock this path.
-                    let mut drain = Box::pin(h1.join(cx));
-                    let waker = std::task::Waker::noop();
-                    let mut poll_cx = Context::from_waker(waker);
-                    let _ = drain.as_mut().poll(&mut poll_cx);
+                    if crate::runtime::scheduler::three_lane::current_worker_id().is_some() {
+                        // In scheduler-backed runtime execution, fully drain the
+                        // cancelled primary before returning.
+                        let _ = h1.join(cx).await;
+                    } else {
+                        // In no-scheduler contexts (e.g. direct unit-test block_on),
+                        // full join can deadlock because nothing drives stored tasks.
+                        // Keep this as best-effort and return promptly.
+                        let mut drain = Box::pin(h1.join(cx));
+                        let waker = std::task::Waker::noop();
+                        let mut poll_cx = Context::from_waker(waker);
+                        let _ = drain.as_mut().poll(&mut poll_cx);
+                    }
 
                     return Err(JoinError::Cancelled(CancelReason::resource_unavailable()));
                 };

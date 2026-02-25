@@ -236,10 +236,12 @@ mod inner {
     impl<T> Drop for ContendedMutexGuard<'_, T> {
         fn drop(&mut self) {
             let hold_ns = self.acquired_at.elapsed().as_nanos() as u64;
+            // Drop the inner guard (releases the mutex) BEFORE updating metrics
+            // to minimize the critical section length.
+            drop(self.guard.take());
+
             self.metrics.hold_ns.fetch_add(hold_ns, Ordering::Relaxed);
             Metrics::update_max(&self.metrics.max_hold_ns, hold_ns);
-            // Drop the inner guard (releases the mutex).
-            drop(self.guard.take());
         }
     }
 

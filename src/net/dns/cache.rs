@@ -157,9 +157,11 @@ impl DnsCache {
         let key = normalize_host_key(host);
 
         let mut cache = self.ip_cache.write();
+        let is_update = cache.contains_key(key.as_ref());
 
-        // Evict if at capacity
-        if cache.len() >= self.config.max_entries {
+        // Evict only when inserting a new key at capacity.
+        // Updating an existing key must not evict unrelated entries.
+        if !is_update && cache.len() >= self.config.max_entries {
             self.evict_expired_locked(&mut cache);
 
             // If still at capacity, remove oldest
@@ -471,5 +473,55 @@ mod tests {
         let size = cache.stats().size;
         crate::assert_with_log!(size == 0, "size 0", 0, size);
         crate::test_complete!("cache_max_entries_zero");
+    }
+
+    #[test]
+    fn cache_update_existing_key_at_capacity_does_not_evict_other_entry() {
+        init_test("cache_update_existing_key_at_capacity_does_not_evict_other_entry");
+        let config = CacheConfig {
+            max_entries: 2,
+            ..Default::default()
+        };
+        let cache = DnsCache::with_config(config);
+
+        let a1 = LookupIp::new(
+            vec!["192.0.2.1".parse::<IpAddr>().expect("ip parse")],
+            Duration::from_mins(5),
+        );
+        let b1 = LookupIp::new(
+            vec!["192.0.2.2".parse::<IpAddr>().expect("ip parse")],
+            Duration::from_mins(5),
+        );
+        let b2 = LookupIp::new(
+            vec!["192.0.2.20".parse::<IpAddr>().expect("ip parse")],
+            Duration::from_mins(5),
+        );
+
+        cache.put_ip("a.example", &a1);
+        cache.put_ip("b.example", &b1);
+        cache.put_ip("b.example", &b2);
+
+        let a = cache.get_ip("a.example");
+        let b = cache.get_ip("b.example");
+        crate::assert_with_log!(a.is_some(), "a still present", true, a.is_some());
+        crate::assert_with_log!(b.is_some(), "b still present", true, b.is_some());
+
+        let b_first = b.and_then(|lookup| lookup.first());
+        crate::assert_with_log!(
+            b_first == Some("192.0.2.20".parse::<IpAddr>().expect("ip parse")),
+            "b updated in place",
+            "192.0.2.20",
+            format!("{b_first:?}")
+        );
+
+        let stats = cache.stats();
+        crate::assert_with_log!(stats.size == 2, "size remains at capacity", 2, stats.size);
+        crate::assert_with_log!(
+            stats.evictions == 0,
+            "no unrelated eviction on update",
+            0,
+            stats.evictions
+        );
+        crate::test_complete!("cache_update_existing_key_at_capacity_does_not_evict_other_entry");
     }
 }
