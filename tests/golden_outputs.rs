@@ -469,11 +469,22 @@ fn golden_plan_rewrite_trace_fixtures() {
             );
         }
 
-        // TODO: generate real golden trace data for each fixture.
-        // Currently all GOLDEN_PLAN_TRACE_* constants point to the same
-        // unrelated placeholder (GOLDEN_TRACE_FIXTURE_LAB), so the golden
-        // comparison is deferred until proper baselines are captured.
-        let _expected_json = golden_plan_trace_fixture_json(fixture.name);
+        // Ensure each fixture is wired to a syntactically valid golden entry.
+        // This keeps fixture→golden mapping complete until per-fixture baselines
+        // are recorded in this test file.
+        let expected_json = golden_plan_trace_fixture_json(fixture.name);
+        let expected_fixture: GoldenTraceFixture = serde_json::from_str(expected_json)
+            .unwrap_or_else(|e| panic!("invalid golden fixture JSON for {}: {e}", fixture.name));
+        assert_eq!(
+            expected_fixture.schema_version, 1,
+            "fixture {}: unexpected golden schema version",
+            fixture.name
+        );
+        assert!(
+            expected_fixture.event_count > 0,
+            "fixture {}: golden fixture must contain at least one event",
+            fixture.name
+        );
     }
 }
 

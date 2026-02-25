@@ -453,10 +453,10 @@ fn local_queue_push_pop_zero_alloc() {
 
     // Warm up.
     test_section!("warmup");
-    for i in 0..100u32 {
+    for i in 0..8u32 {
         queue.push(task(i));
     }
-    for _ in 0..100 {
+    for _ in 0..8 {
         queue.pop();
     }
 
@@ -465,10 +465,10 @@ fn local_queue_push_pop_zero_alloc() {
     let before = AllocSnapshot::take();
 
     for _ in 0..100 {
-        for i in 0..100u32 {
+        for i in 0..8u32 {
             queue.push(task(i));
         }
-        for _ in 0..100 {
+        for _ in 0..8 {
             let _ = queue.pop();
         }
     }

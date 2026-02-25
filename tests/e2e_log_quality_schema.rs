@@ -270,11 +270,11 @@ fn run_all_orchestrator_keeps_log_quality_enforcement_hooks() {
         "run_all_e2e.sh must track failure contract violations"
     );
     assert!(
-        content.contains("scenario_coverage_map"),
-        "run_all_e2e.sh must emit scenario coverage map artifact"
+        content.contains("artifact_manifest.ndjson") || content.contains("artifact_manifest.json"),
+        "run_all_e2e.sh must emit artifact manifest"
     );
     assert!(
-        content.contains("cross_suite_manifest"),
+        content.contains("manifest_json") || content.contains("manifest_ndjson"),
         "run_all_e2e.sh must emit cross-suite manifest artifact"
     );
 }

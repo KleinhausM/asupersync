@@ -13,7 +13,7 @@
 //!
 //! | Operation | Deadline | Poll/Cost Quota | Priority |
 //! |-----------|----------|-----------------|----------|
-//! | `meet` (∧) | min (earlier wins) | min (tighter wins) | max (higher wins) |
+//! | `meet` (∧) | min (earlier wins) | min (tighter wins) | min (lower/tighter wins) |
 //! | identity  | None (no deadline) | u32::MAX / None | 128 (neutral) |
 //!
 //! The **meet** operation (`combine`/`meet`) computes the tightest constraints
@@ -136,7 +136,7 @@ use std::time::Duration;
 ///
 /// Budgets form a product semiring for combination:
 /// - Deadlines/quotas use min (tighter wins)
-/// - Priority uses max (higher wins)
+/// - Priority uses min (lower/tighter wins)
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     /// Absolute deadline by which work must complete.
@@ -323,7 +323,7 @@ impl Budget {
     ///
     /// - Deadlines: min (earlier wins)
     /// - Quotas: min (tighter wins)
-    /// - Priority: max (higher wins)
+    /// - Priority: min (lower/tighter wins)
     ///
     /// This is also known as the "meet" operation (∧) in lattice terminology.
     /// See also: [`meet`](Self::meet).
@@ -1355,8 +1355,7 @@ mod tests {
     //
     // Algebra summary:
     //   (Budget, meet, INFINITE) forms a bounded meet-semilattice where:
-    //   - meet is the pointwise min on (deadline, poll_quota, cost_quota)
-    //     and pointwise max on (priority).
+    //   - meet is the pointwise min on (deadline, poll_quota, cost_quota, priority).
     //   - INFINITE is the top element (identity for meet).
     //   - ZERO is the bottom element (absorbing for meet, modulo priority).
     //
