@@ -806,9 +806,11 @@ fn execute_plan_in_lab_core(
         for tid in &task_ids {
             sched.schedule(*tid, 0);
         }
+        println!("Scheduled tasks! is_empty={}", sched.is_empty());
     }
 
-    runtime.run_until_quiescent();
+    let steps = runtime.run_until_quiescent();
+    println!("First run finished in {} steps. Quiescent: {}", steps, runtime.is_quiescent());
 
     // Reschedule retry for robustness (golden_outputs pattern).
     let mut attempts = 0;
