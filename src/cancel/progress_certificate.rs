@@ -739,7 +739,7 @@ impl ProgressCertificate {
             0.0
         };
 
-        let effective_step_bound = if self.max_abs_delta > self.config.epsilon {
+        let effective_step_bound = if self.max_abs_delta > self.config.max_step_bound {
             self.max_abs_delta
         } else {
             self.config.max_step_bound

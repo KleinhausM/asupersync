@@ -3664,6 +3664,8 @@ mod tests {
         let harness = crate::lab::SporkAppHarness::with_seed(42, app).unwrap();
         let report = harness.run_to_report().unwrap();
 
+        println!("REPORT JSON: {:#?}", report.to_json());
+
         // Empty app should pass.
         assert!(report.passed());
         assert_eq!(report.to_json()["verdict"], "pass");

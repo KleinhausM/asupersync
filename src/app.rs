@@ -347,13 +347,8 @@ impl AppHandle {
             });
         }
 
-        // Request cancel on the root region record.
-        region_record.cancel_request(reason);
-
-        // Begin close if still open.
-        if current_state == RegionState::Open {
-            region_record.begin_close(None);
-        }
+        // Properly propagate cancel through the runtime state.
+        let _ = state.cancel_request(self.root_region, &reason, None);
 
         self.resolved = true;
         Ok(StoppedApp {

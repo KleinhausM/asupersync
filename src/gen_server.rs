@@ -94,7 +94,8 @@ impl PhaseBudgetGuard {
             let mut guard = inner.write();
             let original_budget = guard.budget;
             let original_baseline = guard.budget_baseline;
-            let phase_baseline = original_budget.meet(phase_budget);
+            let mut phase_baseline = original_budget.meet(phase_budget);
+            phase_baseline.priority = original_budget.priority.max(phase_budget.priority);
             guard.budget = phase_baseline;
             guard.budget_baseline = phase_baseline;
             drop(guard);

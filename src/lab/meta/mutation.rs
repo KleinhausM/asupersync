@@ -248,6 +248,13 @@ fn mutation_obligation_leak(harness: &mut MetaHarness) {
         .create_obligation(ObligationKind::SendPermit, task, region, None)
         .expect("create obligation");
     harness.close_region(region);
+    // Force the region to closed to simulate a bug where the region closed despite the leak
+    harness
+        .runtime
+        .state
+        .region(region)
+        .unwrap()
+        .set_state(crate::record::region::RegionState::Closed);
     harness
         .oracles
         .obligation_leak

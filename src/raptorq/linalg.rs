@@ -1619,11 +1619,11 @@ mod tests {
 
     #[test]
     fn eliminate_row_pivot_only_with_empty_rhs_short_circuits_tail_work() {
-        let mut solver = GaussianSolver::new(2, 3);
+        let mut solver = GaussianSolver::new(3, 3);
         solver.set_row(0, &[4, 8, 55], DenseRow::zeros(0));
-        solver.set_row(1, &[1, 2, 9], DenseRow::zeros(0));
+        solver.set_row(2, &[1, 2, 9], DenseRow::zeros(0));
 
-        solver.eliminate_row(0, 1, Gf256::new(7));
+        solver.eliminate_row(0, 2, Gf256::new(7));
 
         assert_eq!(solver.matrix[0], vec![4, 8, 0]);
         assert!(solver.rhs[0].as_slice().is_empty());

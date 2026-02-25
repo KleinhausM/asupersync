@@ -151,6 +151,7 @@ impl TaskTable {
 
     /// Returns a mutable reference to a stored future.
     pub fn get_stored_future(&mut self, task_id: TaskId) -> Option<&mut StoredTask> {
+        self.tasks.get(task_id.arena_index())?;
         let slot = task_id.arena_index().index() as usize;
         self.stored_futures.get_mut(slot)?.as_mut()
     }
@@ -160,6 +161,7 @@ impl TaskTable {
     /// This is the hot-path operation called at the start of each poll cycle.
     #[inline]
     pub fn remove_stored_future(&mut self, task_id: TaskId) -> Option<StoredTask> {
+        self.tasks.get(task_id.arena_index())?;
         let slot = task_id.arena_index().index() as usize;
         let taken = self.stored_futures.get_mut(slot)?.take();
         if taken.is_some() {

@@ -82,11 +82,13 @@ pub trait SymbolStreamExt: SymbolStream {
         CollectToSetFuture { stream: self, set }
     }
 
-    /// Map symbols through a function.
-    fn map<F, T>(self, f: F) -> MapStream<Self, F>
+    /// Transform successful symbols while preserving stream shape.
+    ///
+    /// Errors and end-of-stream are passed through unchanged.
+    fn map<F>(self, f: F) -> MapStream<Self, F>
     where
         Self: Sized,
-        F: FnMut(AuthenticatedSymbol) -> T,
+        F: FnMut(AuthenticatedSymbol) -> AuthenticatedSymbol + Send + Unpin,
     {
         MapStream { inner: self, f }
     }
@@ -206,21 +208,6 @@ pub struct MapStream<S, F> {
     inner: S,
     f: F,
 }
-
-// MapStream is not a SymbolStream because it changes the type T.
-// But SymbolStream forces Item = Result<AuthenticatedSymbol...
-// So MapStream is only valid if T is Result<AuthenticatedSymbol...
-// But generic map allows any T.
-// The trait `SymbolStream` is specific to `AuthenticatedSymbol`.
-// `map` in `SymbolStreamExt` returns `MapStream` which might NOT implement `SymbolStream`.
-// It implements `futures::Stream` if I had it.
-// But here `map` is only useful if it produces `AuthenticatedSymbol`.
-// The description says: `fn map<F, T>(self, f: F) -> MapStream<Self, F>`.
-// If `T` is not `AuthenticatedSymbol`, then `MapStream` cannot be `SymbolStream`.
-// I will implement `SymbolStream` for `MapStream` ONLY IF `T` is `Result<AuthenticatedSymbol, StreamError>`.
-// Wait, `SymbolStream` returns `Result`. `map` transforms `AuthenticatedSymbol`.
-// If `f` returns `AuthenticatedSymbol`, then we can wrap it in `Ok`.
-// Let's assume `map` transforms the *success* value.
 
 impl<S, F> SymbolStream for MapStream<S, F>
 where

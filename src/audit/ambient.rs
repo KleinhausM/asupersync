@@ -107,7 +107,7 @@ pub const KNOWN_FINDINGS: &[AmbientFinding] = &[
     // ── Spawn ───────────────────────────────────────────────────────────
     AmbientFinding {
         file: "time/sleep.rs",
-        line: 483,
+        line: 524,
         category: AmbientCategory::Spawn,
         severity: Severity::Warning,
         description: "Fallback timer thread in Sleep::poll()",
@@ -136,7 +136,7 @@ pub const KNOWN_FINDINGS: &[AmbientFinding] = &[
     // NOTE: net/websocket/handshake.rs was fixed — now uses EntropySource capability.
     AmbientFinding {
         file: "http/h1/stream.rs",
-        line: 1193,
+        line: 1258,
         category: AmbientCategory::Spawn,
         severity: Severity::Critical,
         description: "std::thread::spawn in HTTP/1 stream handling",

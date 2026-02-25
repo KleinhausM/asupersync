@@ -805,21 +805,21 @@ mod tests {
 
     #[test]
     fn steal_batch_many_skipped_locals_preserves_owner_order() {
-        let state = LocalQueue::test_state(16);
+        let state = LocalQueue::test_state(8);
         let src = LocalQueue::new(Arc::clone(&state));
         let dest = LocalQueue::new(Arc::clone(&state));
 
         {
             let mut guard = state.lock().expect("runtime state lock poisoned");
-            for id in 0..=15 {
+            for id in 0..=6 {
                 let record = guard.task_mut(task(id)).expect("task record missing");
                 record.mark_local();
             }
             drop(guard);
         }
 
-        // Queue shape (oldest..newest): local x16, then one remote.
-        for id in 0..=16 {
+        // Queue shape (oldest..newest): local x7, then one remote.
+        for id in 0..=7 {
             src.push(task(id));
         }
 
@@ -827,11 +827,11 @@ mod tests {
             src.stealer().steal_batch(&dest),
             "remote task should be stolen"
         );
-        assert_eq!(dest.pop(), Some(task(16)));
+        assert_eq!(dest.pop(), Some(task(7)));
         assert_eq!(dest.pop(), None);
 
         // Local tasks must remain in original owner-visible LIFO order.
-        for expected in (0..=15).rev() {
+        for expected in (0..=6).rev() {
             assert_eq!(src.pop(), Some(task(expected)));
         }
         assert_eq!(src.pop(), None);

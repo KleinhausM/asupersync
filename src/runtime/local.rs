@@ -56,9 +56,7 @@ thread_local! {
 
 /// Stores a local task in the current thread's storage.
 ///
-/// # Panics
-///
-/// Panics if a task with the same ID already exists.
+/// If a task with the same ID already exists, it is replaced and a warning is emitted.
 pub fn store_local_task(task_id: TaskId, task: LocalStoredTask) {
     LOCAL_TASKS.with(|tasks| {
         let mut tasks = tasks.borrow_mut();
