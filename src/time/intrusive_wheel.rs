@@ -394,7 +394,8 @@ impl<const SLOTS: usize> TimerWheel<SLOTS> {
     fn slot_for(&self, deadline: Instant) -> usize {
         let elapsed = deadline.saturating_duration_since(self.base_time);
         let ticks = elapsed.as_nanos() / self.resolution.as_nanos().max(1);
-        (ticks as usize) % SLOTS
+        let safe_ticks = ticks.max(u128::from(self.current_tick));
+        (safe_ticks as usize) % SLOTS
     }
 
     /// Inserts a timer node with the given deadline.
@@ -727,7 +728,68 @@ impl HierarchicalTimerWheel {
         let target_tick = duration_to_ns(elapsed) / self.level0.resolution_ns.max(1);
         let mut wakers = Vec::with_capacity(self.count);
 
+        let ticks_to_advance = target_tick.saturating_sub(self.current_tick);
+        if ticks_to_advance > 65536 {
+            let mut remaining = Vec::with_capacity(self.count);
+
+            macro_rules! drain_level {
+                ($level:expr) => {
+                    for slot in &mut $level.slots {
+                        let nodes = slot.drain_nodes();
+                        for node in nodes {
+                            let node_ref = node.as_ref();
+                            if node_ref.deadline() <= now {
+                                if let Some(w) = node_ref.take_waker() {
+                                    wakers.push(w);
+                                }
+                            } else {
+                                remaining.push(node);
+                            }
+                        }
+                    }
+                };
+            }
+
+            drain_level!(self.level0);
+            drain_level!(self.level1);
+            drain_level!(self.level2);
+            drain_level!(self.level3);
+
+            self.current_tick = target_tick;
+            self.level0.cursor = (target_tick % LEVEL0_SLOTS as u64) as usize;
+            self.level1.cursor =
+                ((target_tick / LEVEL0_SLOTS as u64) % LEVEL1_SLOTS as u64) as usize;
+            self.level2.cursor = ((target_tick / (LEVEL0_SLOTS * LEVEL1_SLOTS) as u64)
+                % LEVEL2_SLOTS as u64) as usize;
+            self.level3.cursor = ((target_tick
+                / (LEVEL0_SLOTS * LEVEL1_SLOTS * LEVEL2_SLOTS) as u64)
+                % LEVEL3_SLOTS as u64) as usize;
+
+            self.count = 0;
+            for node in remaining {
+                let node_ref = node.as_ref();
+                let (new_level, new_slot) = self.slot_for(node_ref.deadline());
+                node_ref.update_slot_level(new_slot, new_level);
+                self.push_node(new_level, new_slot, node);
+                self.count += 1;
+            }
+
+            return wakers;
+        }
+
         while self.current_tick < target_tick {
+            if self.is_empty() {
+                self.current_tick = target_tick;
+                self.level0.cursor = (target_tick % LEVEL0_SLOTS as u64) as usize;
+                self.level1.cursor =
+                    ((target_tick / LEVEL0_SLOTS as u64) % LEVEL1_SLOTS as u64) as usize;
+                self.level2.cursor = ((target_tick / (LEVEL0_SLOTS * LEVEL1_SLOTS) as u64)
+                    % LEVEL2_SLOTS as u64) as usize;
+                self.level3.cursor = ((target_tick
+                    / (LEVEL0_SLOTS * LEVEL1_SLOTS * LEVEL2_SLOTS) as u64)
+                    % LEVEL3_SLOTS as u64) as usize;
+                break;
+            }
             let mut tick_wakers = self.tick(now);
             wakers.append(&mut tick_wakers);
         }
@@ -791,7 +853,12 @@ impl HierarchicalTimerWheel {
     ) -> usize {
         let elapsed_ns = duration_to_ns(deadline.saturating_duration_since(self.base_time));
         let tick = elapsed_ns / level.resolution_ns.max(1);
-        (tick % slots as u64) as usize
+
+        let current_elapsed_ns = self.current_tick.saturating_mul(self.level0.resolution_ns);
+        let current_level_tick = current_elapsed_ns / level.resolution_ns.max(1);
+
+        let safe_tick = tick.max(current_level_tick);
+        (safe_tick % slots as u64) as usize
     }
 
     fn push_node(&self, level: u8, slot: usize, node: NonNull<TimerNode>) {
