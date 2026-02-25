@@ -1295,7 +1295,7 @@ mod tests {
             assert!(first.is_pending());
 
             clock.advance(Time::from_millis(6).as_nanos());
-            timer.process_timers();
+            let _ = timer.process_timers();
 
             let result = fut.as_mut().poll(&mut context);
             let timed_out = matches!(result, Poll::Ready(Err(TowerAdapterError::Timeout)));

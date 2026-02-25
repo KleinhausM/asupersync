@@ -254,13 +254,13 @@ impl ProgressReporter {
         if let Some(pct) = event.percentage() {
             use std::fmt::Write;
             let bar_width: usize = 20;
-            // Percentage is always 0-100, so filled will always be 0-20
+            let clamped_pct = pct.clamp(0.0, 100.0);
             #[allow(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
                 clippy::cast_precision_loss
             )]
-            let filled = ((pct / 100.0) * bar_width as f64) as usize;
+            let filled = ((clamped_pct / 100.0) * bar_width as f64) as usize;
             let empty = bar_width - filled;
 
             line.push('[');
@@ -698,6 +698,17 @@ mod tests {
         reporter.update(5, 10, "half").unwrap();
         reporter.complete("end").unwrap();
         crate::test_complete!("progress_reporter_human_format");
+    }
+
+    #[test]
+    fn progress_reporter_human_clamps_over_100_percent() {
+        init_test("progress_reporter_human_clamps_over_100_percent");
+        let cursor = Cursor::new(Vec::new());
+        let mut reporter = ProgressReporter::with_writer(OutputFormat::Human, cursor);
+        reporter.start("begin").unwrap();
+        reporter.update(15, 10, "over-complete").unwrap();
+        reporter.complete("done").unwrap();
+        crate::test_complete!("progress_reporter_human_clamps_over_100_percent");
     }
 
     #[test]

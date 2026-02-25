@@ -462,6 +462,8 @@ impl ResourceTracker {
     #[must_use]
     pub fn pressure(&self) -> f64 {
         let mut max_ratio: f64 = 0.0;
+        // Per-object limits are checked per request in `check_limits`; they
+        // are not meaningful as an aggregate ratio over total current usage.
         max_ratio = max_ratio.max(ratio(
             self.current.symbol_memory,
             self.limits.max_symbol_memory,
@@ -477,10 +479,6 @@ impl ResourceTracker {
         max_ratio = max_ratio.max(ratio(
             self.current.symbols_in_flight,
             self.limits.max_symbols_in_flight,
-        ));
-        max_ratio = max_ratio.max(ratio(
-            self.current.symbol_memory,
-            self.limits.max_per_object_memory,
         ));
         max_ratio.min(1.0)
     }
@@ -620,11 +618,6 @@ impl ResourceTracker {
             ResourceKind::SymbolsInFlight,
             self.current.symbols_in_flight,
             self.limits.max_symbols_in_flight,
-        );
-        self.notify_limit(
-            ResourceKind::PerObjectMemory,
-            self.current.symbol_memory,
-            self.limits.max_per_object_memory,
         );
     }
 
@@ -879,6 +872,56 @@ mod tests {
         let _guard = ResourceTracker::try_acquire_encoding(&tracker, 9).expect("acquire");
         assert!(pressure_calls.load(Ordering::Relaxed) > 0);
         assert!(limit_calls.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn pressure_ignores_per_object_limit_as_aggregate() {
+        let limits = ResourceLimits {
+            max_symbol_memory: 1000,
+            max_encoding_ops: 10,
+            max_decoding_ops: 10,
+            max_symbols_in_flight: 100,
+            max_per_object_memory: 100,
+        };
+        let tracker = ResourceTracker::shared(limits);
+        let guard = ResourceTracker::try_acquire(&tracker, ResourceRequest::new(90, 0, 0, 0))
+            .expect("acquire should satisfy per-object limit");
+
+        let pressure = tracker.lock().pressure();
+        assert!(
+            (pressure - 0.09).abs() < f64::EPSILON,
+            "pressure={pressure}"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn observer_does_not_emit_per_object_limit_for_aggregate_usage() {
+        let limits = ResourceLimits {
+            max_symbol_memory: 1000,
+            max_encoding_ops: 10,
+            max_decoding_ops: 10,
+            max_symbols_in_flight: 100,
+            max_per_object_memory: 100,
+        };
+        let tracker = ResourceTracker::shared(limits);
+        let pressure_calls = Arc::new(AtomicUsize::new(0));
+        let limit_calls = Arc::new(AtomicUsize::new(0));
+        let observer = Box::new(TestObserver::new(
+            Arc::clone(&pressure_calls),
+            Arc::clone(&limit_calls),
+        ));
+        tracker.lock().add_observer(observer);
+
+        let _guard = ResourceTracker::try_acquire(&tracker, ResourceRequest::new(90, 0, 0, 0))
+            .expect("acquire should satisfy per-object limit");
+
+        assert!(pressure_calls.load(Ordering::Relaxed) > 0);
+        assert_eq!(
+            limit_calls.load(Ordering::Relaxed),
+            0,
+            "aggregate usage should not trigger per-object notifications"
+        );
     }
 
     #[test]

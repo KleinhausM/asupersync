@@ -2154,7 +2154,7 @@ mod tests {
 
     #[test]
     fn pg_value_as_f64_widens_from_f32() {
-        assert_eq!(PgValue::Float8(3.14).as_f64(), Some(3.14));
+        assert_eq!(PgValue::Float8(3.5).as_f64(), Some(3.5));
         assert_eq!(PgValue::Float4(1.0).as_f64(), Some(1.0));
         assert_eq!(PgValue::Int4(1).as_f64(), None);
     }
@@ -2550,9 +2550,9 @@ mod tests {
     #[test]
     fn parse_text_value_float4() {
         let conn = make_test_connection();
-        let v = conn.parse_text_value(b"3.14", oid::FLOAT4).unwrap();
+        let v = conn.parse_text_value(b"3.5", oid::FLOAT4).unwrap();
         match v {
-            PgValue::Float4(f) => assert!((f - 3.14).abs() < 0.001),
+            PgValue::Float4(f) => assert!((f - 3.5).abs() < 0.001),
             other => panic!("expected Float4, got: {other}"),
         }
     }
@@ -2561,8 +2561,8 @@ mod tests {
     fn parse_text_value_float8() {
         let conn = make_test_connection();
         assert_eq!(
-            conn.parse_text_value(b"2.718281828", oid::FLOAT8).unwrap(),
-            PgValue::Float8(2.718281828)
+            conn.parse_text_value(b"2.5", oid::FLOAT8).unwrap(),
+            PgValue::Float8(2.5)
         );
     }
 

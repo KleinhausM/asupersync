@@ -4,14 +4,14 @@
 //! replicas are added or removed.
 
 use crate::util::det_hash::DetHasher;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
 /// A deterministic consistent hash ring with virtual nodes.
 #[derive(Debug, Clone)]
 pub struct HashRing {
     vnodes_per_node: usize,
-    nodes: HashSet<String>,
+    nodes: BTreeSet<String>,
     ring: Vec<VirtualNode>,
 }
 
@@ -28,7 +28,7 @@ impl HashRing {
     pub fn new(vnodes_per_node: usize) -> Self {
         Self {
             vnodes_per_node,
-            nodes: HashSet::new(),
+            nodes: BTreeSet::new(),
             ring: Vec::new(),
         }
     }
@@ -103,7 +103,7 @@ impl HashRing {
         Some(self.ring[idx].node_id.as_str())
     }
 
-    /// Returns an iterator of node identifiers.
+    /// Returns node identifiers in deterministic sorted order.
     pub fn nodes(&self) -> impl Iterator<Item = &str> {
         self.nodes.iter().map(String::as_str)
     }
@@ -347,5 +347,16 @@ mod tests {
                 "key {key} assigned differently across builds"
             );
         }
+    }
+
+    #[test]
+    fn nodes_iterator_is_sorted() {
+        let mut ring = HashRing::new(8);
+        ring.add_node("node-z");
+        ring.add_node("node-a");
+        ring.add_node("node-m");
+
+        let nodes: Vec<&str> = ring.nodes().collect();
+        assert_eq!(nodes, vec!["node-a", "node-m", "node-z"]);
     }
 }

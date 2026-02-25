@@ -85,7 +85,7 @@ impl StateEncoder {
             return Err(EncodingError::EmptyData);
         }
 
-        let params = self.calculate_params(data.len(), object_id);
+        let params = self.calculate_params(data.len(), object_id)?;
         let pipeline_config = PipelineEncodingConfig {
             repair_overhead: f64::from(self.config.repair_overhead),
             max_block_size: data.len(),
@@ -106,8 +106,20 @@ impl StateEncoder {
         }
 
         let stats = pipeline.stats();
-        let source_count = stats.source_symbols as u16;
-        let repair_count = stats.repair_symbols as u16;
+        let source_count = u16::try_from(stats.source_symbols).map_err(|_| {
+            EncodingError::SymbolCountOverflow {
+                field: "source_count",
+                value: stats.source_symbols,
+                max: usize::from(u16::MAX),
+            }
+        })?;
+        let repair_count = u16::try_from(stats.repair_symbols).map_err(|_| {
+            EncodingError::SymbolCountOverflow {
+                field: "repair_count",
+                value: stats.repair_symbols,
+                max: usize::from(u16::MAX),
+            }
+        })?;
 
         Ok(EncodedState {
             params,
@@ -161,17 +173,29 @@ impl StateEncoder {
         Ok(repairs)
     }
 
-    fn calculate_params(&self, data_size: usize, object_id: ObjectId) -> ObjectParams {
+    fn calculate_params(
+        &self,
+        data_size: usize,
+        object_id: ObjectId,
+    ) -> Result<ObjectParams, EncodingError> {
         let symbol_size = self.config.symbol_size as usize;
         let symbols_needed = data_size.div_ceil(symbol_size);
+        let symbols_per_block =
+            u16::try_from(symbols_needed).map_err(|_| EncodingError::SymbolCountOverflow {
+                field: "symbols_per_block",
+                value: symbols_needed,
+                max: usize::from(u16::MAX),
+            })?;
+        let object_size = u64::try_from(data_size)
+            .map_err(|_| EncodingError::ObjectSizeOverflow { size: data_size })?;
 
-        ObjectParams::new(
+        Ok(ObjectParams::new(
             object_id,
-            data_size as u64,
+            object_size,
             self.config.symbol_size,
             1, // source_blocks
-            symbols_needed as u16,
-        )
+            symbols_per_block,
+        ))
     }
 }
 
@@ -231,7 +255,7 @@ impl EncodedState {
         if self.source_count == 0 {
             return 0.0;
         }
-        f32::from(self.source_count + self.repair_count) / f32::from(self.source_count)
+        (f32::from(self.source_count) + f32::from(self.repair_count)) / f32::from(self.source_count)
     }
 }
 
@@ -246,6 +270,20 @@ pub enum EncodingError {
     EmptyData,
     /// No source symbols available.
     NoSourceSymbols,
+    /// A symbol count exceeded representable bounds.
+    SymbolCountOverflow {
+        /// Name of the overflowing count.
+        field: &'static str,
+        /// Actual value encountered.
+        value: usize,
+        /// Maximum representable value.
+        max: usize,
+    },
+    /// Snapshot size could not be represented in object parameters.
+    ObjectSizeOverflow {
+        /// Original size in bytes.
+        size: usize,
+    },
     /// Error from the underlying encoding pipeline.
     Pipeline(String),
 }
@@ -255,6 +293,12 @@ impl std::fmt::Display for EncodingError {
         match self {
             Self::EmptyData => write!(f, "snapshot serialized to empty data"),
             Self::NoSourceSymbols => write!(f, "no source symbols available"),
+            Self::SymbolCountOverflow { field, value, max } => {
+                write!(f, "{field} overflow: value={value}, max={max}")
+            }
+            Self::ObjectSizeOverflow { size } => {
+                write!(f, "object size overflow: size={size} cannot fit in u64")
+            }
             Self::Pipeline(msg) => write!(f, "pipeline encoding error: {msg}"),
         }
     }
@@ -301,7 +345,7 @@ mod tests {
 
     fn rebuild_source_bytes(encoded: &EncodedState) -> Vec<u8> {
         let mut sources: Vec<&Symbol> = encoded.source_symbols().collect();
-        sources.sort_by_key(|symbol| symbol.id().esi());
+        sources.sort_by_key(|symbol| (symbol.id().sbn(), symbol.id().esi()));
         let mut data = Vec::with_capacity(encoded.original_size);
         for symbol in sources {
             data.extend_from_slice(symbol.data());
@@ -662,6 +706,44 @@ mod tests {
         );
         let reconstructed = rebuild_source_bytes(&encoded);
         assert_eq!(reconstructed, bytes);
+    }
+
+    #[test]
+    fn encode_rejects_symbol_count_overflow() {
+        let config = EncodingConfig {
+            symbol_size: 1,
+            min_repair_symbols: 0,
+            ..Default::default()
+        };
+        let mut encoder = StateEncoder::new(config, DetRng::new(99));
+        let mut snapshot = create_test_snapshot();
+        snapshot.metadata = vec![0_u8; usize::from(u16::MAX) + 1024];
+
+        let err = encoder
+            .encode(&snapshot, Time::ZERO)
+            .expect_err("expected symbol count overflow");
+        assert!(matches!(
+            err,
+            EncodingError::SymbolCountOverflow {
+                field: "symbols_per_block",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn redundancy_factor_handles_large_counts_without_overflow() {
+        let encoded = EncodedState {
+            params: ObjectParams::new(ObjectId::new_for_test(1), 0, 1, 1, 1),
+            symbols: Vec::new(),
+            source_count: u16::MAX,
+            repair_count: u16::MAX,
+            original_size: 0,
+            encoded_at: Time::ZERO,
+        };
+
+        let redundancy = encoded.redundancy_factor();
+        assert!((redundancy - 2.0).abs() < f32::EPSILON);
     }
 
     // --- wave 80 trait coverage ---

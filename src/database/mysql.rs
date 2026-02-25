@@ -2002,9 +2002,9 @@ mod tests {
             Some(123_456_789_012_345)
         );
         // Test Float to f64
-        assert!(MySqlValue::Float(3.14).as_f64().is_some());
+        assert!(MySqlValue::Float(3.5).as_f64().is_some());
         // Test Double to f64
-        assert_eq!(MySqlValue::Double(2.718).as_f64(), Some(2.718));
+        assert_eq!(MySqlValue::Double(2.5).as_f64(), Some(2.5));
         // Test invalid conversions return None
         assert_eq!(MySqlValue::Text("not a number".to_string()).as_i32(), None);
         assert_eq!(MySqlValue::Null.as_i64(), None);

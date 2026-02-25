@@ -166,50 +166,42 @@ impl TcpListener {
     }
 
     fn register_interest(&self, cx: &Context<'_>) -> io::Result<InterestRegistrationMode> {
-        let rearm_result = {
-            enum RearmDecision {
-                ReactorArmed,
-                ClearAndContinue,
-                ClearAndFallback,
-                Error(io::Error),
-            }
-
-            let mut registration = self.registration.lock();
-            let decision = registration.as_mut().map(|existing| {
-                // Re-arm reactor interest and conditionally update the waker in a
-                // single lock acquisition (will_wake guard skips the clone).
-                match existing.rearm(Interest::READABLE, cx.waker()) {
-                    Ok(true) => RearmDecision::ReactorArmed,
-                    Ok(false) => RearmDecision::ClearAndContinue,
-                    Err(err) if err.kind() == io::ErrorKind::NotConnected => {
-                        RearmDecision::ClearAndFallback
-                    }
-                    Err(err) => RearmDecision::Error(err),
-                }
-            });
-
-            let result = match decision {
-                Some(RearmDecision::ReactorArmed) => {
-                    Some(Ok(InterestRegistrationMode::ReactorArmed))
-                }
-                Some(RearmDecision::ClearAndContinue) => {
-                    *registration = None;
-                    None
-                }
-                Some(RearmDecision::ClearAndFallback) => {
-                    *registration = None;
-                    Some(Ok(InterestRegistrationMode::FallbackPoll))
-                }
-                Some(RearmDecision::Error(err)) => Some(Err(err)),
-                None => None,
-            };
-            drop(registration);
-            result
-        };
-
-        if let Some(result) = rearm_result {
-            return result;
+        enum RearmDecision {
+            ReactorArmed,
+            ClearAndContinue,
+            ClearAndFallback,
+            Error(io::Error),
         }
+
+        let mut registration = self.registration.lock();
+        let decision = registration.as_mut().map(|existing| {
+            // Re-arm reactor interest and conditionally update the waker in a
+            // single lock acquisition (will_wake guard skips the clone).
+            match existing.rearm(Interest::READABLE, cx.waker()) {
+                Ok(true) => RearmDecision::ReactorArmed,
+                Ok(false) => RearmDecision::ClearAndContinue,
+                Err(err) if err.kind() == io::ErrorKind::NotConnected => {
+                    RearmDecision::ClearAndFallback
+                }
+                Err(err) => RearmDecision::Error(err),
+            }
+        });
+
+        match decision {
+            Some(RearmDecision::ReactorArmed) => {
+                return Ok(InterestRegistrationMode::ReactorArmed);
+            }
+            Some(RearmDecision::ClearAndContinue) => {
+                *registration = None;
+            }
+            Some(RearmDecision::ClearAndFallback) => {
+                *registration = None;
+                return Ok(InterestRegistrationMode::FallbackPoll);
+            }
+            Some(RearmDecision::Error(err)) => return Err(err),
+            None => {}
+        }
+        drop(registration);
 
         let Some(current) = Cx::current() else {
             return Ok(InterestRegistrationMode::FallbackPoll);
@@ -221,7 +213,9 @@ impl TcpListener {
         match driver.register(&self.inner, Interest::READABLE, cx.waker().clone()) {
             Ok(new_reg) => {
                 let mut registration = self.registration.lock();
-                *registration = Some(new_reg);
+                if registration.is_none() {
+                    *registration = Some(new_reg);
+                }
                 drop(registration);
                 Ok(InterestRegistrationMode::ReactorArmed)
             }

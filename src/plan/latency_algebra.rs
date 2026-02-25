@@ -1,9 +1,9 @@
 //! Compositional Latency Algebra via (min,+) Tropical Semiring Network Calculus.
 //!
-//! Provides provable worst-case end-to-end latency bounds for any composition
+//! Provides compositional end-to-end latency estimates for compositions
 //! of asupersync's concurrency combinators (join, race, timeout). Users can ask
 //! "what is the worst-case latency of this combinator DAG?" and receive a
-//! mathematically rigorous answer with per-node provenance.
+//! model-based estimate with per-node provenance.
 //!
 //! # Mathematical Foundation
 //!
@@ -65,10 +65,16 @@
 //! # Integration with Plan DAG
 //!
 //! The [`LatencyAnalyzer`] walks a [`PlanDag`] bottom-up, computing per-node
-//! latency bounds. Each leaf node requires an [`ArrivalCurve`] and
+//! latency estimates. Each leaf node requires an [`ArrivalCurve`] and
 //! [`ServiceCurve`] annotation. The analyzer composes these according to the
 //! combinator semantics and produces a [`LatencyAnalysis`] with per-node
 //! provenance.
+//!
+//! # Numerical Approximation Note
+//!
+//! This implementation uses discrete breakpoint sampling for convolution and
+//! deviation operators. Results are deterministic and useful for planning, but
+//! are not a formal proof object.
 
 use super::{PlanDag, PlanId, PlanNode};
 use std::collections::BTreeMap;
@@ -901,14 +907,14 @@ impl fmt::Display for BoundContribution {
     }
 }
 
-/// Latency bound result with full provenance.
+/// Latency estimate result with full provenance.
 ///
-/// Contains the computed worst-case delay and backlog bounds, the
+/// Contains the computed delay and backlog estimates, the
 /// system utilization, and a per-node breakdown showing which parts
 /// of the combinator DAG dominate the latency.
 #[derive(Debug, Clone)]
 pub struct LatencyBound {
-    /// Worst-case end-to-end delay bound (seconds).
+    /// Estimated end-to-end delay (seconds).
     ///
     /// This is the horizontal deviation `h(alpha, beta)`:
     /// ```text
@@ -916,7 +922,7 @@ pub struct LatencyBound {
     /// ```
     pub delay: f64,
 
-    /// Worst-case backlog bound (units of work).
+    /// Estimated backlog bound (units of work).
     ///
     /// This is the vertical deviation `v(alpha, beta)`:
     /// ```text
@@ -1131,7 +1137,7 @@ impl fmt::Display for LatencyAnalysis {
 // ============================================================================
 
 /// Analyzer that walks a [`PlanDag`] and computes compositional
-/// worst-case latency bounds using network calculus.
+/// latency estimates using network calculus.
 ///
 /// # Usage
 ///
@@ -1408,9 +1414,8 @@ impl LatencyAnalyzer {
             .map(|r| r.backlog)
             .fold(0.0_f64, f64::max);
 
-        // The effective service curve of a join is the bottleneck:
-        // the child with the smallest service rate determines throughput
-        // for the parallel composition.
+        // Rate-envelope approximation: use the bottleneck child's service
+        // asymptotic rate as the join throughput proxy.
         let min_rate_child = child_results.iter().enumerate().min_by(|(_, a), (_, b)| {
             a.effective_service
                 .asymptotic_rate()
@@ -1423,8 +1428,8 @@ impl LatencyAnalyzer {
             |(_, r)| r.effective_service.clone(),
         );
 
-        // Output arrival: the aggregate of all children's output arrivals.
-        // For join, all outputs are needed, so we take the envelope (max).
+        // Rate-envelope approximation: for join we use the dominant output
+        // arrival-rate child as an aggregate proxy.
         let max_rate_child = child_results.iter().enumerate().max_by(|(_, a), (_, b)| {
             a.output_arrival
                 .asymptotic_rate()
@@ -1504,7 +1509,7 @@ impl LatencyAnalyzer {
             .map(|r| r.backlog)
             .fold(f64::INFINITY, f64::min);
 
-        // Effective service: the fastest child's service curve.
+        // Rate-envelope approximation: fastest child's service curve proxy.
         let max_rate_child = child_results.iter().enumerate().max_by(|(_, a), (_, b)| {
             a.effective_service
                 .asymptotic_rate()
@@ -1517,7 +1522,7 @@ impl LatencyAnalyzer {
             |(_, r)| r.effective_service.clone(),
         );
 
-        // Output arrival: the winner's output arrival (min-delay child).
+        // Winner-takes-output approximation: use min-delay child's output curve.
         let min_delay_child = child_results.iter().enumerate().min_by(|(_, a), (_, b)| {
             a.delay
                 .partial_cmp(&b.delay)

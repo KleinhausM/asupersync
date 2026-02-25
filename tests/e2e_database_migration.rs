@@ -927,7 +927,7 @@ fn e2e_sqlite_value_display_and_accessors() {
 
     assert_eq!(SqliteValue::Null.to_string(), "NULL");
     assert_eq!(SqliteValue::Integer(42).to_string(), "42");
-    assert_eq!(SqliteValue::Real(3.14).to_string(), "3.14");
+    assert_eq!(SqliteValue::Real(3.5).to_string(), "3.5");
     assert_eq!(SqliteValue::Text("hi".into()).to_string(), "hi");
     assert_eq!(
         SqliteValue::Blob(vec![1, 2, 3]).to_string(),

@@ -842,7 +842,7 @@ mod tests {
     fn test_sqlite_value_display() {
         assert_eq!(SqliteValue::Null.to_string(), "NULL");
         assert_eq!(SqliteValue::Integer(42).to_string(), "42");
-        assert_eq!(SqliteValue::Real(3.14).to_string(), "3.14");
+        assert_eq!(SqliteValue::Real(3.5).to_string(), "3.5");
         assert_eq!(SqliteValue::Text("hello".to_string()).to_string(), "hello");
         assert_eq!(
             SqliteValue::Blob(vec![1, 2, 3]).to_string(),
@@ -858,7 +858,7 @@ mod tests {
         assert_eq!(SqliteValue::Integer(42).as_integer(), Some(42));
         assert_eq!(SqliteValue::Text("hi".to_string()).as_integer(), None);
 
-        assert_eq!(SqliteValue::Real(3.14).as_real(), Some(3.14));
+        assert_eq!(SqliteValue::Real(3.5).as_real(), Some(3.5));
         assert_eq!(SqliteValue::Integer(42).as_real(), Some(42.0));
 
         assert_eq!(
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn sqlite_value_as_integer_returns_none_for_real() {
-        assert_eq!(SqliteValue::Real(3.14).as_integer(), None);
+        assert_eq!(SqliteValue::Real(3.5).as_integer(), None);
     }
 
     #[test]
@@ -1076,8 +1076,8 @@ mod tests {
 
     #[test]
     fn sqlite_row_get_f64_success() {
-        let row = make_test_sqlite_row(&["pi"], vec![SqliteValue::Real(3.14)]);
-        assert!((row.get_f64("pi").unwrap() - 3.14).abs() < f64::EPSILON);
+        let row = make_test_sqlite_row(&["val"], vec![SqliteValue::Real(3.5)]);
+        assert!((row.get_f64("val").unwrap() - 3.5).abs() < f64::EPSILON);
     }
 
     #[test]

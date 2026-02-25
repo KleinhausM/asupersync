@@ -158,7 +158,8 @@ impl SymbolPool {
 
     /// Pre-warms the pool to a specified size.
     pub fn warm(&mut self, count: usize) {
-        let target = count.min(self.config.max_size);
+        let max_free = self.config.max_size.saturating_sub(self.allocated);
+        let target = count.min(max_free);
         while self.free_list.len() < target {
             self.free_list
                 .push(SymbolBuffer::new(self.config.symbol_size));
@@ -922,6 +923,36 @@ mod tests {
         for _ in 0..5 {
             assert!(pool.allocate().is_ok());
         }
+    }
+
+    #[test]
+    fn symbol_pool_warm_respects_max_with_live_allocations() {
+        let mut pool = SymbolPool::new(PoolConfig {
+            initial_size: 0,
+            max_size: 4,
+            allow_growth: false,
+            ..Default::default()
+        });
+        pool.warm(4);
+
+        let b1 = pool.allocate().expect("alloc 1");
+        let b2 = pool.allocate().expect("alloc 2");
+        let b3 = pool.allocate().expect("alloc 3");
+
+        // Warm must account for already allocated buffers, so total capacity
+        // (free + allocated) never exceeds max_size.
+        pool.warm(4);
+
+        let b4 = pool.allocate().expect("alloc 4");
+        assert!(
+            pool.allocate().is_err(),
+            "pool exceeded max_size after warm"
+        );
+
+        pool.deallocate(b1);
+        pool.deallocate(b2);
+        pool.deallocate(b3);
+        pool.deallocate(b4);
     }
 
     #[test]
