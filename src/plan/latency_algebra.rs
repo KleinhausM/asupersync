@@ -110,7 +110,7 @@ impl Segment {
         if t <= self.start {
             self.burst
         } else {
-            self.burst + self.rate * (t - self.start)
+            self.rate.mul_add(t - self.start, self.burst)
         }
     }
 }
@@ -166,7 +166,9 @@ impl PiecewiseLinearCurve {
                 }
                 // Continuity check: end of previous segment == burst of next.
                 let prev = &segments[i - 1];
-                let expected = prev.burst + prev.rate * (segments[i].start - prev.start);
+                let expected = prev
+                    .rate
+                    .mul_add(segments[i].start - prev.start, prev.burst);
                 if (expected - segments[i].burst).abs() > 1e-9 {
                     return None;
                 }
@@ -225,9 +227,11 @@ impl PiecewiseLinearCurve {
         let epsilon = period * 1e-6;
         let steep_rate = step_size / epsilon;
 
+        #[allow(clippy::cast_precision_loss)]
         for i in 0..num_steps {
-            let t = i as f64 * period;
-            let base = i as f64 * step_size;
+            let fi = i as f64;
+            let t = fi * period;
+            let base = fi * step_size;
 
             if i == 0 {
                 // First segment: steep ramp from 0.
@@ -257,9 +261,10 @@ impl PiecewiseLinearCurve {
         }
 
         // Binary search for the last segment with start <= t.
-        let idx = match self.segments.binary_search_by(|s| {
-            s.start.partial_cmp(&t).unwrap_or(std::cmp::Ordering::Less)
-        }) {
+        let idx = match self
+            .segments
+            .binary_search_by(|s| s.start.partial_cmp(&t).unwrap_or(std::cmp::Ordering::Less))
+        {
             Ok(i) => i,
             Err(i) => {
                 if i == 0 {
@@ -317,20 +322,13 @@ pub fn min_plus_convolution(
     f: &PiecewiseLinearCurve,
     g: &PiecewiseLinearCurve,
 ) -> PiecewiseLinearCurve {
-    // Collect all breakpoints from both curves.
-    let mut breakpoints: Vec<f64> = Vec::new();
-    for seg in &f.segments {
-        breakpoints.push(seg.start);
-    }
-    for seg in &g.segments {
-        breakpoints.push(seg.start);
-    }
-
-    // Generate sum-breakpoints: for each pair (f_break, g_break), the sum
-    // is a potential breakpoint of the convolution.
+    // Collect breakpoints from both curves.
     let f_breaks: Vec<f64> = f.segments.iter().map(|s| s.start).collect();
     let g_breaks: Vec<f64> = g.segments.iter().map(|s| s.start).collect();
 
+    // Generate candidate evaluation points.
+    // Sum-breakpoints: for each pair (f_break, g_break), the sum
+    // is a potential breakpoint of the convolution.
     let mut all_t: Vec<f64> = Vec::new();
     for &fb in &f_breaks {
         for &gb in &g_breaks {
@@ -348,12 +346,11 @@ pub fn min_plus_convolution(
         .copied()
         .unwrap_or(0.0)
         .max(g_breaks.last().copied().unwrap_or(0.0))
-        * 2.0
-        + 1.0;
+        .mul_add(2.0, 1.0);
     // Add samples at regular intervals for better approximation.
-    let num_samples = 64;
+    let num_samples: u32 = 64;
     for i in 0..=num_samples {
-        all_t.push(t_max * (i as f64) / (num_samples as f64));
+        all_t.push(t_max * f64::from(i) / f64::from(num_samples));
     }
 
     all_t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -497,10 +494,7 @@ fn build_curve_from_points(points: &[(f64, f64)]) -> PiecewiseLinearCurve {
 /// Returns `f64::INFINITY` if the system is unstable (arrival rate exceeds
 /// service rate asymptotically).
 #[must_use]
-pub fn horizontal_deviation(
-    alpha: &PiecewiseLinearCurve,
-    beta: &PiecewiseLinearCurve,
-) -> f64 {
+pub fn horizontal_deviation(alpha: &PiecewiseLinearCurve, beta: &PiecewiseLinearCurve) -> f64 {
     // Stability check: asymptotic arrival rate must not exceed service rate.
     let alpha_rate = alpha.asymptotic_rate();
     let beta_rate = beta.asymptotic_rate();
@@ -518,10 +512,14 @@ pub fn horizontal_deviation(
     }
 
     // Add intermediate samples for better accuracy.
-    let t_max = sample_times.last().copied().unwrap_or(0.0) * 2.0 + 10.0;
-    let num_extra = 256;
+    let t_max = sample_times
+        .last()
+        .copied()
+        .unwrap_or(0.0)
+        .mul_add(2.0, 10.0);
+    let num_extra: u32 = 256;
     for i in 0..=num_extra {
-        sample_times.push(t_max * (i as f64) / (num_extra as f64));
+        sample_times.push(t_max * f64::from(i) / f64::from(num_extra));
     }
 
     sample_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -548,11 +546,7 @@ pub fn horizontal_deviation(
 /// Finds the smallest `d >= 0` such that `curve(t + d) >= target`.
 ///
 /// Uses a combination of breakpoint analysis and binary search.
-fn find_delay_for_value(
-    curve: &PiecewiseLinearCurve,
-    t: f64,
-    target: f64,
-) -> f64 {
+fn find_delay_for_value(curve: &PiecewiseLinearCurve, t: f64, target: f64) -> f64 {
     // If curve(t) already >= target, delay is 0.
     if curve.eval(t) >= target - 1e-12 {
         return 0.0;
@@ -563,7 +557,11 @@ fn find_delay_for_value(
     let mut hi = 1.0_f64;
 
     // First, find an upper bound where curve(t + hi) >= target.
-    while curve.eval(t + hi) < target - 1e-12 {
+    // Doubles hi until we overshoot, or declares instability at 1e15.
+    loop {
+        if curve.eval(t + hi) >= target - 1e-12 {
+            break;
+        }
         hi *= 2.0;
         if hi > 1e15 {
             return f64::INFINITY;
@@ -572,7 +570,7 @@ fn find_delay_for_value(
 
     // Binary search within [lo, hi].
     for _ in 0..64 {
-        let mid = (lo + hi) / 2.0;
+        let mid = f64::midpoint(lo, hi);
         if curve.eval(t + mid) >= target - 1e-12 {
             hi = mid;
         } else {
@@ -595,10 +593,7 @@ fn find_delay_for_value(
 ///
 /// Returns `f64::INFINITY` if the system is unstable.
 #[must_use]
-pub fn vertical_deviation(
-    alpha: &PiecewiseLinearCurve,
-    beta: &PiecewiseLinearCurve,
-) -> f64 {
+pub fn vertical_deviation(alpha: &PiecewiseLinearCurve, beta: &PiecewiseLinearCurve) -> f64 {
     // Stability check.
     let alpha_rate = alpha.asymptotic_rate();
     let beta_rate = beta.asymptotic_rate();
@@ -615,10 +610,14 @@ pub fn vertical_deviation(
         sample_times.push(seg.start);
     }
 
-    let t_max = sample_times.last().copied().unwrap_or(0.0) * 2.0 + 10.0;
-    let num_extra = 256;
+    let t_max = sample_times
+        .last()
+        .copied()
+        .unwrap_or(0.0)
+        .mul_add(2.0, 10.0);
+    let num_extra: u32 = 256;
     for i in 0..=num_extra {
-        sample_times.push(t_max * (i as f64) / (num_extra as f64));
+        sample_times.push(t_max * f64::from(i) / f64::from(num_extra));
     }
 
     sample_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -668,30 +667,29 @@ pub fn min_plus_deconvolution(
         .copied()
         .unwrap_or(0.0)
         .max(g_breaks.last().copied().unwrap_or(0.0))
-        * 2.0
-        + 1.0;
+        .mul_add(2.0, 1.0);
 
     let mut all_t: Vec<f64> = Vec::new();
     all_t.extend_from_slice(&f_breaks);
     all_t.extend_from_slice(&g_breaks);
     all_t.push(0.0);
 
-    let num_samples = 64;
+    let num_samples: u32 = 64;
     for i in 0..=num_samples {
-        all_t.push(t_max * (i as f64) / (num_samples as f64));
+        all_t.push(t_max * f64::from(i) / f64::from(num_samples));
     }
 
     all_t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     all_t.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
     all_t.retain(|&t| t >= 0.0);
 
-    let s_max = g_breaks.last().copied().unwrap_or(0.0) * 2.0 + 10.0;
+    let s_max = g_breaks.last().copied().unwrap_or(0.0).mul_add(2.0, 10.0);
     let mut candidate_s: Vec<f64> = Vec::new();
     candidate_s.extend_from_slice(&g_breaks);
     candidate_s.push(0.0);
-    let s_samples = 64;
+    let s_samples: u32 = 64;
     for i in 0..=s_samples {
-        candidate_s.push(s_max * (i as f64) / (s_samples as f64));
+        candidate_s.push(s_max * f64::from(i) / f64::from(s_samples));
     }
     candidate_s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     candidate_s.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
@@ -849,8 +847,8 @@ impl ServiceCurve {
     /// This follows from the service curve composition theorem
     /// (Le Boudec & Thiran, Theorem 1.4.6).
     #[must_use]
-    pub fn sequential(&self, other: &ServiceCurve) -> ServiceCurve {
-        ServiceCurve(min_plus_convolution(&self.0, &other.0))
+    pub fn sequential(&self, other: &Self) -> Self {
+        Self(min_plus_convolution(&self.0, &other.0))
     }
 
     /// Scales a service curve by a concurrency factor.
@@ -859,7 +857,7 @@ impl ServiceCurve {
     /// that individually have this service curve. The aggregate service
     /// rate scales linearly, while per-request latency is unchanged.
     #[must_use]
-    pub fn scale(&self, factor: f64) -> ServiceCurve {
+    pub fn scale(&self, factor: f64) -> Self {
         debug_assert!(factor > 0.0);
         let scaled_segments: Vec<Segment> = self
             .0
@@ -867,7 +865,9 @@ impl ServiceCurve {
             .iter()
             .map(|s| Segment::new(s.start, s.rate * factor, s.burst * factor))
             .collect();
-        ServiceCurve(PiecewiseLinearCurve { segments: scaled_segments })
+        Self(PiecewiseLinearCurve {
+            segments: scaled_segments,
+        })
     }
 }
 
@@ -1095,14 +1095,16 @@ impl LatencyAnalysis {
     /// Returns a human-readable summary.
     #[must_use]
     pub fn summary(&self) -> String {
-        match &self.root_bound {
-            Some(bound) => format!(
-                "{} nodes analyzed, e2e: {}",
-                self.node_delays.len(),
-                bound.summary()
-            ),
-            None => format!("{} nodes analyzed, no root bound", self.node_delays.len()),
-        }
+        self.root_bound.as_ref().map_or_else(
+            || format!("{} nodes analyzed, no root bound", self.node_delays.len()),
+            |bound| {
+                format!(
+                    "{} nodes analyzed, e2e: {}",
+                    self.node_delays.len(),
+                    bound.summary()
+                )
+            },
+        )
     }
 }
 
@@ -1111,7 +1113,10 @@ impl fmt::Display for LatencyAnalysis {
         writeln!(f, "Latency Analysis ({} nodes)", self.node_delays.len())?;
         for (&idx, &delay) in &self.node_delays {
             let backlog = self.node_backlogs.get(&idx).copied().unwrap_or(0.0);
-            writeln!(f, "  node[{idx}]: delay<={delay:.6}s, backlog<={backlog:.2}")?;
+            writeln!(
+                f,
+                "  node[{idx}]: delay<={delay:.6}s, backlog<={backlog:.2}"
+            )?;
         }
         if let Some(bound) = &self.root_bound {
             writeln!(f, "  --- end-to-end ---")?;
@@ -1233,13 +1238,16 @@ impl LatencyAnalyzer {
 
         // Build root bound with provenance.
         let root_bound = dag.root().map(|root_id| {
-            let root_result = cache.get(&root_id.index()).cloned().unwrap_or(NodeLatency {
-                delay: f64::INFINITY,
-                backlog: f64::INFINITY,
-                output_arrival: ArrivalCurve::constant_rate(0.0),
-                effective_service: ServiceCurve::constant_rate(0.0),
-                contributions: Vec::new(),
-            });
+            let root_result = cache
+                .get(&root_id.index())
+                .cloned()
+                .unwrap_or_else(|| NodeLatency {
+                    delay: f64::INFINITY,
+                    backlog: f64::INFINITY,
+                    output_arrival: ArrivalCurve::constant_rate(0.0),
+                    effective_service: ServiceCurve::constant_rate(0.0),
+                    contributions: Vec::new(),
+                });
 
             let utilization = {
                 let svc_rate = root_result.effective_service.asymptotic_rate();
@@ -1284,20 +1292,8 @@ impl LatencyAnalyzer {
             return existing.clone();
         }
 
-        let result = match dag.node(id) {
-            Some(node) => match node.clone() {
-                PlanNode::Leaf { label } => self.analyze_leaf(id, &label),
-                PlanNode::Join { children } => {
-                    self.analyze_join(dag, id, &children, cache)
-                }
-                PlanNode::Race { children } => {
-                    self.analyze_race(dag, id, &children, cache)
-                }
-                PlanNode::Timeout { child, duration } => {
-                    self.analyze_timeout(dag, id, child, duration, cache)
-                }
-            },
-            None => NodeLatency {
+        let result = dag.node(id).map_or_else(
+            || NodeLatency {
                 delay: f64::INFINITY,
                 backlog: f64::INFINITY,
                 output_arrival: ArrivalCurve::constant_rate(0.0),
@@ -1308,7 +1304,15 @@ impl LatencyAnalyzer {
                     description: "missing node".to_string(),
                 }],
             },
-        };
+            |node| match node.clone() {
+                PlanNode::Leaf { label } => self.analyze_leaf(id, &label),
+                PlanNode::Join { children } => self.analyze_join(dag, id, &children, cache),
+                PlanNode::Race { children } => self.analyze_race(dag, id, &children, cache),
+                PlanNode::Timeout { child, duration } => {
+                    self.analyze_timeout(dag, id, child, duration, cache)
+                }
+            },
+        );
 
         cache.insert(id.index(), result.clone());
         result
@@ -1323,8 +1327,19 @@ impl LatencyAnalyzer {
             }
         });
 
-        match curves {
-            Some(curves) => {
+        curves.map_or_else(
+            || NodeLatency {
+                delay: f64::INFINITY,
+                backlog: f64::INFINITY,
+                output_arrival: ArrivalCurve::constant_rate(0.0),
+                effective_service: ServiceCurve::constant_rate(0.0),
+                contributions: vec![BoundContribution {
+                    node_id: id,
+                    delay: f64::INFINITY,
+                    description: format!("leaf \"{label}\": no annotation"),
+                }],
+            },
+            |curves| {
                 let delay = curves.delay_bound();
                 let backlog = curves.backlog_bound();
                 let description = format!("leaf \"{label}\": delay={delay:.6}s");
@@ -1343,19 +1358,8 @@ impl LatencyAnalyzer {
                         description,
                     }],
                 }
-            }
-            None => NodeLatency {
-                delay: f64::INFINITY,
-                backlog: f64::INFINITY,
-                output_arrival: ArrivalCurve::constant_rate(0.0),
-                effective_service: ServiceCurve::constant_rate(0.0),
-                contributions: vec![BoundContribution {
-                    node_id: id,
-                    delay: f64::INFINITY,
-                    description: format!("leaf \"{label}\": no annotation"),
-                }],
             },
-        }
+        )
     }
 
     /// Analyzes a join node: `d_join = max(d_children)`.
@@ -1407,35 +1411,31 @@ impl LatencyAnalyzer {
         // The effective service curve of a join is the bottleneck:
         // the child with the smallest service rate determines throughput
         // for the parallel composition.
-        let min_rate_child = child_results
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                a.effective_service
-                    .asymptotic_rate()
-                    .partial_cmp(&b.effective_service.asymptotic_rate())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+        let min_rate_child = child_results.iter().enumerate().min_by(|(_, a), (_, b)| {
+            a.effective_service
+                .asymptotic_rate()
+                .partial_cmp(&b.effective_service.asymptotic_rate())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let effective_service = min_rate_child
-            .map(|(_, r)| r.effective_service.clone())
-            .unwrap_or_else(|| ServiceCurve::constant_rate(0.0));
+        let effective_service = min_rate_child.map_or_else(
+            || ServiceCurve::constant_rate(0.0),
+            |(_, r)| r.effective_service.clone(),
+        );
 
         // Output arrival: the aggregate of all children's output arrivals.
         // For join, all outputs are needed, so we take the envelope (max).
-        let max_rate_child = child_results
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| {
-                a.output_arrival
-                    .asymptotic_rate()
-                    .partial_cmp(&b.output_arrival.asymptotic_rate())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+        let max_rate_child = child_results.iter().enumerate().max_by(|(_, a), (_, b)| {
+            a.output_arrival
+                .asymptotic_rate()
+                .partial_cmp(&b.output_arrival.asymptotic_rate())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let output_arrival = max_rate_child
-            .map(|(_, r)| r.output_arrival.clone())
-            .unwrap_or_else(|| ArrivalCurve::constant_rate(0.0));
+        let output_arrival = max_rate_child.map_or_else(
+            || ArrivalCurve::constant_rate(0.0),
+            |(_, r)| r.output_arrival.clone(),
+        );
 
         // Collect provenance from all children.
         let mut contributions: Vec<BoundContribution> = child_results
@@ -1446,10 +1446,7 @@ impl LatencyAnalyzer {
         contributions.push(BoundContribution {
             node_id: id,
             delay,
-            description: format!(
-                "join of {} children: max delay={delay:.6}s",
-                children.len()
-            ),
+            description: format!("join of {} children: max delay={delay:.6}s", children.len()),
         });
 
         NodeLatency {
@@ -1508,33 +1505,29 @@ impl LatencyAnalyzer {
             .fold(f64::INFINITY, f64::min);
 
         // Effective service: the fastest child's service curve.
-        let max_rate_child = child_results
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| {
-                a.effective_service
-                    .asymptotic_rate()
-                    .partial_cmp(&b.effective_service.asymptotic_rate())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+        let max_rate_child = child_results.iter().enumerate().max_by(|(_, a), (_, b)| {
+            a.effective_service
+                .asymptotic_rate()
+                .partial_cmp(&b.effective_service.asymptotic_rate())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let effective_service = max_rate_child
-            .map(|(_, r)| r.effective_service.clone())
-            .unwrap_or_else(|| ServiceCurve::constant_rate(0.0));
+        let effective_service = max_rate_child.map_or_else(
+            || ServiceCurve::constant_rate(0.0),
+            |(_, r)| r.effective_service.clone(),
+        );
 
         // Output arrival: the winner's output arrival (min-delay child).
-        let min_delay_child = child_results
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                a.delay
-                    .partial_cmp(&b.delay)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+        let min_delay_child = child_results.iter().enumerate().min_by(|(_, a), (_, b)| {
+            a.delay
+                .partial_cmp(&b.delay)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let output_arrival = min_delay_child
-            .map(|(_, r)| r.output_arrival.clone())
-            .unwrap_or_else(|| ArrivalCurve::constant_rate(0.0));
+        let output_arrival = min_delay_child.map_or_else(
+            || ArrivalCurve::constant_rate(0.0),
+            |(_, r)| r.output_arrival.clone(),
+        );
 
         // Only include the winner's provenance chain.
         let winner_idx = child_results
@@ -1545,8 +1538,7 @@ impl LatencyAnalyzer {
                     .partial_cmp(&b.delay)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
 
         let mut contributions: Vec<BoundContribution> =
             child_results[winner_idx].contributions.clone();
@@ -1595,18 +1587,16 @@ impl LatencyAnalyzer {
             child_result.backlog
         } else {
             // Timeout fires: backlog is whatever accumulated up to timeout.
-            child_result.backlog.min(
-                child_result.output_arrival.eval(timeout_secs),
-            )
+            child_result
+                .backlog
+                .min(child_result.output_arrival.eval(timeout_secs))
         };
 
         let mut contributions = child_result.contributions;
         contributions.push(BoundContribution {
             node_id: id,
             delay,
-            description: format!(
-                "timeout({timeout_secs:.6}s): capped delay={delay:.6}s"
-            ),
+            description: format!("timeout({timeout_secs:.6}s): capped delay={delay:.6}s"),
         });
 
         NodeLatency {
@@ -1683,9 +1673,9 @@ mod tests {
     #[test]
     fn zero_curve_evaluates_to_zero() {
         let c = PiecewiseLinearCurve::zero();
-        assert_eq!(c.eval(0.0), 0.0);
-        assert_eq!(c.eval(1.0), 0.0);
-        assert_eq!(c.eval(100.0), 0.0);
+        assert!(approx_eq(c.eval(0.0), 0.0));
+        assert!(approx_eq(c.eval(1.0), 0.0));
+        assert!(approx_eq(c.eval(100.0), 0.0));
     }
 
     #[test]
@@ -1711,10 +1701,7 @@ mod tests {
 
     #[test]
     fn from_segments_rejects_unsorted() {
-        let segments = vec![
-            Segment::new(1.0, 1.0, 0.0),
-            Segment::new(0.0, 1.0, 0.0),
-        ];
+        let segments = vec![Segment::new(1.0, 1.0, 0.0), Segment::new(0.0, 1.0, 0.0)];
         assert!(PiecewiseLinearCurve::from_segments(segments).is_none());
     }
 
@@ -1737,10 +1724,7 @@ mod tests {
     #[test]
     fn from_segments_accepts_valid_continuous_curve() {
         // f(t) = t for [0,1), then f(t) = 1 + 2*(t-1) for [1, ...)
-        let segments = vec![
-            Segment::new(0.0, 1.0, 0.0),
-            Segment::new(1.0, 2.0, 1.0),
-        ];
+        let segments = vec![Segment::new(0.0, 1.0, 0.0), Segment::new(1.0, 2.0, 1.0)];
         let c = PiecewiseLinearCurve::from_segments(segments).unwrap();
         assert!(approx_eq(c.eval(0.5), 0.5));
         assert!(approx_eq(c.eval(1.0), 1.0));
@@ -1750,8 +1734,8 @@ mod tests {
     #[test]
     fn negative_time_evaluates_to_zero() {
         let c = PiecewiseLinearCurve::affine(1.0, 5.0);
-        assert_eq!(c.eval(-1.0), 0.0);
-        assert_eq!(c.eval(-100.0), 0.0);
+        assert!(approx_eq(c.eval(-1.0), 0.0));
+        assert!(approx_eq(c.eval(-100.0), 0.0));
     }
 
     // -----------------------------------------------------------------------
@@ -1769,10 +1753,7 @@ mod tests {
         let beta = ServiceCurve::rate_latency(200.0, 0.01);
 
         let d = delay_bound(&alpha, &beta);
-        assert!(
-            approx_eq(d, 0.26),
-            "expected ~0.26, got {d}"
-        );
+        assert!(approx_eq(d, 0.26), "expected ~0.26, got {d}");
     }
 
     #[test]
@@ -1786,10 +1767,7 @@ mod tests {
         let beta = ServiceCurve::constant_rate(5.0);
 
         let d = delay_bound(&alpha, &beta);
-        assert!(
-            approx_eq(d, 2.0),
-            "expected ~2.0, got {d}"
-        );
+        assert!(approx_eq(d, 2.0), "expected ~2.0, got {d}");
     }
 
     #[test]
@@ -1825,10 +1803,7 @@ mod tests {
         let beta = ServiceCurve::rate_latency(200.0, 0.01);
 
         let b = backlog_bound(&alpha, &beta);
-        assert!(
-            approx_eq(b, 51.0),
-            "expected ~51.0, got {b}"
-        );
+        assert!(approx_eq(b, 51.0), "expected ~51.0, got {b}");
     }
 
     #[test]
@@ -2004,10 +1979,7 @@ mod tests {
         let analyzer = LatencyAnalyzer::new();
         let analysis = analyzer.analyze(&dag);
 
-        assert!(approx_eq(
-            analysis.end_to_end_delay().unwrap(),
-            0.0
-        ));
+        assert!(approx_eq(analysis.end_to_end_delay().unwrap(), 0.0));
     }
 
     // -----------------------------------------------------------------------
@@ -2301,12 +2273,12 @@ mod tests {
     #[test]
     fn latency_bound_display_format() {
         let bound = LatencyBound {
-            delay: 0.123456,
+            delay: 0.123_456,
             backlog: 42.0,
             utilization: 0.75,
             provenance: vec![BoundContribution {
                 node_id: PlanId::new(0),
-                delay: 0.123456,
+                delay: 0.123_456,
                 description: "test node".to_string(),
             }],
         };
@@ -2420,9 +2392,9 @@ mod tests {
         let b = dag_lhs.leaf("b");
         let a2 = dag_lhs.leaf("a_copy");
         let c = dag_lhs.leaf("c");
-        let join_ab = dag_lhs.join(vec![a1, b]);
-        let join_ac = dag_lhs.join(vec![a2, c]);
-        let race_root = dag_lhs.race(vec![join_ab, join_ac]);
+        let lhs_join_with_b = dag_lhs.join(vec![a1, b]);
+        let lhs_join_with_c = dag_lhs.join(vec![a2, c]);
+        let race_root = dag_lhs.race(vec![lhs_join_with_b, lhs_join_with_c]);
         dag_lhs.set_root(race_root);
 
         let mut dag_rhs = PlanDag::new();
@@ -2457,14 +2429,8 @@ mod tests {
         analyzer_rhs.annotate(b2, b_curves);
         analyzer_rhs.annotate(c2, c_curves);
 
-        let lhs_delay = analyzer_lhs
-            .analyze(&dag_lhs)
-            .end_to_end_delay()
-            .unwrap();
-        let rhs_delay = analyzer_rhs
-            .analyze(&dag_rhs)
-            .end_to_end_delay()
-            .unwrap();
+        let lhs_delay = analyzer_lhs.analyze(&dag_lhs).end_to_end_delay().unwrap();
+        let rhs_delay = analyzer_rhs.analyze(&dag_rhs).end_to_end_delay().unwrap();
 
         // The distributivity law holds at the delay level:
         // race(join(a,b), join(a,c)) delay <= join(a, race(b,c)) delay.
@@ -2596,15 +2562,14 @@ mod tests {
     #[test]
     fn wide_join_many_children() {
         let mut dag = PlanDag::new();
-        let children: Vec<PlanId> = (0..20)
-            .map(|i| dag.leaf(format!("child_{i}")))
-            .collect();
+        let children: Vec<PlanId> = (0..20).map(|i| dag.leaf(format!("child_{i}"))).collect();
         let joined = dag.join(children.clone());
         dag.set_root(joined);
 
         let mut analyzer = LatencyAnalyzer::new();
         for (i, &child) in children.iter().enumerate() {
-            let burst = 10.0 + i as f64 * 5.0;
+            let i_u32 = u32::try_from(i).expect("test uses small child index");
+            let burst = f64::from(i_u32).mul_add(5.0, 10.0);
             analyzer.annotate(
                 child,
                 NodeCurves::new(
@@ -2628,15 +2593,14 @@ mod tests {
     #[test]
     fn wide_race_many_children() {
         let mut dag = PlanDag::new();
-        let children: Vec<PlanId> = (0..20)
-            .map(|i| dag.leaf(format!("child_{i}")))
-            .collect();
+        let children: Vec<PlanId> = (0..20).map(|i| dag.leaf(format!("child_{i}"))).collect();
         let raced = dag.race(children.clone());
         dag.set_root(raced);
 
         let mut analyzer = LatencyAnalyzer::new();
         for (i, &child) in children.iter().enumerate() {
-            let burst = 10.0 + i as f64 * 5.0;
+            let i_u32 = u32::try_from(i).expect("test uses small child index");
+            let burst = f64::from(i_u32).mul_add(5.0, 10.0);
             analyzer.annotate(
                 child,
                 NodeCurves::new(
@@ -2665,18 +2629,9 @@ mod tests {
     fn delay_monotonic_in_burst() {
         // Increasing burst should increase delay.
         let service = ServiceCurve::rate_latency(200.0, 0.01);
-        let d1 = delay_bound(
-            &ArrivalCurve::token_bucket(100.0, 10.0),
-            &service,
-        );
-        let d2 = delay_bound(
-            &ArrivalCurve::token_bucket(100.0, 50.0),
-            &service,
-        );
-        let d3 = delay_bound(
-            &ArrivalCurve::token_bucket(100.0, 100.0),
-            &service,
-        );
+        let d1 = delay_bound(&ArrivalCurve::token_bucket(100.0, 10.0), &service);
+        let d2 = delay_bound(&ArrivalCurve::token_bucket(100.0, 50.0), &service);
+        let d3 = delay_bound(&ArrivalCurve::token_bucket(100.0, 100.0), &service);
 
         assert!(d1 <= d2 + EPS, "d1={d1} should be <= d2={d2}");
         assert!(d2 <= d3 + EPS, "d2={d2} should be <= d3={d3}");

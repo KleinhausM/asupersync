@@ -320,7 +320,7 @@ impl fmt::Display for CertificateVerdict {
         writeln!(f, "Confidence bound:   {:.6}", self.confidence_bound)?;
         writeln!(f, "Azuma bound:        {:.6}", self.azuma_bound)?;
         if let Some(est) = self.estimated_remaining_steps {
-            writeln!(f, "Est. remaining:     {:.1} steps", est)?;
+            writeln!(f, "Est. remaining:     {est:.1} steps")?;
         } else {
             writeln!(f, "Est. remaining:     N/A")?;
         }
@@ -416,11 +416,10 @@ impl ProgressCertificate {
         let potential = potential.max(0.0);
         let step = self.observations.len();
 
-        let delta = if let Some(prev) = self.observations.last() {
-            potential - prev.potential
-        } else {
-            0.0
-        };
+        let delta = self
+            .observations
+            .last()
+            .map_or(0.0, |prev| potential - prev.potential);
 
         let credit = (-delta).max(0.0);
 
@@ -481,10 +480,7 @@ impl ProgressCertificate {
             return 1.0;
         }
 
-        let initial = self
-            .observations
-            .first()
-            .map_or(0.0, |o| o.potential);
+        let initial = self.observations.first().map_or(0.0, |o| o.potential);
 
         // Expected potential at step t: V₀ - t·mu.
         // lambda = residual potential assuming expected progress:
@@ -493,7 +489,7 @@ impl ProgressCertificate {
         // already exceeds V₀, the bound is trivially satisfied.
         #[allow(clippy::cast_precision_loss)]
         let t_f = t as f64;
-        let expected_remaining = initial - t_f * mean_credit;
+        let expected_remaining = t_f.mul_add(-mean_credit, initial);
 
         if expected_remaining <= 0.0 {
             // Expected progress already sufficient — bound is 0 (certain).
@@ -502,7 +498,8 @@ impl ProgressCertificate {
 
         // Azuma–Hoeffding: P(Sₜ ≤ -lambda) ≤ exp(-2·lambda² / (t·c²))
         // where Sₜ = Σ(Xᵢ - E[Xᵢ]) and lambda = expected_remaining.
-        let exponent = -2.0 * expected_remaining * expected_remaining / (t_f * step_bound * step_bound);
+        let exponent =
+            -2.0 * expected_remaining * expected_remaining / (t_f * step_bound * step_bound);
 
         exponent.exp()
     }
@@ -538,8 +535,8 @@ impl ProgressCertificate {
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn verdict(&self) -> CertificateVerdict {
+        const MAX_CONVERGENCE_VIOLATION_RATE: f64 = 0.25;
         let n = self.observations.len();
-        let mut evidence = Vec::new();
 
         // --- Insufficient data: provisional verdict ---
         if n < self.config.min_observations {
@@ -554,128 +551,70 @@ impl ProgressCertificate {
                 initial_potential: self.observations.first().map_or(0.0, |o| o.potential),
                 mean_credit: 0.0,
                 max_observed_step: self.max_abs_delta,
-                evidence,
+                evidence: Vec::new(),
             };
         }
 
         let v_initial = self.observations[0].potential;
         let v_current = self.observations[n - 1].potential;
-        let steps_with_deltas = n - 1; // number of deltas (between pairs)
+        let steps_with_deltas = n - 1;
         let mean_credit = if steps_with_deltas > 0 {
             self.total_credit / steps_with_deltas as f64
         } else {
             0.0
         };
 
-        // --- Step bound: use configured bound, but note if exceeded ---
-        let effective_step_bound = self.config.max_step_bound.max(self.max_abs_delta);
-        if self.max_abs_delta > self.config.max_step_bound {
-            evidence.push(EvidenceEntry {
-                step: n - 1,
-                potential: v_current,
-                bound: self.max_abs_delta,
-                description: format!(
-                    "max observed step {:.4} exceeds configured bound {:.4}; \
-                     using observed max for Azuma bound",
-                    self.max_abs_delta, self.config.max_step_bound,
-                ),
-            });
-        }
-
-        // --- Azuma–Hoeffding bound ---
-        let azuma = self.azuma_hoeffding_bound(steps_with_deltas, mean_credit, effective_step_bound);
-
-        // --- Confidence bound: P(quiescence by estimated T) ---
-        // Estimate T from Optional Stopping: T_remaining = V_current / mean_credit.
-        let estimated_remaining = if mean_credit > self.config.epsilon {
-            Some(v_current / mean_credit)
+        let effective_step_bound = if self.max_abs_delta > self.config.epsilon {
+            self.max_abs_delta
         } else {
-            None
+            self.config.max_step_bound
         };
+        let azuma =
+            self.azuma_hoeffding_bound(steps_with_deltas, mean_credit, effective_step_bound);
 
-        let confidence_bound = if let Some(t_rem) = estimated_remaining {
-            // Bound for reaching zero within 2·T_remaining additional steps
-            // (safety factor of 2 for variance).
-            let total_t = steps_with_deltas + (2.0 * t_rem).ceil() as usize;
+        let estimated_remaining =
+            (mean_credit > self.config.epsilon).then(|| v_current / mean_credit);
+
+        let confidence_bound = estimated_remaining.map_or(0.0, |t_rem| {
+            // Safety factor of 2 for variance.
+            #[allow(clippy::cast_sign_loss)]
+            let extra = (2.0 * t_rem).ceil().max(0.0) as usize;
+            let total_t = steps_with_deltas + extra;
             let tail = self.azuma_hoeffding_bound(total_t, mean_credit, effective_step_bound);
             (1.0 - tail).clamp(0.0, 1.0)
+        });
+
+        let stall_detected = self.stall_run >= self.config.stall_threshold;
+
+        // Convergence gate combines concentration and empirical trend, while
+        // rejecting strongly oscillatory traces.
+        let violation_rate = if steps_with_deltas > 0 {
+            self.increase_count as f64 / steps_with_deltas as f64
         } else {
             0.0
         };
-
-        // --- Convergence determination ---
-        // The process is "converging" if:
-        // 1. Mean credit is positive (net downward trend).
-        // 2. No stall detected.
-        // 3. Azuma bound is below the failure probability (1 - confidence).
-        let stall_detected = self.stall_run >= self.config.stall_threshold;
+        let reduction_ratio = if v_initial > self.config.epsilon {
+            ((v_initial - v_current) / v_initial).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let strong_azuma_signal = azuma < (1.0 - self.config.confidence);
+        let strong_empirical_reduction = reduction_ratio >= self.config.confidence;
         let converging = mean_credit > self.config.epsilon
             && !stall_detected
-            && azuma < (1.0 - self.config.confidence);
+            && violation_rate <= MAX_CONVERGENCE_VIOLATION_RATE
+            && (strong_azuma_signal || strong_empirical_reduction);
 
-        // --- Quiescence achieved ---
-        if v_current <= self.config.epsilon {
-            evidence.push(EvidenceEntry {
-                step: n - 1,
-                potential: v_current,
-                bound: 0.0,
-                description: "quiescence reached (V ≈ 0)".to_owned(),
-            });
-        }
-
-        // --- Stall evidence ---
-        if stall_detected {
-            evidence.push(EvidenceEntry {
-                step: n - 1,
-                potential: v_current,
-                bound: self.stall_run as f64,
-                description: format!(
-                    "stall: {} consecutive non-decreasing steps (threshold: {})",
-                    self.stall_run, self.config.stall_threshold,
-                ),
-            });
-        }
-
-        // --- Monotonicity violations ---
-        if self.increase_count > 0 {
-            let violation_rate = self.increase_count as f64 / steps_with_deltas as f64;
-            evidence.push(EvidenceEntry {
-                step: n - 1,
-                potential: v_current,
-                bound: violation_rate,
-                description: format!(
-                    "{} monotonicity violations out of {} steps (rate: {:.4})",
-                    self.increase_count, steps_with_deltas, violation_rate,
-                ),
-            });
-        }
-
-        // --- Ville's bound on worst-case exceedance ---
-        let ville = self.ville_bound(0.5);
-        if ville > 0.01 {
-            evidence.push(EvidenceEntry {
-                step: n - 1,
-                potential: v_current,
-                bound: ville,
-                description: format!(
-                    "Ville bound: P(potential ever exceeds 1.5·V₀) ≤ {:.4}",
-                    ville,
-                ),
-            });
-        }
-
-        // --- Progress summary ---
-        let total_progress = v_initial - v_current;
-        evidence.push(EvidenceEntry {
-            step: n - 1,
-            potential: v_current,
-            bound: azuma,
-            description: format!(
-                "total progress {:.4} over {} steps, mean credit {:.4}/step, \
-                 Azuma tail P ≤ {:.6}",
-                total_progress, steps_with_deltas, mean_credit, azuma,
-            ),
-        });
+        let evidence = self.build_evidence(
+            n,
+            v_initial,
+            v_current,
+            steps_with_deltas,
+            mean_credit,
+            azuma,
+            stall_detected,
+            effective_step_bound,
+        );
 
         CertificateVerdict {
             converging,
@@ -690,6 +629,104 @@ impl ProgressCertificate {
             max_observed_step: self.max_abs_delta,
             evidence,
         }
+    }
+
+    /// Builds the auditable evidence trail for a verdict.
+    #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
+    fn build_evidence(
+        &self,
+        n: usize,
+        v_initial: f64,
+        v_current: f64,
+        steps_with_deltas: usize,
+        mean_credit: f64,
+        azuma: f64,
+        stall_detected: bool,
+        _effective_step_bound: f64,
+    ) -> Vec<EvidenceEntry> {
+        let mut evidence = Vec::new();
+        let last_step = n - 1;
+
+        // Step bound exceeded.
+        if self.max_abs_delta > self.config.max_step_bound {
+            let max_obs = self.max_abs_delta;
+            let configured = self.config.max_step_bound;
+            evidence.push(EvidenceEntry {
+                step: last_step,
+                potential: v_current,
+                bound: max_obs,
+                description: format!(
+                    "max observed step {max_obs:.4} exceeds configured bound \
+                     {configured:.4}; using observed max for Azuma bound",
+                ),
+            });
+        }
+
+        // Quiescence achieved.
+        if v_current <= self.config.epsilon {
+            evidence.push(EvidenceEntry {
+                step: last_step,
+                potential: v_current,
+                bound: 0.0,
+                description: "quiescence reached (V ≈ 0)".to_owned(),
+            });
+        }
+
+        // Stall evidence.
+        if stall_detected {
+            let run = self.stall_run;
+            let threshold = self.config.stall_threshold;
+            evidence.push(EvidenceEntry {
+                step: last_step,
+                potential: v_current,
+                bound: run as f64,
+                description: format!(
+                    "stall: {run} consecutive non-decreasing steps (threshold: {threshold})",
+                ),
+            });
+        }
+
+        // Monotonicity violations.
+        if self.increase_count > 0 {
+            let violation_rate = self.increase_count as f64 / steps_with_deltas as f64;
+            let count = self.increase_count;
+            evidence.push(EvidenceEntry {
+                step: last_step,
+                potential: v_current,
+                bound: violation_rate,
+                description: format!(
+                    "{count} monotonicity violations out of {steps_with_deltas} steps \
+                     (rate: {violation_rate:.4})",
+                ),
+            });
+        }
+
+        // Ville's bound on worst-case exceedance.
+        let ville = self.ville_bound(0.5);
+        if ville > 0.01 {
+            evidence.push(EvidenceEntry {
+                step: last_step,
+                potential: v_current,
+                bound: ville,
+                description: format!(
+                    "Ville bound: P(potential ever exceeds 1.5\u{00b7}V\u{2080}) \u{2264} {ville:.4}",
+                ),
+            });
+        }
+
+        // Progress summary.
+        let total_progress = v_initial - v_current;
+        evidence.push(EvidenceEntry {
+            step: last_step,
+            potential: v_current,
+            bound: azuma,
+            description: format!(
+                "total progress {total_progress:.4} over {steps_with_deltas} steps, \
+                 mean credit {mean_credit:.4}/step, Azuma tail P \u{2264} {azuma:.6}",
+            ),
+        });
+
+        evidence
     }
 
     /// Returns the current observation count.
@@ -813,6 +850,11 @@ impl ProgressCertificate {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_lossless,
+    clippy::cast_precision_loss,
+    clippy::suboptimal_flops
+)]
 mod tests {
     use super::*;
 
@@ -1061,7 +1103,7 @@ mod tests {
             "linear decrease should be converging: {verdict}"
         );
         assert!(!verdict.stall_detected);
-        assert_eq!(verdict.increase_count(), 0);
+        assert_eq!(cert.increase_count(), 0);
         assert!(
             verdict.confidence_bound > 0.90,
             "confidence should exceed 0.90, got {:.4}",
@@ -1129,7 +1171,7 @@ mod tests {
             "persistent increases should trigger stall"
         );
         assert!(
-            verdict.increase_count() > 0,
+            cert.increase_count() > 0,
             "should have monotonicity violations"
         );
     }
@@ -1156,7 +1198,11 @@ mod tests {
 
     #[test]
     fn azuma_bound_decreases_with_more_steps() {
-        let config = ProgressConfig::default();
+        // Use step bound matching actual step size for a tight bound.
+        let config = ProgressConfig {
+            max_step_bound: 10.0,
+            ..ProgressConfig::default()
+        };
         let mut cert = ProgressCertificate::new(config);
 
         // Constant decrease of 10 per step from 1000.
@@ -1166,11 +1212,12 @@ mod tests {
             cert.observe(v);
         }
 
-        // Azuma bound should be small for many steps of consistent progress.
+        // With c=10 matching actual steps, Azuma bound should be tight:
+        // exp(-2·510²/(49·10²)) = exp(-10.6) ≈ 2.5e-5
         let verdict = cert.verdict();
         assert!(
             verdict.azuma_bound < 0.01,
-            "azuma bound should be small with consistent progress, got {:.6}",
+            "azuma bound should be small with consistent progress and tight c, got {:.6}",
             verdict.azuma_bound,
         );
     }
@@ -1487,13 +1534,13 @@ mod tests {
     fn evidence_entry_display() {
         let entry = EvidenceEntry {
             step: 42,
-            potential: 3.14,
+            potential: 3.25,
             bound: 0.01,
             description: "test evidence".to_owned(),
         };
         let text = format!("{entry}");
         assert!(text.contains("step=42"));
-        assert!(text.contains("3.14"));
+        assert!(text.contains("3.25"));
         assert!(text.contains("test evidence"));
     }
 
@@ -1595,6 +1642,10 @@ mod tests {
         }
 
         let verdict = cert.verdict();
+        assert!(
+            !verdict.converging,
+            "oscillation should not be classified as converging"
+        );
         // Should have many increase violations.
         assert!(
             cert.increase_count() > 5,
@@ -1765,7 +1816,7 @@ mod tests {
             "should reach quiescence"
         );
         assert!(
-            verdict.increase_count() > 0,
+            cert.increase_count() > 0,
             "jitter should cause at least one violation (3.0 -> 3.1)"
         );
 
