@@ -144,6 +144,8 @@ rustls-pemfile = { version = "2.2", optional = true }
 base64 = "0.22.1"
 # SHA-1 hashing for WebSocket Sec-WebSocket-Accept calculation (RFC 6455)
 sha1 = "0.10"
+# Cross-platform signal registration (safe wrapper around OS signal handlers)
+signal-hook = "0.3"
 # X.509 certificate parsing for SPKI extraction
 x509-parser = { version = "0.18", optional = true }
 # Optional TOML config file support for RuntimeBuilder

@@ -1,15 +1,11 @@
 //! Cross-platform Ctrl+C handling.
 //!
-//! Provides a simple async function to wait for Ctrl+C (SIGINT on Unix,
-//! console Ctrl+C event on Windows).
-//!
-//! # Phase 0 Implementation
-//!
-//! In Phase 0, Ctrl+C handling requires external signal infrastructure
-//! that is not yet available. This module provides the API surface for
-//! forward compatibility.
+//! Provides a simple async function to wait for Ctrl+C (SIGINT on Unix).
+//! Non-Unix builds return an unsupported error.
 
 use std::io;
+
+use super::{SignalKind, signal};
 
 /// Error returned when Ctrl+C handling is not available.
 #[derive(Debug, Clone)]
@@ -18,9 +14,9 @@ pub struct CtrlCError {
 }
 
 impl CtrlCError {
-    const fn not_implemented() -> Self {
+    const fn unavailable() -> Self {
         Self {
-            message: "Ctrl+C handling not implemented in Phase 0",
+            message: "Ctrl+C handling is unavailable on this platform/build",
         }
     }
 }
@@ -72,18 +68,15 @@ impl From<CtrlCError> for io::Error {
 /// }
 /// ```
 pub async fn ctrl_c() -> io::Result<()> {
-    // Phase 0: Ctrl+C handling not yet implemented.
-    //
-    // A proper implementation requires one of:
-    // 1. Platform-specific signal handling (sigaction on Unix, SetConsoleCtrlHandler on Windows)
-    // 2. The `ctrlc` crate or similar
-    // 3. The `signal-hook` crate with async integration
-    //
-    // Since we want to minimize dependencies and forbid unsafe code,
-    // this is deferred to Phase 1 where we'll add proper signal integration.
-    //
-    // For now, return an error indicating the feature is not available.
-    Err(CtrlCError::not_implemented().into())
+    let mut stream = signal(SignalKind::interrupt())
+        .map_err(|_| io::Error::new(io::ErrorKind::Unsupported, CtrlCError::unavailable()))?;
+    match stream.recv().await {
+        Some(()) => Ok(()),
+        None => Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "ctrl_c signal stream closed unexpectedly",
+        )),
+    }
 }
 
 /// Checks if Ctrl+C handling is available on this platform.
@@ -91,8 +84,15 @@ pub async fn ctrl_c() -> io::Result<()> {
 /// Returns `true` if `ctrl_c()` can successfully register a handler.
 #[must_use]
 pub fn is_available() -> bool {
-    // Phase 0: Not available without signal infrastructure
-    false
+    #[cfg(unix)]
+    {
+        signal(SignalKind::interrupt()).is_ok()
+    }
+
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -108,17 +108,20 @@ mod tests {
     fn ctrl_c_not_available() {
         init_test("ctrl_c_not_available");
         let available = is_available();
-        crate::assert_with_log!(!available, "not available", false, available);
+        #[cfg(unix)]
+        crate::assert_with_log!(available, "available on unix", true, available);
+        #[cfg(not(unix))]
+        crate::assert_with_log!(!available, "not available off-unix", false, available);
         crate::test_complete!("ctrl_c_not_available");
     }
 
     #[test]
     fn ctrl_c_error_display() {
         init_test("ctrl_c_error_display");
-        let err = CtrlCError::not_implemented();
+        let err = CtrlCError::unavailable();
         let msg = format!("{err}");
-        let contains = msg.contains("Phase 0");
-        crate::assert_with_log!(contains, "contains Phase 0", true, contains);
+        let contains = msg.contains("unavailable");
+        crate::assert_with_log!(contains, "contains unavailable", true, contains);
         crate::test_complete!("ctrl_c_error_display");
     }
 }

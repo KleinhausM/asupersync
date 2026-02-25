@@ -6,19 +6,19 @@
 //! # Components
 //!
 //! - [`SignalKind`]: Enumeration of Unix signal types
-//! - [`Signal`]: Async stream for receiving signals (Phase 1)
-//! - [`ctrl_c`]: Cross-platform Ctrl+C handling (Phase 1)
+//! - [`Signal`]: Async stream for receiving Unix signals
+//! - [`ctrl_c`]: Cross-platform Ctrl+C handling (Unix-backed in this build)
 //! - [`ShutdownController`]: Coordinated graceful shutdown
 //! - [`ShutdownReceiver`]: Handle for receiving shutdown notifications
 //! - [`with_graceful_shutdown`]: Run tasks with shutdown support
 //!
-//! # Phase 0 Implementation
+//! # Platform Behavior
 //!
-//! In Phase 0, signal handling requires external infrastructure that is not
-//! yet available:
+//! Unix signal streams (`signal(...)`) and `ctrl_c()` are supported through a
+//! global signal dispatcher.
 //!
-//! - Unix signals require either unsafe libc bindings or the `signal-hook` crate
-//! - Cross-platform Ctrl+C requires the `ctrlc` crate or similar
+//! Non-Unix builds expose the same API surface but return unsupported errors
+//! for signal stream creation.
 //!
 //! The [`ShutdownController`] and graceful shutdown helpers are fully
 //! functional using our sync primitives.

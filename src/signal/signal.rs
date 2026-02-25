@@ -1,31 +1,43 @@
-//! Async signal stream for Unix signals.
+//! Async signal streams for Unix signals.
 //!
 //! # Cancel Safety
 //!
-//! - `Signal::recv`: Cancel-safe, can be cancelled at any await point.
+//! - `Signal::recv`: cancel-safe, no delivered signal notification is lost.
 //!
-//! # Phase 0 Implementation
+//! # Design
 //!
-//! In Phase 0, signal streams are not yet implemented due to the lack of
-//! a reactor and the `unsafe_code = "forbid"` constraint. The API surface
-//! is defined for forward compatibility.
+//! On Unix, a global dispatcher thread is installed once and receives process
+//! signals via `signal-hook`. Delivered signals are faned out to per-kind async
+//! waiters using `Notify` + monotone delivery counters.
 
 use std::io;
 
+#[cfg(unix)]
+use std::collections::HashMap;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(unix)]
+use std::sync::{Arc, OnceLock};
+#[cfg(unix)]
+use std::thread;
+
+#[cfg(unix)]
+use crate::sync::Notify;
+
 use super::SignalKind;
 
-/// Error returned when signal handling is not available.
+/// Error returned when signal handling is unavailable.
 #[derive(Debug, Clone)]
 pub struct SignalError {
     kind: SignalKind,
-    message: &'static str,
+    message: String,
 }
 
 impl SignalError {
-    fn not_implemented(kind: SignalKind) -> Self {
+    fn unsupported(kind: SignalKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            message: "Signal handling not implemented in Phase 0",
+            message: message.into(),
         }
     }
 }
@@ -41,6 +53,134 @@ impl std::error::Error for SignalError {}
 impl From<SignalError> for io::Error {
     fn from(e: SignalError) -> Self {
         Self::new(io::ErrorKind::Unsupported, e)
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct SignalSlot {
+    deliveries: AtomicU64,
+    notify: Notify,
+}
+
+#[cfg(unix)]
+impl SignalSlot {
+    fn new() -> Self {
+        Self {
+            deliveries: AtomicU64::new(0),
+            notify: Notify::new(),
+        }
+    }
+
+    fn record_delivery(&self) {
+        self.deliveries.fetch_add(1, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct SignalDispatcher {
+    slots: HashMap<SignalKind, Arc<SignalSlot>>,
+    _handle: signal_hook::iterator::Handle,
+}
+
+#[cfg(unix)]
+impl SignalDispatcher {
+    fn start() -> io::Result<Self> {
+        let mut slots = HashMap::with_capacity(8);
+        for kind in all_signal_kinds() {
+            slots.insert(kind, Arc::new(SignalSlot::new()));
+        }
+
+        let raw_signals: Vec<i32> = all_signal_kinds()
+            .iter()
+            .map(SignalKind::as_raw_value)
+            .collect();
+        let mut signals = signal_hook::iterator::Signals::new(raw_signals)?;
+        let handle = signals.handle();
+
+        let thread_slots = slots.clone();
+        thread::Builder::new()
+            .name("asupersync-signal-dispatch".to_string())
+            .spawn(move || {
+                for raw in signals.forever() {
+                    if let Some(kind) = signal_kind_from_raw(raw) {
+                        if let Some(slot) = thread_slots.get(&kind) {
+                            slot.record_delivery();
+                        }
+                    }
+                }
+            })
+            .map_err(|e| io::Error::other(format!("failed to spawn signal dispatcher: {e}")))?;
+
+        Ok(Self {
+            slots,
+            _handle: handle,
+        })
+    }
+
+    fn slot(&self, kind: SignalKind) -> Option<Arc<SignalSlot>> {
+        self.slots.get(&kind).cloned()
+    }
+
+    #[cfg(test)]
+    fn inject(&self, kind: SignalKind) {
+        if let Some(slot) = self.slots.get(&kind) {
+            slot.record_delivery();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn all_signal_kinds() -> [SignalKind; 8] {
+    [
+        SignalKind::Interrupt,
+        SignalKind::Terminate,
+        SignalKind::Hangup,
+        SignalKind::Quit,
+        SignalKind::User1,
+        SignalKind::User2,
+        SignalKind::Child,
+        SignalKind::WindowChange,
+    ]
+}
+
+#[cfg(unix)]
+fn signal_kind_from_raw(raw: i32) -> Option<SignalKind> {
+    if raw == libc::SIGINT {
+        Some(SignalKind::Interrupt)
+    } else if raw == libc::SIGTERM {
+        Some(SignalKind::Terminate)
+    } else if raw == libc::SIGHUP {
+        Some(SignalKind::Hangup)
+    } else if raw == libc::SIGQUIT {
+        Some(SignalKind::Quit)
+    } else if raw == libc::SIGUSR1 {
+        Some(SignalKind::User1)
+    } else if raw == libc::SIGUSR2 {
+        Some(SignalKind::User2)
+    } else if raw == libc::SIGCHLD {
+        Some(SignalKind::Child)
+    } else if raw == libc::SIGWINCH {
+        Some(SignalKind::WindowChange)
+    } else {
+        None
+    }
+}
+
+#[cfg(unix)]
+static SIGNAL_DISPATCHER: OnceLock<io::Result<SignalDispatcher>> = OnceLock::new();
+
+#[cfg(unix)]
+fn dispatcher_for(kind: SignalKind) -> Result<&'static SignalDispatcher, SignalError> {
+    let result = SIGNAL_DISPATCHER.get_or_init(SignalDispatcher::start);
+    match result {
+        Ok(dispatcher) => Ok(dispatcher),
+        Err(err) => Err(SignalError::unsupported(
+            kind,
+            format!("failed to initialize signal dispatcher: {err}"),
+        )),
     }
 }
 
@@ -65,6 +205,10 @@ impl From<SignalError> for io::Error {
 #[derive(Debug)]
 pub struct Signal {
     kind: SignalKind,
+    #[cfg(unix)]
+    slot: Arc<SignalSlot>,
+    #[cfg(unix)]
+    seen_deliveries: u64,
 }
 
 impl Signal {
@@ -75,15 +219,27 @@ impl Signal {
     /// Returns an error if signal handling is not available for this platform
     /// or signal kind.
     fn new(kind: SignalKind) -> Result<Self, SignalError> {
-        // Phase 0: Signal streams not yet implemented
-        // This requires either:
-        // 1. A reactor with signal fd support (epoll + signalfd on Linux)
-        // 2. The signal-hook crate with async integration
-        // 3. Unsafe signal handler registration via libc
-        //
-        // Since we forbid unsafe code and want minimal dependencies,
-        // this is deferred to Phase 1.
-        Err(SignalError::not_implemented(kind))
+        #[cfg(unix)]
+        {
+            let dispatcher = dispatcher_for(kind)?;
+            let slot = dispatcher.slot(kind).ok_or_else(|| {
+                SignalError::unsupported(kind, "signal kind is not supported by dispatcher")
+            })?;
+            let seen_deliveries = slot.deliveries.load(Ordering::Acquire);
+            Ok(Self {
+                kind,
+                slot,
+                seen_deliveries,
+            })
+        }
+
+        #[cfg(not(unix))]
+        {
+            Err(SignalError::unsupported(
+                kind,
+                "signal handling is only available on Unix in this build",
+            ))
+        }
     }
 
     /// Receives the next signal notification.
@@ -95,11 +251,23 @@ impl Signal {
     /// This method is cancel-safe. If you use it as the event in a `select!`
     /// statement and some other branch completes first, no signal notification
     /// is lost.
-    #[allow(clippy::unused_async)]
     pub async fn recv(&mut self) -> Option<()> {
-        // Signal streams are currently unavailable on this build path, so the
-        // stream is immediately exhausted if reached.
-        None
+        #[cfg(unix)]
+        {
+            loop {
+                let current = self.slot.deliveries.load(Ordering::Acquire);
+                if current > self.seen_deliveries {
+                    self.seen_deliveries = current;
+                    return Some(());
+                }
+                self.slot.notify.notified().await;
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            None
+        }
     }
 
     /// Returns the signal kind this stream is listening for.
@@ -219,53 +387,68 @@ mod tests {
     #[test]
     fn signal_error_display() {
         init_test("signal_error_display");
-        let err = SignalError::not_implemented(SignalKind::Terminate);
+        let err = SignalError::unsupported(SignalKind::Terminate, "signal unsupported");
         let msg = format!("{err}");
         let has_sigterm = msg.contains("SIGTERM");
         crate::assert_with_log!(has_sigterm, "contains SIGTERM", true, has_sigterm);
-        let has_phase = msg.contains("Phase 0");
-        crate::assert_with_log!(has_phase, "contains Phase 0", true, has_phase);
+        let has_reason = msg.contains("unsupported");
+        crate::assert_with_log!(has_reason, "contains reason", true, has_reason);
         crate::test_complete!("signal_error_display");
     }
 
     #[test]
-    fn signal_not_implemented() {
-        init_test("signal_not_implemented");
-        // All signals should return NotImplemented error in Phase 0
+    fn signal_creation_platform_contract() {
+        init_test("signal_creation_platform_contract");
         let result = signal(SignalKind::terminate());
-        let is_err = result.is_err();
-        crate::assert_with_log!(is_err, "result err", true, is_err);
-        let err = result.unwrap_err();
-        crate::assert_with_log!(
-            err.kind() == io::ErrorKind::Unsupported,
-            "err kind",
-            io::ErrorKind::Unsupported,
-            err.kind()
-        );
-        crate::test_complete!("signal_not_implemented");
+
+        #[cfg(unix)]
+        {
+            let ok = result.is_ok();
+            crate::assert_with_log!(ok, "signal creation ok", true, ok);
+        }
+
+        #[cfg(not(unix))]
+        {
+            let is_err = result.is_err();
+            crate::assert_with_log!(is_err, "signal unsupported", true, is_err);
+        }
+
+        crate::test_complete!("signal_creation_platform_contract");
     }
 
     #[cfg(unix)]
     #[test]
     fn unix_signal_helpers() {
         init_test("unix_signal_helpers");
-        // Verify all helper functions return the expected error
-        let sigint_err = sigint().is_err();
-        crate::assert_with_log!(sigint_err, "sigint err", true, sigint_err);
-        let sigterm_err = sigterm().is_err();
-        crate::assert_with_log!(sigterm_err, "sigterm err", true, sigterm_err);
-        let sighup_err = sighup().is_err();
-        crate::assert_with_log!(sighup_err, "sighup err", true, sighup_err);
-        let sigusr1_err = sigusr1().is_err();
-        crate::assert_with_log!(sigusr1_err, "sigusr1 err", true, sigusr1_err);
-        let sigusr2_err = sigusr2().is_err();
-        crate::assert_with_log!(sigusr2_err, "sigusr2 err", true, sigusr2_err);
-        let sigquit_err = sigquit().is_err();
-        crate::assert_with_log!(sigquit_err, "sigquit err", true, sigquit_err);
-        let sigchld_err = sigchld().is_err();
-        crate::assert_with_log!(sigchld_err, "sigchld err", true, sigchld_err);
-        let sigwinch_err = sigwinch().is_err();
-        crate::assert_with_log!(sigwinch_err, "sigwinch err", true, sigwinch_err);
+        let sigint_ok = sigint().is_ok();
+        crate::assert_with_log!(sigint_ok, "sigint ok", true, sigint_ok);
+        let sigterm_ok = sigterm().is_ok();
+        crate::assert_with_log!(sigterm_ok, "sigterm ok", true, sigterm_ok);
+        let sighup_ok = sighup().is_ok();
+        crate::assert_with_log!(sighup_ok, "sighup ok", true, sighup_ok);
+        let sigusr1_ok = sigusr1().is_ok();
+        crate::assert_with_log!(sigusr1_ok, "sigusr1 ok", true, sigusr1_ok);
+        let sigusr2_ok = sigusr2().is_ok();
+        crate::assert_with_log!(sigusr2_ok, "sigusr2 ok", true, sigusr2_ok);
+        let sigquit_ok = sigquit().is_ok();
+        crate::assert_with_log!(sigquit_ok, "sigquit ok", true, sigquit_ok);
+        let sigchld_ok = sigchld().is_ok();
+        crate::assert_with_log!(sigchld_ok, "sigchld ok", true, sigchld_ok);
+        let sigwinch_ok = sigwinch().is_ok();
+        crate::assert_with_log!(sigwinch_ok, "sigwinch ok", true, sigwinch_ok);
         crate::test_complete!("unix_signal_helpers");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_recv_observes_delivery() {
+        init_test("signal_recv_observes_delivery");
+        let mut stream = signal(SignalKind::terminate()).expect("stream available");
+        dispatcher_for(SignalKind::terminate())
+            .expect("dispatcher")
+            .inject(SignalKind::terminate());
+        let got = futures_lite::future::block_on(stream.recv());
+        crate::assert_with_log!(got.is_some(), "recv returns delivery", true, got.is_some());
+        crate::test_complete!("signal_recv_observes_delivery");
     }
 }
