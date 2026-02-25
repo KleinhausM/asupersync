@@ -34,13 +34,8 @@ impl<R: AsyncBufRead + Unpin> Stream for Lines<R> {
 
         loop {
             // 1. Check if we already have a newline in `this.buf`
-            if let Some(pos) = this.buf[this.bytes_read..].iter().position(|&b| b == b'\n') {
-                let newline_pos = this.bytes_read + pos;
-                let rest = this.buf.split_off(newline_pos + 1);
-                // this.buf now contains [line + \n]
-                // rest contains [remainder]
-
-                // Remove \n
+            if let Some(_pos) = this.buf[this.bytes_read..].iter().position(|&b| b == b'\n') {
+                // Remove \n (we know it's always exactly at the end because of step 4)
                 this.buf.pop();
 
                 // Handle \r\n
@@ -51,8 +46,6 @@ impl<R: AsyncBufRead + Unpin> Stream for Lines<R> {
                 let s = String::from_utf8(mem::take(&mut this.buf))
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
 
-                // Restore remainder
-                this.buf = rest;
                 this.bytes_read = 0;
 
                 return Poll::Ready(Some(s));
