@@ -106,6 +106,12 @@ impl ConnectionManager {
 
         let mut connections = self.state.lock();
 
+        // Re-check after acquiring state lock to close the race where shutdown
+        // begins between the first phase check and registration.
+        if self.shutdown_signal.is_shutting_down() {
+            return None;
+        }
+
         // Check capacity
         if let Some(max) = self.max_connections {
             if connections.len() >= max {

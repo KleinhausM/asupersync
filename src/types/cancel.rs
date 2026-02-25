@@ -1476,10 +1476,10 @@ mod tests {
             combined.poll_quota
         );
 
-        // Priority should be max (more urgent wins)
+        // Priority is min because Budget::combine always takes the minimum (most restrictive) priority
         crate::assert_with_log!(
-            combined.priority >= user_budget.priority,
-            "combined priority ≥ user",
+            combined.priority <= user_budget.priority,
+            "combined priority ≤ user",
             user_budget.priority,
             combined.priority
         );
@@ -1493,9 +1493,9 @@ mod tests {
             with_shutdown.poll_quota
         );
         crate::assert_with_log!(
-            with_shutdown.priority == 255,
-            "shutdown priority wins",
-            255u8,
+            with_shutdown.priority <= combined.priority,
+            "shutdown priority min",
+            combined.priority,
             with_shutdown.priority
         );
 

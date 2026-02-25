@@ -653,7 +653,7 @@ impl TimerWheel {
 
         // 1. Cascade boundary: distance from cursor to slot 0 (wrap-around)
         let cascade_dist = SLOTS_PER_LEVEL - l0.cursor;
-        let cascade_tick = self.current_tick + cascade_dist as u64;
+        let cascade_tick = self.current_tick.saturating_add(cascade_dist as u64);
         if cascade_tick < next_l0 {
             next_l0 = cascade_tick;
         }
@@ -661,7 +661,7 @@ impl TimerWheel {
         // 2. Bitmap scan: find first occupied slot before cascade point
         //    Uses word-level bit ops — O(4) worst case vs O(256) linear scan.
         if let Some(dist) = l0.next_occupied_before_wrap() {
-            let item_tick = self.current_tick + dist as u64;
+            let item_tick = self.current_tick.saturating_add(dist as u64);
             if item_tick < next_l0 {
                 next_l0 = item_tick;
             }

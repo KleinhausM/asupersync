@@ -290,11 +290,11 @@ impl Events {
 
     /// Pushes an event.
     ///
-    /// The container will grow if necessary. Capacity limits should be enforced
-    /// by the reactor's poll batch size, not by dropping events here (which
-    /// would be fatal for edge-triggered notifications).
+    /// The container drops events when capacity is reached.
     pub(crate) fn push(&mut self, event: Event) {
-        self.inner.push(event);
+        if self.inner.len() < self.capacity {
+            self.inner.push(event);
+        }
     }
 
     /// Returns the number of events.

@@ -39,7 +39,7 @@
 //! }
 //!
 //! // Process expired timers
-//! let expired = wheel.tick();
+//! let expired = wheel.tick(Instant::now());
 //! for waker in expired {
 //!     waker.wake();
 //! }
@@ -448,9 +448,7 @@ impl<const SLOTS: usize> TimerWheel<SLOTS> {
     /// # Safety
     ///
     /// All timer nodes in the wheel must be valid.
-    pub unsafe fn tick(&mut self) -> Vec<Waker> {
-        let now = Instant::now();
-
+    pub unsafe fn tick(&mut self, now: Instant) -> Vec<Waker> {
         // Collect expired timers from current slot
         let wakers = self.slots[self.current].collect_expired(now);
         self.count = self.count.saturating_sub(wakers.len());
@@ -705,8 +703,7 @@ impl HierarchicalTimerWheel {
     /// # Safety
     ///
     /// All timer nodes in the wheel must be valid.
-    pub unsafe fn tick(&mut self) -> Vec<Waker> {
-        let now = Instant::now();
+    pub unsafe fn tick(&mut self, now: Instant) -> Vec<Waker> {
         let mut wakers = self.level0.slots[self.level0.cursor].collect_expired(now);
         self.count = self.count.saturating_sub(wakers.len());
 
@@ -731,7 +728,7 @@ impl HierarchicalTimerWheel {
         let mut wakers = Vec::with_capacity(self.count);
 
         while self.current_tick < target_tick {
-            let mut tick_wakers = self.tick();
+            let mut tick_wakers = self.tick(now);
             wakers.append(&mut tick_wakers);
         }
 
@@ -1197,7 +1194,7 @@ mod tests {
 
         let mut wakers = Vec::new();
         for _ in 0..(LEVEL0_SLOTS * (slot + 1)) {
-            let mut tick_wakers = unsafe { wheel.tick() };
+            let mut tick_wakers = unsafe { wheel.tick(Instant::now()) };
             wakers.append(&mut tick_wakers);
         }
 
