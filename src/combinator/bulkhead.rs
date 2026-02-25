@@ -295,7 +295,7 @@ impl Bulkhead {
             match self.available_permits.compare_exchange_weak(
                 available,
                 available - weight,
-                Ordering::Release,
+                Ordering::Acquire,
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
@@ -355,7 +355,7 @@ impl Bulkhead {
                         match self.available_permits.compare_exchange_weak(
                             current,
                             current - entry.weight,
-                            Ordering::Release,
+                            Ordering::Acquire,
                             Ordering::Acquire,
                         ) {
                             Ok(_) => break true,
