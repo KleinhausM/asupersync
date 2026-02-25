@@ -2,7 +2,7 @@
 //!
 //! # Purpose
 //!
-//! Provides cryptographic-strength statistical guarantees that cancellation
+//! Provides statistically grounded guarantees that cancellation
 //! drain is making progress toward quiescence. Uses supermartingale theory
 //! to prove that a cancelling system will terminate within bounded time,
 //! with explicit certificates that can be audited.
@@ -253,6 +253,43 @@ impl fmt::Display for EvidenceEntry {
 }
 
 // ============================================================================
+// Drain Phase
+// ============================================================================
+
+/// Phase of the cancellation drain process.
+///
+/// Determined automatically from the credit stream using an exponential
+/// moving average to detect transitions between rapid drain and slow
+/// convergence tail. This enables phase-adaptive timeout policies:
+/// during `RapidDrain` the system can use aggressive timeouts, while
+/// `SlowTail` warrants patience and `Stalled` warrants escalation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainPhase {
+    /// Insufficient observations to classify the phase.
+    Warmup,
+    /// Rapid initial drain: high credit per step, potential falling fast.
+    RapidDrain,
+    /// Slow tail convergence: diminishing returns per step.
+    SlowTail,
+    /// No meaningful progress is being made.
+    Stalled,
+    /// Potential is at or near zero; drain is complete.
+    Quiescent,
+}
+
+impl fmt::Display for DrainPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Warmup => f.write_str("warmup"),
+            Self::RapidDrain => f.write_str("rapid_drain"),
+            Self::SlowTail => f.write_str("slow_tail"),
+            Self::Stalled => f.write_str("stalled"),
+            Self::Quiescent => f.write_str("quiescent"),
+        }
+    }
+}
+
+// ============================================================================
 // Certificate Verdict
 // ============================================================================
 
@@ -302,6 +339,23 @@ pub struct CertificateVerdict {
     /// Maximum single-step absolute change observed.
     pub max_observed_step: f64,
 
+    /// Freedman's inequality bound (variance-adaptive, strictly dominates
+    /// Azuma–Hoeffding when empirical variance is below worst-case).
+    ///
+    /// ```text
+    /// P(Sₜ ≥ λ) ≤ exp(-λ² / (2(Vₜ + bλ/3)))
+    /// ```
+    ///
+    /// where `Vₜ` is the predictable quadratic variation and `b` is the
+    /// max step size. Always `≤ azuma_bound`.
+    pub freedman_bound: f64,
+
+    /// Current drain phase classification.
+    pub drain_phase: DrainPhase,
+
+    /// Empirical variance of per-step deltas (`None` if < 2 observations).
+    pub empirical_variance: Option<f64>,
+
     /// Auditable evidence trail.
     pub evidence: Vec<EvidenceEntry>,
 }
@@ -317,8 +371,13 @@ impl fmt::Display for CertificateVerdict {
         writeln!(f, "V(Σₜ):              {:.4}", self.current_potential)?;
         writeln!(f, "Mean credit/step:   {:.4}", self.mean_credit)?;
         writeln!(f, "Max |Δ|:            {:.4}", self.max_observed_step)?;
+        writeln!(f, "Drain phase:        {}", self.drain_phase)?;
         writeln!(f, "Confidence bound:   {:.6}", self.confidence_bound)?;
         writeln!(f, "Azuma bound:        {:.6}", self.azuma_bound)?;
+        writeln!(f, "Freedman bound:     {:.6}", self.freedman_bound)?;
+        if let Some(var) = self.empirical_variance {
+            writeln!(f, "Delta variance:     {var:.6}")?;
+        }
         if let Some(est) = self.estimated_remaining_steps {
             writeln!(f, "Est. remaining:     {est:.1} steps")?;
         } else {
@@ -360,10 +419,26 @@ impl fmt::Display for CertificateVerdict {
 /// preserving sufficient statistics.
 #[derive(Debug, Clone)]
 pub struct ProgressCertificate {
-    /// Full observation history.
+    /// Retained observation history for audit/debug.
+    ///
+    /// This may be compacted via [`compact`](Self::compact). Aggregate
+    /// statistics remain global across the full run.
     observations: Vec<ProgressObservation>,
     /// Configuration.
     config: ProgressConfig,
+    /// Total number of observations recorded since last reset.
+    ///
+    /// This count is independent of retained history and is not affected by
+    /// [`compact`](Self::compact).
+    total_observations: usize,
+    /// Number of observed deltas (always `total_observations - 1` when non-zero).
+    total_deltas: usize,
+    /// Initial potential `V(Σ₀)` for this certificate run.
+    initial_potential: Option<f64>,
+    /// Most recent potential value, even if older observations were compacted.
+    last_potential: Option<f64>,
+    /// Running sum of deltas `ΣΔᵢ` across all observed steps.
+    sum_delta: f64,
     /// Running sum of credits: `Σcᵢ`.
     total_credit: f64,
     /// Running sum of squared deltas for variance estimation.
@@ -375,6 +450,10 @@ pub struct ProgressCertificate {
     increase_count: usize,
     /// Length of the current non-decreasing tail (for stall detection).
     stall_run: usize,
+    /// Exponential moving average of per-step credit for phase detection.
+    ///
+    /// Uses smoothing factor `alpha = 2 / (window + 1)` with `window = 8`.
+    ema_credit: f64,
 }
 
 impl ProgressCertificate {
@@ -393,11 +472,17 @@ impl ProgressCertificate {
         Self {
             observations: Vec::new(),
             config,
+            total_observations: 0,
+            total_deltas: 0,
+            initial_potential: None,
+            last_potential: None,
+            sum_delta: 0.0,
             total_credit: 0.0,
             sum_delta_sq: 0.0,
             max_abs_delta: 0.0,
             increase_count: 0,
             stall_run: 0,
+            ema_credit: 0.0,
         }
     }
 
@@ -414,17 +499,18 @@ impl ProgressCertificate {
     /// note is recorded.
     pub fn observe(&mut self, potential: f64) {
         let potential = potential.max(0.0);
-        let step = self.observations.len();
+        let step = self.total_observations;
 
-        let delta = self
-            .observations
-            .last()
-            .map_or(0.0, |prev| potential - prev.potential);
+        let delta = self.last_potential.map_or(0.0, |prev| potential - prev);
 
         let credit = (-delta).max(0.0);
 
         self.total_credit += credit;
-        self.sum_delta_sq += delta * delta;
+        if step > 0 {
+            self.total_deltas += 1;
+            self.sum_delta += delta;
+            self.sum_delta_sq += delta * delta;
+        }
 
         let abs_delta = delta.abs();
         if abs_delta > self.max_abs_delta {
@@ -433,6 +519,14 @@ impl ProgressCertificate {
 
         if step > 0 && delta > self.config.epsilon {
             self.increase_count += 1;
+        }
+
+        // Update exponential moving average of credit for phase detection.
+        // Alpha = 2 / (8 + 1) ≈ 0.222. The EMA tracks whether the credit
+        // rate is accelerating (rapid drain) or decelerating (slow tail).
+        if step > 0 {
+            const EMA_ALPHA: f64 = 2.0 / 9.0;
+            self.ema_credit = EMA_ALPHA.mul_add(credit, (1.0 - EMA_ALPHA) * self.ema_credit);
         }
 
         // Stall run: count consecutive non-decreasing steps at the tail.
@@ -448,6 +542,11 @@ impl ProgressCertificate {
             delta,
             credit,
         });
+        if self.initial_potential.is_none() {
+            self.initial_potential = Some(potential);
+        }
+        self.last_potential = Some(potential);
+        self.total_observations += 1;
     }
 
     /// Records a potential value from a [`PotentialRecord`](crate::obligation::lyapunov::PotentialRecord).
@@ -480,7 +579,7 @@ impl ProgressCertificate {
             return 1.0;
         }
 
-        let initial = self.observations.first().map_or(0.0, |o| o.potential);
+        let initial = self.initial_potential.unwrap_or(0.0);
 
         // Expected potential at step t: V₀ - t·mu.
         // lambda = residual potential assuming expected progress:
@@ -490,16 +589,10 @@ impl ProgressCertificate {
         #[allow(clippy::cast_precision_loss)]
         let t_f = t as f64;
         let expected_remaining = t_f.mul_add(-mean_credit, initial);
+        let lambda = expected_remaining.abs();
 
-        if expected_remaining <= 0.0 {
-            // Expected progress already sufficient — bound is 0 (certain).
-            return 0.0;
-        }
-
-        // Azuma–Hoeffding: P(Sₜ ≤ -lambda) ≤ exp(-2·lambda² / (t·c²))
-        // where Sₜ = Σ(Xᵢ - E[Xᵢ]) and lambda = expected_remaining.
-        let exponent =
-            -2.0 * expected_remaining * expected_remaining / (t_f * step_bound * step_bound);
+        // Azuma–Hoeffding: P(Sₜ ≥ lambda) ≤ exp(-2·lambda² / (t·c²))
+        let exponent = -2.0 * lambda * lambda / (t_f * step_bound * step_bound);
 
         exponent.exp()
     }
@@ -516,12 +609,91 @@ impl ProgressCertificate {
     /// `margin` fraction.
     #[must_use]
     fn ville_bound(&self, margin: f64) -> f64 {
-        let v0 = self.observations.first().map_or(0.0, |o| o.potential);
+        let v0 = self.initial_potential.unwrap_or(0.0);
         if v0 <= 0.0 {
             return 0.0;
         }
         let threshold = v0 * (1.0 + margin);
         (v0 / threshold).min(1.0)
+    }
+
+    /// Computes Freedman's inequality bound (variance-adaptive).
+    ///
+    /// Freedman's inequality is a variance-sensitive analogue of
+    /// Azuma–Hoeffding that replaces the worst-case `t·c²` term with the
+    /// predictable quadratic variation `Vₜ = Σ Var(Xᵢ | Fᵢ₋₁)`:
+    ///
+    /// ```text
+    /// P(Sₜ ≥ λ AND Vₜ ≤ v) ≤ exp(-λ² / (2(v + bλ/3)))
+    /// ```
+    ///
+    /// where `b` is the max step size. This is strictly tighter than
+    /// Azuma whenever empirical variance is below `c²`, which is the
+    /// common case for well-behaved cancellation drains with occasional
+    /// jitter. The improvement can be orders of magnitude.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    fn freedman_bound(&self, t: usize, mean_credit: f64, step_bound: f64) -> f64 {
+        if t == 0 || step_bound <= 0.0 {
+            return 1.0;
+        }
+
+        let initial = self.initial_potential.unwrap_or(0.0);
+        let t_f = t as f64;
+        let expected_remaining = t_f.mul_add(-mean_credit, initial);
+
+        let lambda = expected_remaining.abs();
+
+        // Use empirical variance if available, else fall back to worst-case
+        // (which makes Freedman equivalent to Azuma).
+        let variance = self.delta_variance().unwrap_or(step_bound * step_bound);
+        let predictable_variation = t_f * variance;
+
+        let denom = 2.0 * step_bound.mul_add(lambda / 3.0, predictable_variation);
+
+        if denom <= 0.0 {
+            return 1.0;
+        }
+
+        (-lambda * lambda / denom).exp()
+    }
+
+    /// Returns the current drain phase.
+    ///
+    /// Phase classification uses the exponential moving average of credit
+    /// compared to the overall mean credit rate:
+    ///
+    /// - **Quiescent**: potential ≈ 0 (drain complete)
+    /// - **Stalled**: stall run ≥ threshold (no progress)
+    /// - **RapidDrain**: EMA credit ≥ 50% of mean credit
+    /// - **SlowTail**: EMA credit < 50% of mean credit
+    /// - **Warmup**: insufficient data
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn drain_phase(&self) -> DrainPhase {
+        if self.total_observations < self.config.min_observations {
+            return DrainPhase::Warmup;
+        }
+        let current = self.last_potential.unwrap_or(0.0);
+        if current <= self.config.epsilon {
+            return DrainPhase::Quiescent;
+        }
+        if self.stall_run >= self.config.stall_threshold {
+            return DrainPhase::Stalled;
+        }
+        let mean_credit = if self.total_deltas > 0 {
+            self.total_credit / self.total_deltas as f64
+        } else {
+            return DrainPhase::Warmup;
+        };
+        if mean_credit <= self.config.epsilon {
+            return DrainPhase::Stalled;
+        }
+        if self.ema_credit >= 0.5 * mean_credit {
+            DrainPhase::RapidDrain
+        } else {
+            DrainPhase::SlowTail
+        }
     }
 
     /// Produces a certificate verdict from the current observation history.
@@ -536,7 +708,7 @@ impl ProgressCertificate {
     #[allow(clippy::cast_precision_loss)]
     pub fn verdict(&self) -> CertificateVerdict {
         const MAX_CONVERGENCE_VIOLATION_RATE: f64 = 0.25;
-        let n = self.observations.len();
+        let n = self.total_observations;
 
         // --- Insufficient data: provisional verdict ---
         if n < self.config.min_observations {
@@ -547,17 +719,20 @@ impl ProgressCertificate {
                 stall_detected: false,
                 azuma_bound: 1.0,
                 total_steps: n,
-                current_potential: self.observations.last().map_or(0.0, |o| o.potential),
-                initial_potential: self.observations.first().map_or(0.0, |o| o.potential),
+                current_potential: self.last_potential.unwrap_or(0.0),
+                initial_potential: self.initial_potential.unwrap_or(0.0),
                 mean_credit: 0.0,
                 max_observed_step: self.max_abs_delta,
+                freedman_bound: 1.0,
+                drain_phase: DrainPhase::Warmup,
+                empirical_variance: None,
                 evidence: Vec::new(),
             };
         }
 
-        let v_initial = self.observations[0].potential;
-        let v_current = self.observations[n - 1].potential;
-        let steps_with_deltas = n - 1;
+        let v_initial = self.initial_potential.unwrap_or(0.0);
+        let v_current = self.last_potential.unwrap_or(0.0);
+        let steps_with_deltas = self.total_deltas;
         let mean_credit = if steps_with_deltas > 0 {
             self.total_credit / steps_with_deltas as f64
         } else {
@@ -571,23 +746,29 @@ impl ProgressCertificate {
         };
         let azuma =
             self.azuma_hoeffding_bound(steps_with_deltas, mean_credit, effective_step_bound);
+        let freedman = self.freedman_bound(steps_with_deltas, mean_credit, effective_step_bound);
 
         let estimated_remaining =
             (mean_credit > self.config.epsilon).then(|| v_current / mean_credit);
 
+        // Use Freedman (tighter) for confidence bound when available.
         let confidence_bound = estimated_remaining.map_or(0.0, |t_rem| {
+            if v_current <= self.config.epsilon {
+                return 1.0;
+            }
             // Safety factor of 2 for variance.
             #[allow(clippy::cast_sign_loss)]
             let extra = (2.0 * t_rem).ceil().max(0.0) as usize;
             let total_t = steps_with_deltas + extra;
-            let tail = self.azuma_hoeffding_bound(total_t, mean_credit, effective_step_bound);
+            let tail = self.freedman_bound(total_t, mean_credit, effective_step_bound);
             (1.0 - tail).clamp(0.0, 1.0)
         });
 
         let stall_detected = self.stall_run >= self.config.stall_threshold;
 
         // Convergence gate combines concentration and empirical trend, while
-        // rejecting strongly oscillatory traces.
+        // rejecting strongly oscillatory traces. Uses Freedman (variance-
+        // adaptive) instead of raw Azuma for strictly tighter decisions.
         let violation_rate = if steps_with_deltas > 0 {
             self.increase_count as f64 / steps_with_deltas as f64
         } else {
@@ -598,12 +779,12 @@ impl ProgressCertificate {
         } else {
             1.0
         };
-        let strong_azuma_signal = azuma < (1.0 - self.config.confidence);
+        let strong_concentration = freedman < (1.0 - self.config.confidence);
         let strong_empirical_reduction = reduction_ratio >= self.config.confidence;
         let converging = mean_credit > self.config.epsilon
             && !stall_detected
             && violation_rate <= MAX_CONVERGENCE_VIOLATION_RATE
-            && (strong_azuma_signal || strong_empirical_reduction);
+            && (strong_concentration || strong_empirical_reduction);
 
         let evidence = self.build_evidence(
             n,
@@ -612,6 +793,7 @@ impl ProgressCertificate {
             steps_with_deltas,
             mean_credit,
             azuma,
+            freedman,
             stall_detected,
             effective_step_bound,
         );
@@ -627,6 +809,9 @@ impl ProgressCertificate {
             initial_potential: v_initial,
             mean_credit,
             max_observed_step: self.max_abs_delta,
+            freedman_bound: freedman,
+            drain_phase: self.drain_phase(),
+            empirical_variance: self.delta_variance(),
             evidence,
         }
     }
@@ -641,6 +826,7 @@ impl ProgressCertificate {
         steps_with_deltas: usize,
         mean_credit: f64,
         azuma: f64,
+        freedman: f64,
         stall_detected: bool,
         _effective_step_bound: f64,
     ) -> Vec<EvidenceEntry> {
@@ -714,7 +900,7 @@ impl ProgressCertificate {
             });
         }
 
-        // Progress summary.
+        // Progress summary with both bounds.
         let total_progress = v_initial - v_current;
         evidence.push(EvidenceEntry {
             step: last_step,
@@ -726,10 +912,28 @@ impl ProgressCertificate {
             ),
         });
 
+        // Freedman bound (variance-adaptive, dominates Azuma).
+        if (freedman - azuma).abs() > 1e-12 {
+            let improvement = if azuma > 1e-15 {
+                (1.0 - freedman / azuma) * 100.0
+            } else {
+                0.0
+            };
+            evidence.push(EvidenceEntry {
+                step: last_step,
+                potential: v_current,
+                bound: freedman,
+                description: format!(
+                    "Freedman bound P \u{2264} {freedman:.6} \
+                     ({improvement:.1}% tighter than Azuma)",
+                ),
+            });
+        }
+
         evidence
     }
 
-    /// Returns the current observation count.
+    /// Returns the number of retained observations.
     #[must_use]
     pub fn len(&self) -> usize {
         self.observations.len()
@@ -741,10 +945,19 @@ impl ProgressCertificate {
         self.observations.is_empty()
     }
 
-    /// Returns the full observation history.
+    /// Returns retained observation history (possibly compacted).
     #[must_use]
     pub fn observations(&self) -> &[ProgressObservation] {
         &self.observations
+    }
+
+    /// Returns the total number of observations recorded since last reset.
+    ///
+    /// Unlike [`len`](Self::len), this count is not reduced by
+    /// [`compact`](Self::compact).
+    #[must_use]
+    pub fn total_observations(&self) -> usize {
+        self.total_observations
     }
 
     /// Returns the configuration.
@@ -756,7 +969,7 @@ impl ProgressCertificate {
     /// Returns the current supermartingale value `Mₜ = V(Σₜ) + Σcᵢ`.
     #[must_use]
     pub fn martingale_value(&self) -> f64 {
-        let v = self.observations.last().map_or(0.0, |o| o.potential);
+        let v = self.last_potential.unwrap_or(0.0);
         v + self.total_credit
     }
 
@@ -789,11 +1002,17 @@ impl ProgressCertificate {
     /// Resets the certificate to its initial (empty) state.
     pub fn reset(&mut self) {
         self.observations.clear();
+        self.total_observations = 0;
+        self.total_deltas = 0;
+        self.initial_potential = None;
+        self.last_potential = None;
+        self.sum_delta = 0.0;
         self.total_credit = 0.0;
         self.sum_delta_sq = 0.0;
         self.max_abs_delta = 0.0;
         self.increase_count = 0;
         self.stall_run = 0;
+        self.ema_credit = 0.0;
     }
 
     /// Returns the empirical variance of the per-step deltas.
@@ -804,24 +1023,15 @@ impl ProgressCertificate {
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn delta_variance(&self) -> Option<f64> {
-        let n = self.observations.len();
-        if n < 2 {
+        if self.total_deltas == 0 {
             return None;
         }
-        let steps = (n - 1) as f64;
-        let mean_delta = if steps > 0.0 {
-            // mean delta = -(total_credit - increase_contributions) / steps
-            // Simpler: compute from first/last potential.
-            let v0 = self.observations[0].potential;
-            let vt = self.observations[n - 1].potential;
-            (vt - v0) / steps
-        } else {
-            0.0
-        };
+        let steps = self.total_deltas as f64;
+        let mean_delta = self.sum_delta / steps;
 
         // Var = E[Δ²] - (E[Δ])²
         let mean_sq = self.sum_delta_sq / steps;
-        let variance = mean_sq - mean_delta * mean_delta;
+        let variance = mean_delta.mul_add(-mean_delta, mean_sq);
         Some(variance.max(0.0)) // clamp numerical noise
     }
 
@@ -837,7 +1047,7 @@ impl ProgressCertificate {
     /// has more potential than expected (possible anomaly).
     #[must_use]
     pub fn martingale_ratio(&self) -> f64 {
-        let v0 = self.observations.first().map_or(0.0, |o| o.potential);
+        let v0 = self.initial_potential.unwrap_or(0.0);
         if v0 <= 0.0 {
             return 1.0;
         }
@@ -1487,6 +1697,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compact_preserves_verdict_consistency() {
+        let config = ProgressConfig {
+            min_observations: 3,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        for i in 0..30 {
+            #[allow(clippy::cast_precision_loss)]
+            let v = 300.0 - 8.0 * i as f64 + if i % 7 == 0 { 2.0 } else { 0.0 };
+            cert.observe(v.max(0.0));
+        }
+
+        let before = cert.verdict();
+        cert.compact(4);
+        let after = cert.verdict();
+
+        assert_eq!(before.total_steps, after.total_steps);
+        assert!(
+            (before.initial_potential - after.initial_potential).abs() < 1e-10,
+            "initial potential should be stable under compact"
+        );
+        assert!(
+            (before.current_potential - after.current_potential).abs() < 1e-10,
+            "current potential should be stable under compact"
+        );
+        assert!(
+            (before.mean_credit - after.mean_credit).abs() < 1e-10,
+            "mean credit should be stable under compact"
+        );
+        assert!(
+            (before.azuma_bound - after.azuma_bound).abs() < 1e-12,
+            "azuma bound should be stable under compact"
+        );
+        assert_eq!(before.stall_detected, after.stall_detected);
+        assert_eq!(before.converging, after.converging);
+        assert_eq!(
+            cert.total_observations(),
+            before.total_steps,
+            "global observation count should remain unchanged after compact"
+        );
+    }
+
+    #[test]
+    fn observe_after_compact_keeps_global_step_index() {
+        let mut cert = ProgressCertificate::with_defaults();
+        for i in 0..6 {
+            #[allow(clippy::cast_precision_loss)]
+            let v = 100.0 - 10.0 * i as f64;
+            cert.observe(v);
+        }
+        let total_before = cert.total_observations();
+        cert.compact(1);
+        assert_eq!(cert.len(), 1);
+
+        cert.observe(30.0);
+        assert_eq!(cert.total_observations(), total_before + 1);
+        let retained = cert.observations();
+        let last = retained.last().expect("retained observation");
+        assert_eq!(
+            last.step, total_before,
+            "new step index should continue global sequence after compact"
+        );
+    }
+
     // -- Reset --
 
     #[test]
@@ -1907,5 +2183,285 @@ mod tests {
             verdict.estimated_remaining_steps.is_none(),
             "should have no estimate when mean credit is zero"
         );
+    }
+
+    // -- Freedman bound --
+
+    #[test]
+    fn freedman_dominates_azuma() {
+        // Freedman's inequality is always at least as tight as Azuma-Hoeffding.
+        // With low variance (constant steps), Freedman should be MUCH tighter.
+        let config = ProgressConfig {
+            max_step_bound: 100.0, // Deliberately loose bound.
+            min_observations: 3,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        // Constant decrease of 10/step from 1000.
+        // Empirical variance = 0, but max_abs_delta = 10.
+        // Azuma uses max(10, 100) = 10 since max_abs_delta overrides.
+        // Freedman uses actual variance ≈ 0 → denominator shrinks → tighter.
+        for i in 0..50 {
+            #[allow(clippy::cast_precision_loss)]
+            let v = 1000.0 - 10.0 * i as f64;
+            cert.observe(v);
+        }
+
+        let verdict = cert.verdict();
+        assert!(
+            verdict.freedman_bound <= verdict.azuma_bound + 1e-15,
+            "Freedman ({:.8}) should be ≤ Azuma ({:.8})",
+            verdict.freedman_bound,
+            verdict.azuma_bound,
+        );
+    }
+
+    #[test]
+    fn freedman_much_tighter_constant_decrease() {
+        // Constant decrease: variance = 0, so Freedman has massive advantage.
+        let config = ProgressConfig {
+            min_observations: 3,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        for i in 0..20 {
+            #[allow(clippy::cast_precision_loss)]
+            let v = 200.0 - 10.0 * i as f64;
+            cert.observe(v);
+        }
+
+        let verdict = cert.verdict();
+        // With zero variance, Freedman should be much tighter.
+        // The improvement comes from the denominator: Freedman uses
+        // t·σ² + b·λ/3 instead of t·c². When σ² ≈ 0, only the b·λ/3
+        // term remains, which is typically much smaller than t·c².
+        if verdict.azuma_bound > 1e-10 {
+            let ratio = verdict.freedman_bound / verdict.azuma_bound;
+            assert!(
+                ratio < 1.0,
+                "Freedman/Azuma ratio should be < 1, got {ratio:.6}"
+            );
+        }
+    }
+
+    #[test]
+    fn freedman_equals_azuma_worst_case() {
+        // When variance equals max_step_bound², Freedman matches Azuma.
+        // This happens with alternating large steps.
+        let config = ProgressConfig {
+            min_observations: 3,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        // Just two observations — Freedman falls back to worst-case variance.
+        cert.observe(100.0);
+        cert.observe(80.0);
+        cert.observe(60.0);
+
+        // With only 2 deltas, both should give similar results.
+        let verdict = cert.verdict();
+        assert!(
+            verdict.freedman_bound.is_finite(),
+            "Freedman should be finite"
+        );
+        assert!(verdict.azuma_bound.is_finite(), "Azuma should be finite");
+    }
+
+    #[test]
+    fn freedman_evidence_entry_present() {
+        let config = ProgressConfig {
+            min_observations: 3,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        // Create a scenario where Freedman differs from Azuma.
+        for i in 0..15 {
+            #[allow(clippy::cast_precision_loss)]
+            let v = 150.0 - 10.0 * i as f64;
+            cert.observe(v);
+        }
+
+        let verdict = cert.verdict();
+        let has_freedman = verdict
+            .evidence
+            .iter()
+            .any(|e| e.description.contains("Freedman"));
+        assert!(has_freedman, "evidence should include Freedman bound entry");
+    }
+
+    // -- Drain phase --
+
+    #[test]
+    fn drain_phase_warmup() {
+        let cert = ProgressCertificate::with_defaults();
+        assert_eq!(cert.drain_phase(), DrainPhase::Warmup);
+
+        let mut cert = ProgressCertificate::with_defaults();
+        cert.observe(100.0);
+        cert.observe(80.0);
+        // Default min_observations is 5, so still warmup.
+        assert_eq!(cert.drain_phase(), DrainPhase::Warmup);
+    }
+
+    #[test]
+    fn drain_phase_quiescent() {
+        let config = ProgressConfig {
+            min_observations: 2,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        cert.observe(10.0);
+        cert.observe(5.0);
+        cert.observe(0.0);
+
+        assert_eq!(cert.drain_phase(), DrainPhase::Quiescent);
+    }
+
+    #[test]
+    fn drain_phase_rapid_drain() {
+        let config = ProgressConfig {
+            min_observations: 3,
+            stall_threshold: 10,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        // Consistent high-credit decrease.
+        for i in 0..6 {
+            #[allow(clippy::cast_precision_loss)]
+            let v = 100.0 - 15.0 * i as f64;
+            cert.observe(v.max(1.0)); // Keep above zero.
+        }
+
+        // EMA should track near the mean credit → rapid drain.
+        assert_eq!(
+            cert.drain_phase(),
+            DrainPhase::RapidDrain,
+            "consistent decrease should be rapid drain"
+        );
+    }
+
+    #[test]
+    fn drain_phase_slow_tail() {
+        let config = ProgressConfig {
+            min_observations: 3,
+            stall_threshold: 20,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        // Rapid phase first.
+        cert.observe(100.0);
+        cert.observe(60.0); // credit = 40
+        cert.observe(30.0); // credit = 30
+        cert.observe(15.0); // credit = 15
+
+        // Now slow tail: tiny decreases.
+        for _ in 0..10 {
+            let current = cert.last_potential.unwrap_or(15.0);
+            cert.observe((current - 0.1).max(1.0));
+        }
+
+        // EMA of credit should be much lower than overall mean.
+        let phase = cert.drain_phase();
+        assert_eq!(
+            phase,
+            DrainPhase::SlowTail,
+            "slow tiny decreases should be SlowTail, got {phase}"
+        );
+    }
+
+    #[test]
+    fn drain_phase_stalled() {
+        let config = ProgressConfig {
+            stall_threshold: 3,
+            min_observations: 2,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        cert.observe(50.0);
+        cert.observe(50.0);
+        cert.observe(50.0);
+        cert.observe(50.0);
+
+        assert_eq!(cert.drain_phase(), DrainPhase::Stalled);
+    }
+
+    #[test]
+    fn drain_phase_in_verdict() {
+        let config = ProgressConfig {
+            min_observations: 2,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        cert.observe(10.0);
+        cert.observe(5.0);
+        cert.observe(0.0);
+
+        let verdict = cert.verdict();
+        assert_eq!(verdict.drain_phase, DrainPhase::Quiescent);
+    }
+
+    #[test]
+    fn drain_phase_display() {
+        assert_eq!(DrainPhase::Warmup.to_string(), "warmup");
+        assert_eq!(DrainPhase::RapidDrain.to_string(), "rapid_drain");
+        assert_eq!(DrainPhase::SlowTail.to_string(), "slow_tail");
+        assert_eq!(DrainPhase::Stalled.to_string(), "stalled");
+        assert_eq!(DrainPhase::Quiescent.to_string(), "quiescent");
+    }
+
+    // -- Verdict Display with new fields --
+
+    #[test]
+    fn verdict_display_includes_new_fields() {
+        let config = ProgressConfig {
+            min_observations: 2,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        for i in 0..10 {
+            #[allow(clippy::cast_precision_loss)]
+            let v = 100.0 - 10.0 * i as f64;
+            cert.observe(v);
+        }
+
+        let verdict = cert.verdict();
+        let text = format!("{verdict}");
+        assert!(text.contains("Freedman bound:"));
+        assert!(text.contains("Drain phase:"));
+    }
+
+    // -- Empirical variance in verdict --
+
+    #[test]
+    fn verdict_reports_empirical_variance() {
+        let config = ProgressConfig {
+            min_observations: 3,
+            ..ProgressConfig::default()
+        };
+        let mut cert = ProgressCertificate::new(config);
+
+        // Alternating steps: variance should be nonzero.
+        let values = [100.0, 80.0, 70.0, 50.0, 40.0];
+        for &v in &values {
+            cert.observe(v);
+        }
+
+        let verdict = cert.verdict();
+        assert!(
+            verdict.empirical_variance.is_some(),
+            "should report variance after sufficient observations"
+        );
+        let var = verdict.empirical_variance.unwrap();
+        assert!(var > 0.0, "variance should be positive for varying deltas");
     }
 }

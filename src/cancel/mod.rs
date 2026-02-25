@@ -12,7 +12,8 @@ pub mod progress_certificate;
 pub mod symbol_cancel;
 
 pub use progress_certificate::{
-    CertificateVerdict, EvidenceEntry, ProgressCertificate, ProgressConfig, ProgressObservation,
+    CertificateVerdict, DrainPhase, EvidenceEntry, ProgressCertificate, ProgressConfig,
+    ProgressObservation,
 };
 pub use symbol_cancel::{
     CancelBroadcastMetrics, CancelBroadcaster, CancelListener, CancelMessage, CancelSink,

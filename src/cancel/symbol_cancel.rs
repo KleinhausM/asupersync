@@ -712,17 +712,18 @@ impl<S: CancelSink> CancelBroadcaster<S> {
         reason: &CancelReason,
         now: Time,
     ) -> CancelMessage {
-        // Single read lock: cancel local token + extract token_id.
-        let token_id = {
+        // Extract token and ID without holding the lock during cancel.
+        let (token, token_id) = {
             let tokens = self.active_tokens.read();
             tokens.get(&object_id).map_or_else(
-                || object_id.high() ^ object_id.low(),
-                |token| {
-                    token.cancel(reason, now);
-                    token.token_id()
-                },
+                || (None, object_id.high() ^ object_id.low()),
+                |token| (Some(token.clone()), token.token_id()),
             )
         };
+
+        if let Some(token) = token {
+            token.cancel(reason, now);
+        }
 
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         let msg = CancelMessage::new(token_id, object_id, reason.kind(), now, sequence);
@@ -749,7 +750,8 @@ impl<S: CancelSink> CancelBroadcaster<S> {
         self.received.fetch_add(1, Ordering::Relaxed);
 
         // Cancel local token if present
-        if let Some(token) = self.active_tokens.read().get(&msg.object_id()) {
+        let token = self.active_tokens.read().get(&msg.object_id()).cloned();
+        if let Some(token) = token {
             let reason = CancelReason::new(msg.kind());
             token.cancel(&reason, now);
         }
