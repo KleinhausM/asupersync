@@ -3261,6 +3261,31 @@ fn d7_e2e_runner_script_schema_contract_surface() {
     );
 }
 
+/// Track-E dual-policy guardrail: validation bundle must enforce the
+/// deterministic probe-log contract for lane-floor/ratio/window decisions.
+#[test]
+fn track_e_dual_policy_probe_contract_surface_tokens() {
+    let script = include_str!("../scripts/run_raptorq_e2e.sh");
+
+    for required in [
+        "validate_dual_policy_probe_contract",
+        "bench-smoke-gf256-dual-policy-contract",
+        "\"schema_version\":\"raptorq-track-e-dual-policy-probe-v2\"",
+        ".addmul_min_lane",
+        ".max_lane_ratio",
+        ".lane_len_a",
+        ".lane_len_b",
+        ".addmul_decision == \"fused\"",
+        ".addmul_decision == \"sequential\"",
+        "bench_gf256_dual_policy_contract.ndjson",
+    ] {
+        assert!(
+            script.contains(required),
+            "missing Track-E dual-policy contract token in run_raptorq_e2e.sh: {required}"
+        );
+    }
+}
+
 /// F4 guardrail: benchmark campaign must keep repair-heavy and near-rank-deficient
 /// decode surfaces in the Criterion bench suite.
 #[test]

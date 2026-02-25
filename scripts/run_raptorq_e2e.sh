@@ -292,6 +292,96 @@ validate_suite_contract() {
     ' "$scenario_log" >/dev/null
 }
 
+validate_dual_policy_probe_contract() {
+    local stage_log="$1"
+    local contract_log="$2"
+    local stage_id="bench-smoke-gf256-dual-policy-contract"
+    local stage_desc="contract check (gf256_dual_policy log schema)"
+    local repro_cmd
+    local start_s
+    local end_s
+    local duration_ms
+    local rc=0
+    local status="pass"
+
+    repro_cmd="${REPRO_PREFIX}cargo bench --bench raptorq_benchmark -- gf256_dual_policy --sample-size 10 --warm-up-time 0.05 --measurement-time 0.05"
+
+    echo ">>> [bundle] ${stage_id}: ${stage_desc}"
+    start_s="$(date +%s)"
+
+    grep '"schema_version":"raptorq-track-e-dual-policy-probe-v2"' "$stage_log" >"$contract_log" || true
+    if [[ ! -s "$contract_log" ]]; then
+        status="fail"
+        rc=1
+        echo "    FAIL (missing probe records) -> ${stage_log}"
+        echo "    repro: ${repro_cmd}"
+    elif ! jq -s -e '
+        length >= 7 and
+        all(.[];
+            .schema_version == "raptorq-track-e-dual-policy-probe-v2" and
+            (.scenario_id | type == "string" and length > 0) and
+            (.seed | type == "number" and . >= 0 and floor == .) and
+            (.mode | type == "string" and length > 0) and
+            (.profile_pack | type == "string" and length > 0) and
+            (.profile_fallback_reason | type == "string" and length > 0) and
+            (.rejected_profile_packs | type == "string" and length > 0) and
+            (.lane_len_a | type == "number" and . >= 0 and floor == .) and
+            (.lane_len_b | type == "number" and . >= 0 and floor == .) and
+            (.total_len | type == "number" and . >= 0 and floor == .) and
+            ((.lane_len_a + .lane_len_b) == .total_len) and
+            (.lane_ratio | type == "string" and length > 0) and
+            (.mul_window_min | type == "number" and . >= 0 and floor == .) and
+            (.mul_window_max | type == "number" and . >= 0 and floor == .) and
+            (.addmul_window_min | type == "number" and . >= 0 and floor == .) and
+            (.addmul_window_max | type == "number" and . >= 0 and floor == .) and
+            (.addmul_min_lane | type == "number" and . >= 0 and floor == .) and
+            (.max_lane_ratio | type == "number" and . >= 1 and floor == .) and
+            (.mul_decision == "fused" or .mul_decision == "sequential") and
+            (.addmul_decision == "fused" or .addmul_decision == "sequential") and
+            (.replay_pointer | type == "string" and length > 0) and
+            (.artifact_path | type == "string" and length > 0) and
+            (.repro_command | type == "string" and test("^((rch exec -- )?cargo bench --bench raptorq_benchmark -- gf256_dual_policy)")) and
+            (if .addmul_decision == "fused"
+                then
+                    (.total_len >= .addmul_window_min and .total_len <= .addmul_window_max) and
+                    (.lane_len_a >= .addmul_min_lane) and
+                    (.lane_len_b >= .addmul_min_lane) and
+                    (([.lane_len_a, .lane_len_b] | min) > 0) and
+                    (([.lane_len_a, .lane_len_b] | max) <= (([.lane_len_a, .lane_len_b] | min) * .max_lane_ratio))
+                else true
+             end)
+        ) and
+        any(.[]; .addmul_decision == "fused") and
+        any(.[]; .addmul_decision == "sequential")
+    ' "$contract_log" >/dev/null; then
+        status="fail"
+        rc=1
+        echo "    FAIL (dual-policy contract) -> ${contract_log}"
+        echo "    repro: ${repro_cmd}"
+    else
+        echo "    PASS"
+    fi
+
+    end_s="$(date +%s)"
+    duration_ms=$(((end_s - start_s) * 1000))
+    validation_stage_count=$((validation_stage_count + 1))
+    if [[ "$rc" -ne 0 ]]; then
+        validation_failures=$((validation_failures + 1))
+    fi
+    printf '{"schema_version":"raptorq-validation-stage-log-v1","stage_id":"%s","stage_desc":"%s","profile":"%s","status":"%s","exit_code":%d,"duration_ms":%d,"tests_passed":0,"tests_failed":0,"artifact_path":"%s","repro_command":"%s"}\n' \
+        "$(json_escape "$stage_id")" \
+        "$(json_escape "$stage_desc")" \
+        "$(json_escape "$PROFILE")" \
+        "$(json_escape "$status")" \
+        "$rc" \
+        "$duration_ms" \
+        "$(json_escape "$contract_log")" \
+        "$(json_escape "$repro_cmd")" \
+        >> "$VALIDATION_STAGE_LOG"
+
+    [[ "$rc" -eq 0 ]]
+}
+
 run_validation_stage() {
     local stage_id="$1"
     local stage_desc="$2"
@@ -537,6 +627,11 @@ if [[ "$RUN_VALIDATION_BUNDLE" -eq 1 ]]; then
                     "${RUN_DIR}/bench_gf256_dual_policy.log" \
                     cargo bench --bench raptorq_benchmark -- gf256_dual_policy --sample-size 10 --warm-up-time 0.05 --measurement-time 0.05 || failed_stage_id="bench-smoke-gf256-dual-policy"
             fi
+            if [[ -z "$failed_stage_id" ]]; then
+                validate_dual_policy_probe_contract \
+                    "${RUN_DIR}/bench_gf256_dual_policy.log" \
+                    "${RUN_DIR}/bench_gf256_dual_policy_contract.ndjson" || failed_stage_id="bench-smoke-gf256-dual-policy-contract"
+            fi
             ;;
         forensics)
             run_validation_stage \
@@ -557,6 +652,11 @@ if [[ "$RUN_VALIDATION_BUNDLE" -eq 1 ]]; then
                     "perf smoke (gf256_dual_policy)" \
                     "${RUN_DIR}/bench_gf256_dual_policy.log" \
                     cargo bench --bench raptorq_benchmark -- gf256_dual_policy --sample-size 10 --warm-up-time 0.05 --measurement-time 0.05 || failed_stage_id="bench-smoke-gf256-dual-policy"
+            fi
+            if [[ -z "$failed_stage_id" ]]; then
+                validate_dual_policy_probe_contract \
+                    "${RUN_DIR}/bench_gf256_dual_policy.log" \
+                    "${RUN_DIR}/bench_gf256_dual_policy_contract.ndjson" || failed_stage_id="bench-smoke-gf256-dual-policy-contract"
             fi
             if [[ -z "$failed_stage_id" ]]; then
                 run_validation_stage \
