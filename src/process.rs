@@ -619,24 +619,19 @@ impl Child {
     /// println!("Exit code: {:?}", status.code());
     /// ```
     pub fn wait(&mut self) -> Result<ExitStatus, ProcessError> {
-        // Poll child exit state using non-blocking try_wait and backoff.
-        const SPIN_LIMIT: usize = 32;
-        const BACKOFF_MS: u64 = 1;
+        // Use kernel blocking wait for the common "wait until exit" path.
+        // This avoids a user-space poll/sleep loop while still preserving
+        // ownership on errors (non-destructive wait semantics).
+        let child = self.inner.as_mut().ok_or_else(|| {
+            ProcessError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "child already waited",
+            ))
+        })?;
 
-        let mut spin_count = 0usize;
-        loop {
-            if let Some(status) = self.try_wait()? {
-                return Ok(status);
-            }
-
-            if spin_count < SPIN_LIMIT {
-                spin_count += 1;
-                std::hint::spin_loop();
-                std::thread::yield_now();
-            } else {
-                std::thread::sleep(std::time::Duration::from_millis(BACKOFF_MS));
-            }
-        }
+        let status = child.wait()?;
+        self.inner = None;
+        Ok(ExitStatus::from_std(status))
     }
 
     /// Waits for the child and collects all output.
