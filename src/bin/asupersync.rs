@@ -368,7 +368,8 @@ impl Outputtable for ConformanceMatrixReport {
             output.push_str("\n## Warnings\n\n");
             for warning in &self.warnings {
                 use std::fmt::Write;
-                let _ = writeln!(output,
+                let _ = writeln!(
+                    output,
                     "- {}:{}: {}",
                     warning.file.display(),
                     warning.line,

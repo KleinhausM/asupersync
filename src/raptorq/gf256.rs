@@ -1055,7 +1055,8 @@ fn dual_mul_decision_detail_with_policy(
         },
         DualKernelOverride::Auto => {
             let total = len_a.saturating_add(len_b);
-            if let Some(reason) = window_gate_reason(total, policy.mul_min_total, policy.mul_max_total)
+            if let Some(reason) =
+                window_gate_reason(total, policy.mul_min_total, policy.mul_max_total)
             {
                 return DualKernelDecisionDetail {
                     decision: DualKernelDecision::Sequential,
@@ -2895,7 +2896,11 @@ mod tests {
         );
 
         let below_floor = dual_addmul_decision_detail_with_policy(&base, 12288, 1536);
-        assert_eq!(below_floor.decision, DualKernelDecision::Sequential, "{context}");
+        assert_eq!(
+            below_floor.decision,
+            DualKernelDecision::Sequential,
+            "{context}"
+        );
         assert_eq!(
             below_floor.reason,
             DualKernelDecisionReason::LaneBelowMinFloor,
@@ -2942,8 +2947,7 @@ mod tests {
             mode: DualKernelOverride::ForceFused,
             ..base
         };
-        let force_fused_detail =
-            dual_mul_decision_detail_with_policy(&force_fused, 4096, 4096);
+        let force_fused_detail = dual_mul_decision_detail_with_policy(&force_fused, 4096, 4096);
         assert_eq!(
             force_fused_detail.reason,
             DualKernelDecisionReason::ForcedFusedMode,
