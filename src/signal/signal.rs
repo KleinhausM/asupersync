@@ -95,10 +95,11 @@ impl Signal {
     /// This method is cancel-safe. If you use it as the event in a `select!`
     /// statement and some other branch completes first, no signal notification
     /// is lost.
+    #[allow(clippy::unused_async)]
     pub async fn recv(&mut self) -> Option<()> {
-        // Phase 0: Would poll the signal notification mechanism
-        // For now, this would pend forever if it were reachable
-        std::future::pending().await
+        // Signal streams are currently unavailable on this build path, so the
+        // stream is immediately exhausted if reached.
+        None
     }
 
     /// Returns the signal kind this stream is listening for.

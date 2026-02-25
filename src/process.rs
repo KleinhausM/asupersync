@@ -619,25 +619,24 @@ impl Child {
     /// println!("Exit code: {:?}", status.code());
     /// ```
     pub fn wait(&mut self) -> Result<ExitStatus, ProcessError> {
-        // For now, use blocking wait
-        // TODO: Use non-blocking waitpid with reactor when available
-        let mut child = self.inner.take().ok_or_else(|| {
-            ProcessError::Io(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "process already consumed",
-            ))
-        })?;
+        // Poll child exit state using non-blocking try_wait and backoff.
+        const SPIN_LIMIT: usize = 32;
+        const BACKOFF_MS: u64 = 1;
 
-        let status = child.wait().map_err(ProcessError::Io)?;
+        let mut spin_count = 0usize;
+        loop {
+            if let Some(status) = self.try_wait()? {
+                return Ok(status);
+            }
 
-        // self.code = status.code(); // Child doesn't have these fields
-        // #[cfg(unix)]
-        // {
-        //     use std::os::unix::process::ExitStatusExt;
-        //     self.signal = status.signal();
-        // }
-
-        Ok(ExitStatus::from_std(status))
+            if spin_count < SPIN_LIMIT {
+                spin_count += 1;
+                std::hint::spin_loop();
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(BACKOFF_MS));
+            }
+        }
     }
 
     /// Waits for the child and collects all output.
