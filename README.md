@@ -1,3 +1,8 @@
+
+my notes: because of the speed of AI development that is coming our way, truly, deterministic systems are needed to create an environment for success for agentic development. this repo aims to do that. I think this idea will start to bloom in other realms
+
+
+
 <p align="center">
   <img src="asupersync_illustration.webp" alt="Asupersync - Spec-first, cancel-correct async for Rust" width="800">
 </p>
